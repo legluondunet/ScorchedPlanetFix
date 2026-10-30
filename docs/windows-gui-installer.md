@@ -31,9 +31,8 @@ or commercial DLLs are included.
 5. If `splanet` does not exist, and exactly one ISO is present, the
    patcher parses it, validates the supported 3dfx edition, merges the
    original `SPLANET/` files and `VOODOO/` game components into a temporary
-directory, excluding the obsolete CD `glide.dll`, `sst1init.dll`, and
-`fxmemmap.vxd` hardware drivers,
-   checks all installed file transfers, generates `splanet.ini` if absent
+   directory, excluding obsolete `glide.dll`, `sst1init.dll`, and
+   `fxmemmap.vxd` CD drivers; checks all installed file transfers, generates `splanet.ini` if absent
    (or preserves its settings if present), writes the local `video=`
    path and finally atomically names the new
    installation `splanet`.
