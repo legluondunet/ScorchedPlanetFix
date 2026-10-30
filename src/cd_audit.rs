@@ -18,7 +18,7 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
     }
 
     let mut entries: Vec<(String, u64)> = Vec::new();
-    let mut setup_ini: Vec<(String, String)> = Vec::new();
+    let mut configuration_files: Vec<(String, String)> = Vec::new();
     let mut archive_headers: Vec<(String, String)> = Vec::new();
     let mut total_bytes = 0_u64;
 
@@ -60,7 +60,9 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
             archive_headers.push((relative.clone(), signature));
         }
 
-        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("SETUP.INI") {
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("SETUP.INI")
+            || entry.file_name().to_string_lossy().eq_ignore_ascii_case("SPLANET.INI")
+        {
             let detail = if size > MAX_INI_BYTES {
                 format!("Fichier trop volumineux ({size} octets), contenu non inclus.")
             } else {
@@ -72,7 +74,7 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
                     String::from_utf8_lossy(&raw).into_owned()
                 }
             };
-            setup_ini.push((relative.clone(), detail));
+            configuration_files.push((relative.clone(), detail));
         }
         entries.push((relative, size));
     }
@@ -82,7 +84,7 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
             .cmp(&b.0.to_ascii_lowercase())
             .then(a.0.cmp(&b.0))
     });
-    setup_ini.sort_by(|a, b| a.0.cmp(&b.0));
+    configuration_files.sort_by(|a, b| a.0.cmp(&b.0));
     archive_headers.sort_by(|a, b| a.0.cmp(&b.0));
 
     let has_dir = |name: &str| {
@@ -114,10 +116,10 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
         writeln!(output, "{size} | {path}").unwrap();
     }
 
-    if setup_ini.is_empty() {
-        writeln!(output, "\nAucun fichier SETUP.INI accessible.").unwrap();
+    if configuration_files.is_empty() {
+        writeln!(output, "\nAucun fichier SETUP.INI ou SPLANET.INI accessible.").unwrap();
     } else {
-        for (path, contents) in setup_ini {
+        for (path, contents) in configuration_files {
             writeln!(output, "\n----- DEBUT {path} -----").unwrap();
             writeln!(output, "{contents}").unwrap();
             writeln!(output, "----- FIN {path} -----").unwrap();
@@ -145,6 +147,7 @@ mod tests {
         fs::write(dir.path().join("VOODOO/SPVOODOO.EXE"), b"exe").unwrap();
         fs::write(dir.path().join("SPLANET/COMPRESS.BIN"), b"archive").unwrap();
         fs::write(dir.path().join("INSTALL/WINDOWS/SETUP.INI"), b"[Setup]\r\nFoo=Bar\r\n").unwrap();
+        fs::write(dir.path().join("SPLANET/SPLANET.INI"), b"[scorch]\r\nlanguage=2\r\n").unwrap();
 
         let report = audit_cd(dir.path()).unwrap();
         assert!(report.contains("SPLANET : true"));
@@ -153,6 +156,8 @@ mod tests {
         assert!(report.contains("61 72 63 68 69 76 65"));
         assert!(report.contains("INSTALL/WINDOWS/SETUP.INI"));
         assert!(report.contains("Foo=Bar"));
+        assert!(report.contains("SPLANET/SPLANET.INI"));
+        assert!(report.contains("language=2"));
         assert!(!report.contains(dir.path().to_string_lossy().as_ref()));
     }
 
