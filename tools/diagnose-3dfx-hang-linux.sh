@@ -264,30 +264,27 @@ else
   log "Capture immediate : le jeu devrait deja etre fige."
 fi
 snapshot snapshot-1 || exit 1
-sleep "$interval"
-snapshot snapshot-2 || exit 0
-
-{
-  printf 'TID\tCPU_DELTA_TICKS\n'
-  awk -F '\t' '
-    NR==FNR { if (NR>1 && $1 ~ /^[0-9]+$/) before[$1]=$2; next }
-    FNR>1 && $1 ~ /^[0-9]+$/ {
-      if ($1 in before) printf "%s\t%d\n", $1, $2-before[$1]
-      else printf "%s\tnew-thread\n", $1
-    }' "$out/snapshot-1-thread-ticks.tsv" "$out/snapshot-2-thread-ticks.tsv" |
-    sort -k2,2nr
-} > "$out/thread-cpu-delta.tsv"
-
 if ((with_perf_sudo)); then
-  # Sampling only the previously verified CPU-heavy main Linux TID avoids
-  # collecting the game's other Wine/DXVK threads. Unlike GDB, perf does not
-  # stop execution to take a snapshot at a debugger attach point.
-  log "perf : echantillonnage du TID $pid pendant 5 secondes sans pause GDB"
-  log "Evenement: cpu-clock:u ; frequence cible 99 Hz."
+  # Sample the verified CPU-heavy thread immediately after the first
+  # snapshot. If the game exits during this interval, process whatever
+  # perf data was actually collected; never discard it just because the
+  # second /proc snapshot is impossible.
+  log "perf : echantillonnage du TID $pid pendant ${interval} secondes"
+  log "Evenement cpu-clock:u, frequence cible 99 Hz (sans pause GDB)"
   perf_data="$out/perf.data"
   if sudo -n perf record -q -e cpu-clock:u -F 99 -t "$pid" \
-    -o "$perf_data" -- sleep 5 > "$out/perf-record.txt" 2>&1; then
+    -o "$perf_data" -- sleep "$interval" > "$out/perf-record.txt" 2>&1; then
+    record_rc=0
     log "perf record : collecte terminee."
+  else
+    record_rc=$?
+    log "perf record : code sortie $record_rc (voir perf-record.txt)."
+    # Show the original error in the main log, to avoid requiring other
+    # files when perf_event_paranoid or kernel support blocks sampling.
+    tail -n 12 "$out/perf-record.txt" >> "$log_file" || true
+  fi
+  if [[ -s "$perf_data" ]]; then
+    log "perf.data present : tentative d'extraction meme si le jeu s'est termine."
     if sudo -n perf report --stdio --no-children --sort dso,symbol \
       -i "$perf_data" > "$out/perf-report.txt" 2> "$out/perf-report-errors.txt"; then
       log "perf report : enregistre."
@@ -310,9 +307,32 @@ if ((with_perf_sudo)); then
     else
       log "perf script indisponible : voir perf-script-errors.txt."
     fi
+
   else
-    log "perf record a echoue : voir perf-record.txt. Aucune politique kernel modifiee."
+    log "Aucun perf.data exploitable : pas de rapport perf possible."
+    if ((record_rc == 0)); then
+      log "perf record a reussi mais n'a cree aucun fichier de donnees."
+    fi
   fi
+else
+  sleep "$interval"
+fi
+if snapshot snapshot-2; then
+  {
+    printf 'TID\tCPU_DELTA_TICKS\n'
+    awk -F '\t' '
+      NR==FNR { if (NR>1 && $1 ~ /^[0-9]+$/) before[$1]=$2; next }
+      FNR>1 && $1 ~ /^[0-9]+$/ {
+        if ($1 in before) printf "%s\t%d\n", $1, $2-before[$1]
+        else printf "%s\tnew-thread\n", $1
+      }' "$out/snapshot-1-thread-ticks.tsv" "$out/snapshot-2-thread-ticks.tsv" |
+      sort -k2,2nr
+  } > "$out/thread-cpu-delta.tsv"
+else
+  log "Le processus a disparu avant snapshot-2. perf a ete tente avant ce controle."
+  log "Fin du diagnostic partiel : $out"
+  log "Le fichier .log se trouve dans le dossier de lancement."
+  exit 0
 fi
 
 if ((with_gdb)); then
