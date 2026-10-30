@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path,PathBuf};
 
-const USAGE:&str="Utilisation :\n  ScorchedPlanetFix.exe --nogui\n  ScorchedPlanetFix.exe --nogui <image.iso>\n  ScorchedPlanetFix.exe --nogui <image.cue>\n  ScorchedPlanetFix.exe --nogui <image.cue> <piste.bin>\n\nSans chemin explicite, l'image est recherchée dans le répertoire courant.\nLe dossier splanet existant n'est jamais écrasé. SPVOODOO.EXE est sauvegardé\nsous SPVOODOO.EXE.bak avant toute modification.";
+const USAGE:&str="Utilisation :\n  ScorchedPlanetFix.exe --nogui\n  ScorchedPlanetFix.exe --nogui <image.iso>\n  ScorchedPlanetFix.exe --nogui <image.cue>\n  ScorchedPlanetFix.exe --nogui <image.cue> <piste.bin>\n\nSans chemin explicite, l'image est recherchée dans le répertoire courant.\nLe dossier splanet existant n'est jamais écrasé. Pour une installation\nneuve, spvoodoo.exe est sauvegardé sous spvoodoo.exe.bak avant modification.";
 
 #[derive(Debug,PartialEq,Eq)]
 struct Arguments {
