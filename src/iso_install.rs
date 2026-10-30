@@ -46,7 +46,7 @@ fn original_splanetw_hash(edition:&str)->Option<&'static str>{
     match edition{
         "US 1.08"=>Some("ffd1398ccccd615541e69c898fe0b8a43caada2326d86d4cb61036c1f934dbc7"),
         "EN/ES/IT 1.06"=>Some("e652319f606abea5bf0824df6c0cc75cb09d7f95ba8b2ab2bb4512e99317b199"),
-        "FR/DE 1.06 (FadeLow + contrôle CD)"=>Some("c0e3d3c0dc8e87ee653f8f5ce3c2670263e907d0438d5a1d3d1021fc2e1e0b1f"),
+        "FR/DE 1.06 (FadeLow + CD check fix)"=>Some("c0e3d3c0dc8e87ee653f8f5ce3c2670263e907d0438d5a1d3d1021fc2e1e0b1f"),
         _=>None,
     }
 }
@@ -55,7 +55,7 @@ fn original_splanetw_hash(edition:&str)->Option<&'static str>{
 /// A different file or a symlink is never deleted.
 pub fn remove_unused_splanetw(folder:&Path,edition:&str)->Result<bool,String>{
     let expected=original_splanetw_hash(edition)
-        .ok_or_else(||format!("Edition non reconnue pour nettoyage : {edition}"))?;
+        .ok_or_else(||format!("Unknown edition; cannot clean up: {edition}"))?;
     let mut matches=Vec::new();
     for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
         let item=item.map_err(|e|e.to_string())?;
@@ -64,17 +64,17 @@ pub fn remove_unused_splanetw(folder:&Path,edition:&str)->Result<bool,String>{
         }
     }
     if matches.is_empty(){return Ok(false);}
-    if matches.len()!=1{return Err("Plusieurs SPLANETW.EXE : nettoyage ambigu, aucune suppression".into());}
+    if matches.len()!=1{return Err("Multiple SPLANETW.EXE files found; cleanup refused".into());}
     let path=&matches[0];
     let meta=fs::symlink_metadata(path).map_err(|e|e.to_string())?;
     if meta.file_type().is_symlink() || !meta.is_file(){
-        return Err(format!("SPLANETW.EXE inattendu (lien/dossier) : {}",path.display()));
+        return Err(format!("Unexpected SPLANETW.EXE (symlink or directory): {}",path.display()));
     }
     if file_digest(path)?!=expected{
-        return Err(format!("SPLANETW.EXE différent du CD original : suppression refusée : {}",path.display()));
+        return Err(format!("SPLANETW.EXE does not match the original CD; deletion refused: {}",path.display()));
     }
     fs::remove_file(path)
-        .map_err(|e|format!("Impossible de supprimer le composant inutile {} : {e}",path.display()))?;
+        .map_err(|e|format!("Failed to remove unused component {}: {e}",path.display()))?;
     Ok(true)
 }
 
@@ -124,10 +124,10 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
     for child in &node.children {
         inventory.image_entries += 1;
         if inventory.image_entries > MAX_ENTRIES {
-            return Err(err("ISO non prise en charge (nombre d'entrées excessif)"));
+            return Err(err("Unsupported ISO (too many entries)"));
         }
         if !valid_name(&child.name) {
-            return Err(err("ISO non prise en charge (nom de fichier dangereux)"));
+            return Err(err("Unsupported ISO (unsafe filename)"));
         }
         // Preserve source names inside the ISO, but normalize installation
         // paths to ASCII lowercase: all three inventoried editions use ASCII
@@ -137,7 +137,7 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
         let key=relative.to_string_lossy().replace('\\', "/");
         let seen=if voodoo {&mut inventory.seen_voodoo}else{&mut inventory.seen_splanet};
         if !seen.insert(key.clone()) {
-            return Err(format!("Image ambiguë : fichiers/répertoires de casse différente ({key})"));
+            return Err(format!("Ambiguous disc image: filename/directory case collision ({key})"));
         }
         if child.is_directory {
             collect(child, &relative, voodoo, inventory)?;
@@ -158,10 +158,10 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
             continue;
         }
         if child.file_length != Some(child.size) || child.file_location.is_none() {
-            return Err(format!("ISO non prise en charge (extent absent : {})",relative.display()));
+            return Err(format!("Unsupported ISO (missing file extent: {})",relative.display()));
         }
         if child.size > MAX_TOTAL_BYTES {
-            return Err(err("ISO non prise en charge (fichier trop grand)"));
+            return Err(err("Unsupported ISO (file too large)"));
         }
         if !voodoo && key.starts_with("video/") && key.ends_with(".smk") {
             inventory.video_files += 1;
@@ -170,7 +170,7 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
             // Identical paths within a source tree are ambiguous, even on
             // case-insensitive Windows. Only VOODOO is allowed to override SPLANET.
             if previous.from_voodoo == voodoo {
-                return Err(format!("ISO non prise en charge (doublon : {key})"));
+                return Err(format!("Unsupported ISO (duplicate file: {key})"));
             }
         }
         let asset=Asset {node:child.clone(),relative,size:child.size,from_voodoo:voodoo};
@@ -188,7 +188,7 @@ fn find_dir<'a>(parent: &'a TreeNode, name: &str) -> Result<&'a TreeNode, String
         n.is_directory && n.name.eq_ignore_ascii_case(name)).collect();
     match matches.as_slice() {
         [one] => Ok(one),
-        _ => Err(format!("Image du jeu non supportée : répertoire {name} absent ou ambigu")),
+        _ => Err(format!("Unsupported game image: required directory {name} is missing or ambiguous")),
     }
 }
 fn inventory(root: &TreeNode) -> Result<Inventory, String> {
@@ -197,28 +197,28 @@ fn inventory(root: &TreeNode) -> Result<Inventory, String> {
     collect(find_dir(root, "VOODOO")?, Path::new(""), true, &mut list)?;
     for item in ["spvoodoo.exe", "rwdlvood.dll", "geometry.rwb"] {
         if !list.files.contains_key(item) {
-            return Err(format!("Image du jeu non supportée : fichier {item} absent"));
+            return Err(format!("Unsupported game image: required file {item} is missing"));
         }
     }
     if list.video_files == 0 {
-        return Err(err("Image du jeu non supportée : vidéos SMK absentes"));
+        return Err(err("Unsupported game image: no SMK videos found"));
     }
     if !list.files["spvoodoo.exe"].from_voodoo || !list.files["rwdlvood.dll"].from_voodoo {
-        return Err(err("Image du jeu non supportée : composants VOODOO absents"));
+        return Err(err("Unsupported game image: required VOODOO components missing"));
     }
     // No overlap is expected in the three known original media inventories.
     // An unexpected VOODOO override would risk silently replacing game data.
     if list.voodoo_files.keys().any(|key|list.splanet_files.contains_key(key)) {
-        return Err("Image du jeu ambiguë : fichiers SPLANET/VOODOO en conflit".into());
+        return Err("Ambiguous game image: conflicting SPLANET/VOODOO files".into());
     }
     // Reject file/directory collisions across both source trees.
     if list.voodoo_files.keys().any(|key|list.seen_splanet.contains(key)) ||
        list.splanet_files.keys().any(|key|list.seen_voodoo.contains(key)) {
-        return Err("Image du jeu ambiguë : fichier et répertoire en conflit".into());
+        return Err("Ambiguous game image: file/directory collision".into());
     }
     let bytes: u64 = list.files.values().map(|a| a.size).sum();
     if bytes == 0 || bytes > MAX_TOTAL_BYTES {
-        return Err(err("Image du jeu non supportée : taille des données invalide"));
+        return Err(err("Unsupported game image: invalid data size"));
     }
     Ok(list)
 }
@@ -242,7 +242,7 @@ fn node_digest(iso: &mut File, node: &TreeNode) -> Result<String, String> {
         transferred: 0, report: |_| {} };
     cat_node(iso,node,&mut writer).map_err(|e|format!("Lecture ISO : {e}"))?;
     if writer.transferred != node.size {
-        return Err("Image du jeu non supportée : fichier ISO tronqué".into());
+        return Err("Unsupported game image: truncated ISO file".into());
     }
     Ok(format!("{:x}",writer.hasher.finalize()))
 }
@@ -260,17 +260,17 @@ fn file_digest(path: &Path) -> Result<String, String> {
 fn validate_bounds(iso_len: u64, root: &TreeNode) -> Result<(),String> {
     fn walk(node: &TreeNode, length: u64, count: &mut usize)->Result<(),String>{
         *count += 1;
-        if *count > MAX_ENTRIES {return Err("Image non supportée : trop d'entrées".into());}
+        if *count > MAX_ENTRIES {return Err("Unsupported disc image: too many entries".into());}
         if !node.is_directory {
-            let start=node.file_location.ok_or("Image non supportée : extent manquant")?;
-            let size=node.file_length.ok_or("Image non supportée : taille manquante")?;
+            let start=node.file_location.ok_or("Unsupported disc image: missing file extent")?;
+            let size=node.file_length.ok_or("Unsupported disc image: missing file size")?;
             if start.checked_add(size).is_none_or(|end|end>length) || size!=node.size {
-                return Err("Image non supportée : extent hors ISO ou fichier tronqué".into());
+                return Err("Unsupported disc image: file extent beyond ISO or truncated file".into());
             }
         }
         for child in &node.children {
             if !valid_name(&child.name) {
-                return Err("Image non supportée : nom incorrect".into());
+                return Err("Unsupported disc image: invalid filename".into());
             }
             walk(child,length,count)?;
         }
@@ -281,12 +281,12 @@ fn validate_bounds(iso_len: u64, root: &TreeNode) -> Result<(),String> {
 fn mandatory_file_hashes(iso: &mut File, files: &Inventory) -> Result<Edition,String>{
     let driver = node_digest(iso, &files.files["rwdlvood.dll"].node)?;
     if driver != DRIVER_SHA256 {
-        return Err(format!("Image du jeu non supportée : RWDLVOOD.DLL non reconnu (SHA-256 {driver})"));
+        return Err(format!("Unsupported game image: unrecognized RWDLVOOD.DLL (SHA-256 {driver})"));
     }
     let executable = node_digest(iso, &files.files["spvoodoo.exe"].node)?;
     let geometry = node_digest(iso, &files.files["geometry.rwb"].node)?;
     identify_edition(&executable, &geometry).ok_or_else(|| format!(
-        "Edition 3dfx inconnue ou fichiers incompatibles : SPVOODOO.EXE={executable}, GEOMETRY.RWB={geometry}"))
+        "Unknown 3dfx edition or incompatible files: SPVOODOO.EXE={executable}, GEOMETRY.RWB={geometry}"))
 }
 pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     let mut images = Vec::new();
@@ -305,9 +305,9 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
         }
     }
     images.sort();
-    if images.len()>1 {return Err("Plusieurs images ISO/CUE trouvées : laisser une seule image du jeu".into());}
+    if images.len()>1 {return Err("Multiple ISO/CUE images found: leave only one disc image".into());}
     if images.is_empty() && bare_bins>0 {
-        return Err("Image BIN détectée sans fichier CUE : placez le .cue associé dans ce dossier".into());
+        return Err("BIN image found without a CUE file: place its .cue file in this directory".into());
     }
     Ok(images.pop())
 }
@@ -315,7 +315,7 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
 /// and HighQualityVideo; add conservative defaults when no INI exists.
 pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     if !(1..=5).contains(&language) {
-        return Err(format!("Code de langue invalide: {language}"));
+        return Err(format!("Invalid language code: {language}"));
     }
     // Preserve all legacy non-UTF8 bytes in original INI lines; replace
     // video= video (working-directory-relative), plus defaults from Lutris
@@ -400,33 +400,33 @@ pub fn install_image(
     mut log:impl FnMut(&str),
 ) -> Result<InstallReport,String> {
     if destination.exists() || destination.is_symlink(){
-        return Err("Installation existante splanet : refus d'écrasement".into());
+        return Err("Existing splanet installation: refusing to overwrite".into());
     }
     // CUE/BIN is normalized to a temporary data-only ISO. The guard deletes
     // it on any success/error path; source .cue and .bin stay read-only.
     let temporary=if image.extension().is_some_and(|e|e.eq_ignore_ascii_case("cue")){
-        let parent=destination.parent().ok_or("Dossier de destination invalide")?;
-        report(0,100,"Analyse et conversion de l'image CUE/BIN…");
+        let parent=destination.parent().ok_or("Invalid destination directory")?;
+        report(0,100,"Analyzing and converting CUE/BIN image...");
         Some(cue_image::normalize_cue_with_bin(image,bin_override,parent,
             |done,total,label|report(done.saturating_mul(9)/total,100,label),
             |message|log(message))?)
     } else {
-        if bin_override.is_some() {return Err("Un BIN explicite nécessite un fichier CUE".into());}
+        if bin_override.is_some() {return Err("An explicit BIN file requires a CUE file".into());}
         if !image.extension().is_some_and(|e|e.eq_ignore_ascii_case("iso")){
-            return Err("Image non reconnue : préciser un fichier ISO ou CUE".into());
+            return Err("Unknown disc image: provide an ISO or CUE file".into());
         }
         None
     };
     let source=temporary.as_ref().map(|x|x.path.as_path()).unwrap_or(image);
-    let mut iso=File::open(source).map_err(|e|format!("Image du jeu illisible : {e}"))?;
+    let mut iso=File::open(source).map_err(|e|format!("Cannot read game image: {e}"))?;
     let iso_len=iso.metadata().map_err(|e|e.to_string())?.len();
     if iso_len < 32 * 2048 || iso_len > MAX_TOTAL_BYTES {
-        return Err("Image du jeu non supportée : taille ISO incorrecte".into());
+        return Err("Unsupported game image: invalid ISO size".into());
     }
-    report(10,100,"Analyse de l'image du CD…");
+    report(10,100,"Analyzing the CD image...");
     log("ISO: parsing read-only image filesystem");
     let root=detect_and_parse_filesystem(&mut iso,&source.to_string_lossy())
-        .map_err(|e|format!("Image du jeu non supportée : {e}"))?;
+        .map_err(|e|format!("Unsupported game image: {e}"))?;
     validate_bounds(iso_len,&root)?;
     let inventory=inventory(&root)?;
     let edition=mandatory_file_hashes(&mut iso,&inventory)?;
@@ -446,11 +446,11 @@ pub fn install_image(
     let temp=parent.join(format!(".scorchedplanetfix-extract-{}",std::process::id()));
     let staging=parent.join(format!(".splanet-setup-{}",std::process::id()));
     if temp.exists() || staging.exists() || temp.is_symlink() || staging.is_symlink(){
-        return Err("Dossier temporaire déjà présent : nettoyage manuel requis (aucun fichier écrasé)".into());
+        return Err("Temporary directory already exists: manual cleanup required (no files overwritten)".into());
     }
-    fs::create_dir(&temp).map_err(|e|format!("Extraction temporaire impossible : {e}"))?;
+    fs::create_dir(&temp).map_err(|e|format!("Could not create temporary extraction directory: {e}"))?;
     let install_result=(||{
-        fs::create_dir(&staging).map_err(|e|format!("Installation temporaire impossible : {e}"))?;
+        fs::create_dir(&staging).map_err(|e|format!("Could not create temporary installation directory: {e}"))?;
         let total: u64=inventory.files.values().map(|a|a.size).sum();
         let mut done=0u64;
         // Phase 1: extract exact original SPLANET and VOODOO trees under temp.
@@ -465,23 +465,23 @@ pub fn install_image(
                 let output=base.join(&asset.relative);
                 if let Some(dir)=output.parent(){fs::create_dir_all(dir).map_err(|e|e.to_string())?;}
                 let mut file=OpenOptions::new().write(true).create_new(true).open(&output)
-                    .map_err(|e|format!("Création de temp/{directory}/{key} : {e}"))?;
+                    .map_err(|e|format!("Could not create temp/{directory}/{key}: {e}"))?;
                 let mut writer=HashWriter{output:&mut file,hasher:Sha256::new(),
                     transferred:0,report:|delta|{
                         done+=delta;
-                        report(10+done.saturating_mul(48)/total,100,"Extraction du CD dans temp…");
+                        report(10+done.saturating_mul(48)/total,100,"Extracting CD files to temporary directory...");
                     }};
                 cat_node(&mut iso,&asset.node,&mut writer)
                     .map_err(|e|format!("Extraction {directory}/{key} : {e}"))?;
                 if writer.transferred!=asset.size {
-                    return Err(format!("Données incomplètes : {directory}/{key}"));
+                    return Err(format!("Incomplete data: {directory}/{key}"));
                 }
                 let original_hash=format!("{:x}",writer.hasher.finalize());
                 file.flush().map_err(|e|e.to_string())?;
                 file.sync_all().map_err(|e|e.to_string())?;
                 drop(file);
                 if file_digest(&output)?!=original_hash {
-                    return Err(format!("Vérification extraction impossible : {directory}/{key}"));
+                    return Err(format!("Extracted file verification failed: {directory}/{key}"));
                 }
                 let mut permissions=fs::metadata(&output).map_err(|e|e.to_string())?.permissions();
                 permissions.set_readonly(false);
@@ -499,7 +499,7 @@ pub fn install_image(
         ] {
             for (key,asset) in files {
                 if directory=="voodoo" && !matches!(key.as_str(),"spvoodoo.exe"|"rwdlvood.dll") {
-                    return Err(format!("Fichier VOODOO imprévu (refus de copie) : {key}"));
+                    return Err(format!("Unexpected VOODOO file (copy refused): {key}"));
                 }
                 let source=temp.join(directory).join(&asset.relative);
                 let target=staging.join(&asset.relative);
@@ -512,31 +512,31 @@ pub fn install_image(
                 output.sync_all().map_err(|e|e.to_string())?;
                 drop(output);
                 if transferred!=asset.size || file_digest(&source)?!=file_digest(&target)? {
-                    return Err(format!("Vérification copie impossible : {key}"));
+                    return Err(format!("Copied file verification failed: {key}"));
                 }
                 copied+=transferred;
                 report(58+copied.saturating_mul(35)/total,100,
-                    if directory=="splanet" {"Copie de temp/splanet…"}
-                    else {"Copie des composants temp/voodoo…"});
+                    if directory=="splanet" {"Copying game files from temp/splanet..."}
+                    else {"Copying game components from temp/voodoo..."});
                 log(&format!("COPY: temp/{directory}/{key} -> splanet/{key}, sha256={}",
                     file_digest(&target)?));
             }
         }
         // Phase 3: patch first, exactly as requested, and ensure the original
         // is backed up BEFORE changing any executable instruction bytes.
-        report(94,100,"Sauvegarde .bak et application du correctif du jeu…");
+        report(94,100,"Backing up the executable and applying the game patch...");
         let game_exe=staging.join("spvoodoo.exe");
         let original_hash=edition.exe_sha256;
         log("PATCH-AUTO: backing up original spvoodoo.exe.bak before patch");
         let patch_report=scorched_planet_fix::execute(Action::Apply,&game_exe,None,true)
-            .map_err(|e|format!("Correctif automatique impossible : {e}"))?;
+            .map_err(|e|format!("Automatic patch failed: {e}"))?;
         let backup=staging.join("spvoodoo.exe.bak");
         if !backup.is_file() || file_digest(&backup)?!=original_hash {
-            return Err("Sauvegarde spvoodoo.exe.bak absente ou non conforme".into());
+            return Err("spvoodoo.exe.bak backup missing or invalid".into());
         }
         log(&format!("PATCH-AUTO OK: {patch_report}"));
         // Phase 4: generate the INI *after* the executable is verified.
-        report(97,100,"Génération de splanet.ini…");
+        report(97,100,"Generating splanet.ini...");
         let ini=staging.join("splanet.ini");
         let generated_ini=!ini.exists();
         let default_language=if edition.label=="FR/DE" {2}else{1};
@@ -553,11 +553,11 @@ pub fn install_image(
         // Publish only after every validation, copy, backup, patch and INI
         // step has succeeded. Never expose a half-installed destination.
         if destination.exists() || destination.is_symlink() {
-            return Err("splanet créé entre-temps : opération annulée".into());
+            return Err("splanet directory created during installation: operation cancelled".into());
         }
         fs::rename(&staging,destination)
             .map_err(|e|format!("Finalisation de l'installation : {e}"))?;
-        report(100,100,"Installation terminée");
+        report(100,100,"Installation completed");
         let file_count=inventory.files.len()+usize::from(generated_ini)+1;
         log(&format!("INSTALL-OK: edition={} {} files {} source bytes, original .bak verified",
             edition.label,file_count,total));
@@ -607,7 +607,7 @@ mod tests {
         let path=folder.join("SPLANETW.EXE");
         fs::write(&path,b"custom executable").unwrap();
         let error=remove_unused_splanetw(&folder,"US 1.08").unwrap_err();
-        assert!(error.contains("suppression refusée"));
+        assert!(error.contains("deletion refused"));
         assert_eq!(fs::read(&path).unwrap(),b"custom executable");
         fs::remove_dir_all(&folder).unwrap();
     }
@@ -627,7 +627,7 @@ mod tests {
         voodoo.add_child(TreeNode::new_file_with_location("FXMEMMAP.VXD".into(),10,18432,10));
         root.add_child(sp);
         root.add_child(voodoo);
-        let checked=inventory(&root).expect("CD sans splanet.ini doit être accepté");
+        let checked=inventory(&root).expect("CD without splanet.ini should be accepted");
         assert!(!checked.files.contains_key("splanet.ini"));
         assert_eq!(checked.video_files,1);
         assert_eq!(checked.skipped_splanetw,1);
@@ -656,7 +656,7 @@ mod tests {
         vd.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,10240,10));
         vd.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
         root.add_child(sp);root.add_child(vd);
-        assert!(inventory(&root).err().expect("collision attendue").contains("casse différente"));
+        assert!(inventory(&root).err().expect("expected collision").contains("case collision"));
     }
     #[test] fn usr_edition_has_only_two_3dfx_components_and_no_legacy_drivers(){
         let mut root=TreeNode::new_directory("/".into());
