@@ -20,7 +20,7 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 
 ## Supported CD editions
 
-| Edition | Available languages | FadeLow | No-CD | CUE/BIN on Wine |
+| Edition | Available languages | FadeLow | No-CD | CUE/BIN |
 | --- | --- | :---: | :---: | :---: |
 | US (InstallKey 1.08) | English | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | English, Spanish, Italian | ✅ | ✅ | ✅ |
