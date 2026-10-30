@@ -75,7 +75,7 @@ fn parse_file_arg(raw:&str)->Result<(String,String),String>{
     };
     if filename.is_empty() {return Err("CUE FILE entry is missing a filename".into());}
     let mut parts=tail.split_whitespace();
-    let kind=parts.next().ok_or("FILE CUE sans type")?;
+    let kind=parts.next().ok_or("CUE FILE entry has no type")?;
     if parts.next().is_some() {return Err("CUE FILE entry has unexpected arguments".into());}
     Ok((filename,kind.to_ascii_uppercase()))
 }
@@ -97,7 +97,7 @@ fn parse_cue(text:&str)->Result<Vec<Track>,String>{
             "TRACK" =>{
                 let number=parts.next().ok_or("TRACK entry has no number")?
                     .parse::<u8>().map_err(|_|"Invalid TRACK number")?;
-                let mode=TrackMode::parse(parts.next().ok_or("TRACK sans mode")?);
+                let mode=TrackMode::parse(parts.next().ok_or("TRACK entry has no mode")?);
                 if parts.next().is_some() || number==0 || tracks.len()>=99 ||
                     number!=tracks.len() as u8+1 {
                     return Err(format!("Invalid TRACK number or order at line {}",line_number+1));
@@ -109,7 +109,7 @@ fn parse_cue(text:&str)->Result<Vec<Track>,String>{
                 let track=tracks.last_mut().ok_or("INDEX avant TRACK dans CUE")?;
                 let index=parts.next().ok_or("INDEX entry has no number")?
                     .parse::<u8>().map_err(|_|"Invalid INDEX number")?;
-                let time=msf_frames(parts.next().ok_or("INDEX sans temps")?)?;
+                let time=msf_frames(parts.next().ok_or("INDEX entry has no timestamp")?)?;
                 if parts.next().is_some(){return Err("INDEX entry has extra arguments".into());}
                 match index {
                     0 if track.index00.replace(time).is_none() => {},
@@ -138,7 +138,7 @@ fn resolve_bin(cue:&Path, filename:&str)->Result<PathBuf,String>{
     let normalized=filename.replace('\\',"/");
     let rel=Path::new(&normalized);
     if rel.is_absolute() || normalized.contains(':') {return Err("CUE: absolute BIN paths are not allowed".into());}
-    let mut current=cue.parent().ok_or("Chemin CUE sans dossier")?.to_path_buf();
+    let mut current=cue.parent().ok_or("CUE path has no parent directory")?.to_path_buf();
     for part in rel.components(){
         match part{
             Component::Normal(name)=>{
@@ -155,7 +155,7 @@ fn resolve_bin(cue:&Path, filename:&str)->Result<PathBuf,String>{
                     if matches.len()!=1 {return Err(format!("BIN file missing or ambiguous: {}",normalized));}
                     matches[0].clone()
                 };
-                let meta=fs::symlink_metadata(&found).map_err(|e|format!("BIN inaccessible : {e}"))?;
+                let meta=fs::symlink_metadata(&found).map_err(|e|format!("BIN inaccessible: {e}"))?;
                 if meta.file_type().is_symlink(){return Err("CUE: symlinks are not allowed".into());}
                 current=found;
             },
@@ -186,7 +186,7 @@ fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
         // Explicit positional BIN is allowed outside the CUE directory,
         // but must match the BIN basename declared by its first FILE.
         let declared=first.file.replace('\\',"/");
-        let expected_name=Path::new(&declared).file_name().ok_or("Nom de BIN CUE absent")?;
+        let expected_name=Path::new(&declared).file_name().ok_or("Missing BIN filename in CUE")?;
         if !explicit.file_name().is_some_and(|actual|actual.to_string_lossy()
             .eq_ignore_ascii_case(&expected_name.to_string_lossy())){
             return Err("Explicit BIN file does not match the FILE declared in CUE".into());
