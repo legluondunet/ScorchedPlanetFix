@@ -187,35 +187,44 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     Ok(images.pop())
 }
 fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
-    let text=fs::read(ini).map_err(|e|format!("splanet.ini manquant : {e}"))?;
-    // Original Windows game INIs are legacy ASCII / ANSI; preserve any
-    // non-UTF8 bytes except the replaced ASCII key (best effort).
-    let src=String::from_utf8_lossy(&text);
-    let mut out=Vec::new();
+    // Preserve original non-UTF8 bytes and lines in legacy Windows INI.
+    // Only the ASCII video= directive in [scorch] is replaced.
+    let original=fs::read(ini).map_err(|e|format!("splanet.ini manquant : {e}"))?;
+    let path_line=format!("video={}",video.display()).into_bytes();
+    let mut out:Vec<Vec<u8>>=Vec::new();
     let mut in_scorch=false;
-    let mut found=false;
     let mut section_found=false;
-    for line in src.lines(){
-        let t=line.trim();
-        if t.starts_with('[') && t.ends_with(']'){
-            if in_scorch && !found {
-                out.push(format!("video={}",video.display()));
-                found=true;
+    let mut video_found=false;
+    for line in original.split(|b|*b==b'\n') {
+        if line.is_empty() && original.last()==Some(&b'\n'){continue;}
+        let line=line.strip_suffix(b"\r").unwrap_or(line);
+        let trimmed=line.trim_ascii();
+        if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
+            if in_scorch && !video_found {
+                out.push(path_line.clone());
+                video_found=true;
             }
-            in_scorch=t.eq_ignore_ascii_case("[scorch]");
-            section_found|=in_scorch;
+            in_scorch=trimmed.eq_ignore_ascii_case(b"[scorch]");
+            section_found |= in_scorch;
         }
-        if in_scorch && t.to_ascii_lowercase().starts_with("video=") {
-            out.push(format!("video={}",video.display()));
-            found=true;
-        } else {out.push(line.to_string());}
+        if in_scorch && trimmed.len()>=6 && trimmed[..6].eq_ignore_ascii_case(b"video=") {
+            out.push(path_line.clone());
+            video_found=true;
+        }else {
+            out.push(line.to_vec());
+        }
     }
     if !section_found {
-        out.push("[scorch]".into());
+        out.push(b"[scorch]".to_vec());
         in_scorch=true;
     }
-    if in_scorch && !found {out.push(format!("video={}",video.display()));}
-    fs::write(ini,format!("{}\r\n",out.join("\r\n"))).map_err(|e|format!("INI : {e}"))
+    if in_scorch && !video_found {out.push(path_line);}
+    let mut bytes=Vec::new();
+    for line in out {
+        bytes.extend_from_slice(&line);
+        bytes.extend_from_slice(b"\r\n");
+    }
+    fs::write(ini,bytes).map_err(|e|format!("INI : {e}"))
 }
 
 pub fn install_iso(

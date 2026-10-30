@@ -52,6 +52,7 @@ mod app {
         rx:Receiver<Event>,
         tx:Sender<Event>,
         game_ready:bool,
+        stop_on_modal:bool,
         detect: String,
     }
     impl ScorchedApp {
@@ -65,7 +66,7 @@ mod app {
             let install=root.join("splanet");
             let mut app=Self {root,logger,version,install,
                 patch_enabled:true,phase:Phase::Ready,status:"Initialisation…".into(),
-                progress:0.0,dialog:None,rx,tx,game_ready:false,detect:String::new()};
+                progress:0.0,dialog:None,rx,tx,game_ready:false,stop_on_modal:false,detect:String::new()};
             app.scan_start();
             app
         }
@@ -74,13 +75,20 @@ mod app {
                 Ok(image)=>image,
                 Err(e)=>{
                     self.detect="Plusieurs images ISO détectées".into();
+                    self.stop_on_modal=true;
                     self.info("Image du jeu non supportée",e,true);
                     return;
                 }
             };
+            if self.install.is_symlink() {
+                self.stop_on_modal=true;
+                self.info("Installation non compatible","Lien symbolique splanet refusé.",true);
+                return;
+            }
             if self.install.exists(){
                 if !self.install.is_dir() || !self.install.join("SPVOODOO.EXE").is_file() {
                     self.detect="Répertoire splanet incomplet".into();
+                    self.stop_on_modal=true;
                     self.info("Installation non compatible",
                         "Le dossier splanet existe, mais SPVOODOO.EXE est absent. Aucune modification effectuée.",true);
                     return;
@@ -111,6 +119,7 @@ mod app {
                 });
             }else{
                 self.detect="Ni image ISO ni dossier splanet trouvés".into();
+                self.stop_on_modal=true;
                 self.status="Placez l'ISO compatible ou un dossier splanet près du patcher".into();
                 self.logger.write("DETECT: no ISO and no splanet folder");
                 self.info("Aucune installation détectée",
@@ -138,6 +147,7 @@ mod app {
                             },
                             Err(e)=>{
                                 self.progress=0.0;
+                                self.stop_on_modal=true;
                                 self.status="Extraction impossible".into();
                                 self.info("Cette image du jeu n'est pas supportée",format!("{e}\nConsultez ScorchedPlanetFix.log."),true);
                             },
@@ -216,7 +226,12 @@ mod app {
                         ui.add_space(10.0);
                         ui.vertical_centered(|ui|{if ui.button("OK").clicked(){dismiss=true;}});
                     });
-                if dismiss {self.dialog=None;}
+                if dismiss {
+                    self.dialog=None;
+                    if self.stop_on_modal {
+                        root.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
             }
         }
     }
