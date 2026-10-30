@@ -53,6 +53,7 @@ or of successful European gameplay testing is made.
 - [Detailed Windows GUI instructions](docs/windows-gui-installer.md)
 - [Windows-only build workflow](.github/workflows/rust-fadelow-patcher.yml)
 - [PR #5 — Windows GUI (draft)](https://github.com/legluondunet/ScorchedPlanetFix/pull/5)
+- [European FadeLow static analysis (experimental, untested)](docs/european-fadelow-research.md)
 - [Paused high-resolution documentation (PR #4)](https://github.com/legluondunet/ScorchedPlanetFix/pull/4)
 
 The game still needs a separately supplied Glide wrapper such as nGlide;
