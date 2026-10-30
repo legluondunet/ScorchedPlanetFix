@@ -8,7 +8,7 @@ Expected source root contains `SPLANET` and `VOODOO` directories (names are matc
 
 The installer copies all files beneath `SPLANET`, retaining subfolders, then overlays files from `VOODOO`. Both original 3dfx DLLs and game assets remain unmodified. If a `COMPRESS.BIN` happens to be present, it is copied unchanged and a warning is displayed; **the file is not required** and its presence on the owner's French/German CD has not been confirmed. This is a provisional copy strategy, not a verified reconstruction of the InstallShield script.
 
-The configuration file `SPLANET.INI` is created/updated with language and local video path. Supported UI languages are French and German, mapped to the game's numeric language selections 2 and 3. Other game languages already on the disc are preserved in the destination.
+The configuration file `SPLANET.INI` is created/updated with language and local video path. The game-language picker currently offers English, French and German (provisional SPLANET.INI numeric codes 1, 2 and 3). When a supported original SETUP.INI is found, languages disabled for that CD are unavailable. The setup UI currently uses the French fallback text for the English game-language choice; full UI localization is a separate task. Other game languages already on the disc are preserved in the destination. The numeric game-language mapping still needs testing with actual installations.
 
 ## Artwork
 
@@ -57,3 +57,38 @@ change the original CD copy. Only the explicitly chosen report destination is wr
 Review the text before sharing it. A full faithful installation, support for English
 game data, and the need for any original InstallShield extraction step remain unverified
 until a representative original CD audit can be studied.
+
+## Findings from a user-supplied original SETUP.INI (edition 1.06)
+
+The original configuration includes these values under `[Criterion Studios]`:
+
+| Key | Value | Interpretation |
+| --- | --- | --- |
+| `English` | `1` | Offered by this CD's original setup |
+| `Francais` | `0` | Not offered by this edition |
+| `Deutsch` | `0` | Not offered by this edition |
+| `Italiano` | `1` | Offered by the original setup; not yet selectable in our Rust UI |
+| `Espagnol` | `1` | Offered by the original setup; not yet selectable in our Rust UI |
+| `DefaultLanguage` | `1` | Original setup's default language selection; this is not proof of the game's `SPLANET.INI` numeric encoding |
+
+The setup also defines `[SPlanet]` as a common DOS/Windows installation, and
+`[Voodoo]` as a Windows-only implementation with
+`WinAppFile=SPVOODOO.EXE`, `SelectWin=1`, `SelectDOS=0`,
+`DirectX=1`, `DLLs=1`, `VXDs=1`, `MaxDetail=1`,
+`SpecialBinaries=0`, `CopyVideos=0`, `SizeData=63`, and `SizeWin=1`.
+These keys are original install-configuration flags and do not by themselves
+identify the source filenames to be copied or justify installing legacy drivers
+on a modern Windows system.
+
+`CompressSpecials=1` occurs only in the `[Mystique]` section, alongside
+`SpecialBinaries=1`. The supplied `SETUP.INI` never names `COMPRESS.BIN`,
+so that file must **not** be considered a prerequisite for the Voodoo variant.
+
+The Rust parser reads `SETUP.INI` from the disc root,
+`INSTALL/SETUP.INI`, or `INSTALL/WINDOWS/SETUP.INI` when present.
+If it finds a well-formed language manifest, it blocks languages explicitly
+disabled on that CD. Missing manifests remain possible for backward-compatible
+preview builds, but their language availability cannot be verified.
+English (`language=1`) is a provisional candidate requiring a real-game
+installation test, not a reverse-engineered guarantee. Italian and Spanish
+remain future setup options.
