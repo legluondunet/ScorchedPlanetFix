@@ -34,7 +34,34 @@ Language 1 is the default for US and EN/ES/IT (Italian=4, Spanish=5); FR/DE defa
 
 ## Owner-validated CUE/BIN editions
 
-On 2026-10-30, the owner reported successful CUE/BIN installation and **no CD-required message** for both US 1.08 and FR/DE 1.06. The original source images are preserved. This is user-reported functional validation, not an exhaustive test of every mission or platform. EN/ES/IT CUE/BIN with the final console installer remains to be checked.
+On 2026-10-30, the owner reported successful CUE/BIN installation and **no CD-required message** for both US 1.08 and FR/DE 1.06. The original source images are preserved. This is user-reported functional validation, not an exhaustive test of every mission or platform. EN/ES/IT CUE/BIN extraction and `--verify` also passed the owner's test, but the game displayed a CD-required message with FadeLow-only; the new six-byte candidate awaits gameplay validation.
+
+## EN/ES/IT CD-media check research and safe migration
+
+The owner has confirmed EN/ES/IT CUE/BIN extraction and `--verify` work,
+but the four-byte FadeLow build still displayed **NO CD** in gameplay.
+Static analysis of the exact original EN/ES/IT executable
+(SHA-256 `9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f`)
+located the same drive-search/failed-media-return routine as FR/DE:
+at **VA `0x43562B` / file offset `0x34A2B`**,
+the failure-return instruction `33 C0` (`xor eax,eax`) can be
+changed to `B0 01` (`mov al,1`). This changes exactly two bytes.
+Combined with four FadeLow bytes at `0x487AD`, the target SHA-256
+is `66c705a77d290d4bed6abdb4b8b065337aaeb50f9e4480090bbe2dfd5006d35c`.
+**Gameplay validation of this combined EN/ES/IT build is pending.**
+This is an edition-specific patch, not the US or FR/DE offsets.
+
+The old four-byte EN/ES/IT result with SHA-256
+`dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc`
+is recognized for safe migration. Run the installer with **no arguments**
+in the directory containing `splanet`. The six-byte candidate is
+reconstructed only from the **SHA-256-verified original `spvoodoo.exe.bak`**
+and replaces the old executable atomically; saves and the original backup
+are retained. Missing, corrupted or mismatched backups lead to refusal.
+
+Run `--verify` and `--launch` using the new build **without mounting a CD**,
+and confirm the menu, a mission, videos, audio, saves and game exit.
+Do not merge until the owner verifies this EN/ES/IT no-CD scenario.
 
 ## US no-CD patch and safe upgrades
 
