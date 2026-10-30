@@ -60,3 +60,101 @@ an experimental compatibility fix should accumulate discarded deltas
 rather than abruptly skipping the fade or changing global timers.
 Guard any eventual patch by exact executable hash, preserve original,
 provide easy rollback, and keep the research PR in draft until validated.
+
+## Extended offline cross-reference inventory
+
+A full `objdump -d -M intel` pass over the original executable found
+**35 direct calls** to the shared fade-update function (`0x4495C0`)
+and **18 direct calls** to its setup routine (`0x449450`).
+Among the 35 updates, these **12 repeating wait edges** are verified
+at instruction boundaries, each encoded as `75 ea` (`jne -22`):
+
+| Conditional branch | Target (repeated timer/fade call) |
+| --- | --- |
+| `0x4193D0` | `0x4193BC` |
+| `0x4195F5` | `0x4195E1` |
+| `0x419DC6` | `0x419DB2` |
+| `0x419EBC` | `0x419EA8` |
+| `0x41FED9` | `0x41FEC5` |
+| `0x426DB1` | `0x426D9D` |
+| `0x427D38` | `0x427D24` |
+| `0x430602` | `0x4305EE` |
+| `0x43067F` | `0x43066B` |
+| `0x456BB9` | `0x456BA5` |
+| `0x457B37` | `0x457B23` |
+| `0x4586A7` | `0x458693` |
+
+These loops share one fade-update function, suggesting one narrowly
+scoped fix would cover several transitions, **if** the live failure
+is indeed caused by the minimum-delta gate.
+
+Many call sites check a runtime value at `0x578128` against `8`
+before enabling a palette fade. Its setup code passes the address
+to a graphics initialization helper. We have not established
+the active value during the actual 3dfx freeze.
+
+## Closer correlation with the recorded live CPU sample
+
+Of the **178** previous `perf` user-mode CPU samples, exactly
+**26 instruction pointers** fell within the mapped original EXE's
+`.text` address range. Of those 26, **23** are in timer
+`0x432B00`, **2** in `0x436100`, and **1** on the
+loop branch `0x427D38`. The other two `[JIT]`-labeled
+IP samples are outside the original EXE image and should not
+be automatically attributed to the retail game's code.
+This is meaningful support for timing/polling as a hotspot,
+but sampling only the main thread still cannot identify every
+caller nor rule out a graphics/audio dependency.
+
+## Intermittent-jitter scenario
+
+To illustrate why occasional long iterations need not rescue the
+animation promptly, consider a deterministic model with normal
+5-microsecond iterations (below the gate) and occasional
+100-microsecond iterations (above the gate). Only the
+100-microsecond iterations decrement the fade countdown.
+
+| Frequency of a 100-us iteration | Approximate fade completion |
+| --- | ---: |
+| One per 100 iterations | 1.5 s |
+| One per 1,000 iterations | 12.7 s |
+| One per 10,000 iterations | 125 s |
+| One per 100,000 iterations | 1,250 s |
+
+These values are conditional model outputs **not observed
+timings on the user's CPU**. They assume a fixed 10 MHz QPC
+frequency, the actual divide-by-12 scaling, a 3-unit fade,
+and recurring 5/100 us loop intervals.
+
+## Proposed narrowly scoped proof of concept (NOT APPLIED)
+
+The game-specific gate is embedded as IEEE-754 float immediate
+`0x38D1B717` at virtual address `0x4495CD`, corresponding
+to **raw PE file offset `0x489CD`** in the exact verified
+original executable. A prospective experiment could replace
+**only** that threshold with zero, so positive deltas are no
+longer discarded. This is a four-byte change in the
+**fade function**, not the global timer API, and might
+allow normal countdown progress.
+
+**Caution:** every positive elapsed-time increment would then
+run the full 256-entry palette update rather than skipping very
+small deltas. This could alter frame pacing or CPU cost.
+An alternative is to accumulate subthreshold deltas until
+the threshold is crossed; this preserves update frequency but
+requires stateful instrumentation and is more invasive.
+Neither approach has been applied, shipped, or validated.
+
+Any later opt-in experimental build must check the exact SHA-256,
+make a new output copy, preserve and verify the original,
+offer rollback, and be tested under Wine/nGlide before release.
+
+## Reproducible offline evidence
+
+`tools/verify_go_fade_static.py` checks the original SHA-256,
+PE section layout, 7 critical machine-code signatures,
+the 12 back-edge signatures, the binary's 1/12 constant
+and both float32 thresholds. Its `--self-test` mode uses
+deterministic clock models without copyrighted binaries
+and runs in GitHub Actions.
+
