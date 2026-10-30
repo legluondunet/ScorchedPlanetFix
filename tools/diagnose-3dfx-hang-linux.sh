@@ -110,6 +110,7 @@ log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb"
 log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
 log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
 log "CLK_TCK=$(getconf CLK_TCK 2>/dev/null || printf '?')"
+log "Session graphique : XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
 if command -v wine >/dev/null 2>&1; then log "Wine=$(wine --version 2>/dev/null || printf '?')"; fi
 
 ps -p "$pid" -o pid=,ppid=,comm=,args= > "$out/process.txt" || true
@@ -131,6 +132,11 @@ snapshot() {
     > "$out/$name-threads-ps.txt" || true
   ps -p "$pid" -o pid,ppid,stat,pcpu,rss,vsz,etime,comm \
     > "$out/$name-process-ps.txt" || true
+  # Query display mode without changing it, to investigate the unexpected
+  # fullscreen -> 640x480 transition observed after Alt+Tab.
+  if command -v xrandr >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+    timeout 3 xrandr --current > "$out/$name-xrandr.txt" 2>&1 || true
+  fi
   {
     printf 'TID\tCPU_TICKS\tSTATE\tWCHAN\n'
     for stat_file in /proc/"$pid"/task/*/stat; do
