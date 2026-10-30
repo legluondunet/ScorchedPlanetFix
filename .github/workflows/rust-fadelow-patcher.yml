@@ -1,4 +1,4 @@
-name: Rust FadeLow patcher (Windows + Linux)
+name: ScorchedPlanetFix Windows 1.0 GUI
 
 on:
   push:
@@ -11,78 +11,53 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    name: FadeLow Rust - ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: Linux-x64
-          - os: windows-latest
-            platform: Windows-x64
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: Windows GUI build and tests
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust toolchain
+      - name: Stable Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Test all Rust targets
-        run: cargo test --locked --all-targets
-      - name: Build standalone release binary
-        run: cargo build --locked --release
-      - name: CLI smoke test (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          ./target/release/scorched-planet-fix --version
-          ./target/release/scorched-planet-fix --help
-          if ./target/release/scorched-planet-fix status --exe /does-not-exist.exe; then
-            echo 'Unexpected success for missing EXE' >&2
-            exit 1
-          fi
-      - name: CLI smoke test (Windows)
-        if: runner.os == 'Windows'
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Update Rust dependencies / lock file
+        run: cargo generate-lockfile
+      - name: Test all targets (includes ISO and FadeLow tests)
+        run: cargo test --all-targets
+      - name: Compile release GUI (Windows only)
+        run: cargo build --release --bin scorched-planet-fix
+      - name: Verify program is Windows subsystem GUI and CRT static
         shell: pwsh
         run: |
-          & .\target\release\scorched-planet-fix.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "Version smoke test failed" }
-          & .\target\release\scorched-planet-fix.exe --help
-          if ($LASTEXITCODE -ne 0) { throw "Help smoke test failed" }
-      - name: Package Windows release ZIP
-        if: runner.os == 'Windows'
+          $exe = "target/release/scorched-planet-fix.exe"
+          if (!(Test-Path $exe)) { throw "Missing patcher binary" }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          $optional = $pe + 24
+          $subsystem = [BitConverter]::ToUInt16($bytes, $optional + 68)
+          if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), received $subsystem" }
+          Write-Host "Windows GUI subsystem OK; size=$($bytes.Length)"
+      - name: Package executable, GPL license, README and checksums
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target/release/scorched-planet-fix.exe dist/
-          Copy-Item docs/rust-fadelow-patcher.md dist/README.md
+          Copy-Item target/release/scorched-planet-fix.exe dist/ScorchedPlanetFix.exe
           Copy-Item LICENSE dist/LICENSE.txt
-          $file = Get-Item dist/scorched-planet-fix.exe
-          $digest = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$digest  scorched-planet-fix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
-          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v0.1.0-Windows-x64.zip
-      - name: Package Linux release tar.gz
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          cp target/release/scorched-planet-fix dist/
-          cp docs/rust-fadelow-patcher.md dist/README.md
-          cp LICENSE dist/LICENSE.txt
-          ( cd dist && sha256sum scorched-planet-fix > SHA256SUMS.txt )
-          tar -C dist -czf ScorchedPlanetFix-v0.1.0-Linux-x64.tar.gz .
-      - name: Upload Windows distribution artifact
-        if: runner.os == 'Windows'
+          Copy-Item docs/windows-gui-installer.md dist/README.md
+          $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+      - name: Upload Windows executable (development build)
         uses: actions/upload-artifact@v4
         with:
-          name: ScorchedPlanetFix-v0.1.0-Windows-x64
-          path: ScorchedPlanetFix-v0.1.0-Windows-x64.zip
+          name: ScorchedPlanetFix-v1.0.0-Windows-x64
+          path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
           if-no-files-found: error
           retention-days: 30
-      - name: Upload Linux distribution artifact
-        if: runner.os == 'Linux'
+      - name: Archive generated dependency lockfile
         uses: actions/upload-artifact@v4
         with:
-          name: ScorchedPlanetFix-v0.1.0-Linux-x64
-          path: ScorchedPlanetFix-v0.1.0-Linux-x64.tar.gz
+          name: ScorchedPlanetFix-v1.0.0-Cargo-lock
+          path: Cargo.lock
           if-no-files-found: error
           retention-days: 30
