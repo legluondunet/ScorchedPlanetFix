@@ -15,3 +15,7 @@ The 3dfx/RenderWare investigation provides **Linux/Wine/nGlide Bash** and Window
 The original game's 3dfx executable can freeze after selecting **Go** on fast CPUs. The user successfully tested **FadeLow** under Linux/Wine/nGlide. The version-locked Python patcher `tools/scorchedplanetfix_patch.py` reproduces the validated 4-byte timing adjustment **only** for the exact SHA-256 of the supported retail `SPVOODOO.EXE`.
 
 The recommended `copy` mode keeps the original untouched. Optional `apply --yes` makes a verified backup, and `restore --yes` reverses the change. See [FadeLow installation and rollback instructions](docs/fadelow-patch.md). No modified copyrighted executable is distributed, and this development PR is not merged.
+
+## Architecture and roadmap
+
+The approved approach is **a version-locked, reversible EXE patcher first, with an optional 32-bit compatibility DLL only for features that need runtime hooks**. We are not rewriting the game or replacing DirectSound/RenderWare without a demonstrated need. Next investigations: original-CD dependency, internal high-resolution rendering, and Alt+Tab compatibility. See the [architecture and technical roadmap](docs/architecture.md).
