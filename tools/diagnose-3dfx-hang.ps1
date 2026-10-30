@@ -58,7 +58,7 @@ Write-Report "Attention : les rapports contiennent des chemins locaux ; les dump
 
 $hashes = @(
     Get-ChildItem -LiteralPath $GameDir -File | Where-Object {
-        $_.Name -match '^(SPVOODOO\.EXE|SPLANET\.EXE|RWDLVOOD\.DLL|GLIDE2X?\.DLL|DDRAW\.DLL|WINMM\.DLL|DSOUND\.DLL)$'
+        $_.Name -match '^(SPVOODOO\.EXE|SPLANET\.EXE|RWDLVOOD\.DLL|GLIDE\.DLL|GLIDE2X\.DLL|SST1INIT\.DLL|DDRAW\.DLL|WINMM\.DLL|DSOUND\.DLL)$'
     } | ForEach-Object {
         try {
             $digest = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
