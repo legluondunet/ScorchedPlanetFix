@@ -34,7 +34,7 @@ Language 1 is the default for US and EN/ES/IT (Italian=4, Spanish=5); FR/DE defa
 
 ## Owner-validated CUE/BIN editions
 
-On 2026-10-30, the owner reported successful CUE/BIN installation and **no CD-required message** for both US 1.08 and FR/DE 1.06. The original source images are preserved. This is user-reported functional validation, not an exhaustive test of every mission or platform. EN/ES/IT CUE/BIN extraction and `--verify` also passed the owner's test, but the game displayed a CD-required message with FadeLow-only; the new six-byte candidate awaits gameplay validation.
+On 2026-10-30, the owner reported successful CUE/BIN installation and **no CD-required message** for both US 1.08 and FR/DE 1.06. The original source images are preserved. This is user-reported functional validation, not an exhaustive test of every mission or platform. EN/ES/IT CUE/BIN extraction and `--verify` also passed the owner's test, but the game displayed a CD-required message with FadeLow-only; the new six-byte combined patch has now been validated by the owner in gameplay without a CD.
 
 ## EN/ES/IT CD-media check research and safe migration
 
@@ -48,7 +48,7 @@ the failure-return instruction `33 C0` (`xor eax,eax`) can be
 changed to `B0 01` (`mov al,1`). This changes exactly two bytes.
 Combined with four FadeLow bytes at `0x487AD`, the target SHA-256
 is `66c705a77d290d4bed6abdb4b8b065337aaeb50f9e4480090bbe2dfd5006d35c`.
-**Gameplay validation of this combined EN/ES/IT build is pending.**
+**The owner has validated the combined EN/ES/IT patch in the tested no-CD gameplay scenario.**
 This is an edition-specific patch, not the US or FR/DE offsets.
 
 The old four-byte EN/ES/IT result with SHA-256
@@ -61,7 +61,7 @@ are retained. Missing, corrupted or mismatched backups lead to refusal.
 
 Run `--verify` and `--launch` using the new build **without mounting a CD**,
 and confirm the menu, a mission, videos, audio, saves and game exit.
-Do not merge until the owner verifies this EN/ES/IT no-CD scenario.
+The owner has verified this EN/ES/IT no-CD scenario; do not merge the draft PR without explicit approval.
 
 ## US no-CD patch and safe upgrades
 
