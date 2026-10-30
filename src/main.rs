@@ -309,12 +309,19 @@ mod app {
             };
             let log=self.logger.clone();
             let tx=self.tx.clone();
+            let language=self.language;
+            let install=self.install.clone();
             std::thread::spawn(move ||{
-                log.write("PATCH-AUTO: auto applying exact-edition correction");
-                let result=scorched_planet_fix::execute(Action::Apply,&exe,None,true);
+                log.write("PATCH-AUTO: applying exact-edition correction, then portable INI");
+                let result=(||{
+                    let message=scorched_planet_fix::execute(Action::Apply,&exe,None,true)?;
+                    iso_install::update_ini(&install.join("splanet.ini"),language)?;
+                    log.write(&format!("INI: updated existing installation to video= video, language={language}"));
+                    Ok(message)
+                })();
                 match &result{
                     Ok(text)=>log.write(&format!("PATCH OK: {text}")),
-                    Err(e)=>log.write(&format!("PATCH ERROR: {e}")),
+                    Err(e)=>log.error(&format!("PATCH: {e}")),
                 }
                 let _=tx.send(Event::Patched(result));
             });
