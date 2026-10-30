@@ -46,11 +46,14 @@ or commercial DLLs are included.
    personal `settings`. Defaults are English for US and EN/ES/IT, French
    for FR/DE. The original game's language-resource table maps
    English=1, French=2, German=3, Italian=4, Spanish=5.
-8. Select **Correction du blocage du fondu de palette (FadeLow)**.
-   Hover the checkbox to see the detailed explanation.
-9. Click **Appliquer**. This applies the tested 4-byte timing fix
-   only to the exact retail `SPVOODOO.EXE`, with SHA-256 validation,
-   an original backup, and a success/failure OK dialog.
+8. Select the edition-specific correction. US and EN/ES/IT offer
+   **FadeLow** (four bytes); FR/DE offers **FadeLow + détection CD**
+   (four FadeLow bytes plus two media-detection bytes).
+   Hover over the checkbox to see the detailed explanation.
+9. Click **Appliquer**. The exact original EXE SHA-256, PE address
+   mapping, expected old bytes, and final patched EXE SHA-256 are all
+   verified. The program creates a same-edition original backup, refuses
+   mismatched files and shows a result dialog.
 10. Click **Lancer**. The original game's EXE starts in its installation
    directory. A compatible Glide implementation (e.g. separately
    installed nGlide) must be available; this patcher does not
@@ -63,10 +66,15 @@ disabled until the selected installation is ready.
 ## Patch details
 
 The supported patch fixes the **palette fade timer starvation /
-Go mission-launch hang** on modern CPUs. It has been gameplay-validated
-for original **US and EN/ES/IT** executables, each with its own exact hash,
-file offset and patched hash. FadeLow remains **disabled on FR/DE**, pending
-a separate gameplay test. The new GUI workflow remains untested end-to-end.
+Go mission-launch hang** on modern CPUs. The owner has gameplay-validated
+**US** and **EN/ES/IT** using the four-byte FadeLow change alone.
+The owner also gameplay-validated **FR/DE using FadeLow + a separate
+two-byte CD-media gate modification**, after observing "PAS DE CD" with
+the four-byte FadeLow-only candidate. The FR/DE combined output is
+`426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c`.
+This changes exactly six bytes; it does not create missing CD resources
+or guarantee all media dependencies are eliminated.
+The new GUI workflow remains untested end-to-end.
 
 | Item | Known verified value |
 | --- | --- |
@@ -164,8 +172,10 @@ the EXE, README, GPL license and SHA256SUMS.
 ## Workstream boundaries
 
 - High-resolution experiments are **paused**, documented in draft PR #4.
-- NoCD binary patch is **not** included; the local video path was
-  sufficient for the owner's tested game startup.
+- A **general NoCD patch is not included**: the local video path was
+  sufficient for US. Only the owner-tested FR/DE combination includes
+  an edition-specific CD-media result change, gated by exact hashes.
+  It does not supply missing resources or alter other editions.
 - Rust CD installer research in PR #1 remains separate; this new GUI
   includes only the original 3dfx copy layout and strict validation.
 - Do not merge this PR or publish a stable release until the owner
