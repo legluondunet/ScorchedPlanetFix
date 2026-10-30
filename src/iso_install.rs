@@ -187,38 +187,61 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     Ok(images.pop())
 }
 fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
-    // Preserve original non-UTF8 bytes and lines in legacy Windows INI.
-    // Only the ASCII video= directive in [scorch] is replaced.
+    // Preserve all legacy non-UTF8 bytes in original INI lines; replace
+    // video= as ASCII, add missing 3dfx defaults from the user's Lutris
+    // installation script without overwriting existing user settings.
     let original=fs::read(ini).map_err(|e|format!("splanet.ini manquant : {e}"))?;
-    let path_line=format!("video={}",video.display()).into_bytes();
+    let names: [&[u8];4]=[b"video=",b"HighQualityVideo=",b"settings=",b"name="];
+    let values: [Vec<u8>;4]=[
+        format!("video={}",video.display()).into_bytes(),
+        b"HighQualityVideo=1".to_vec(),
+        b"settings=1 0 1 1 5 95 127 0 0 5 320".to_vec(),
+        b"name=Player".to_vec(),
+    ];
     let mut out:Vec<Vec<u8>>=Vec::new();
     let mut in_scorch=false;
     let mut section_found=false;
-    let mut video_found=false;
-    for line in original.split(|b|*b==b'\n') {
-        if line.is_empty() && original.last()==Some(&b'\n'){continue;}
+    let mut seen=[false;4];
+    let chunks:Vec<&[u8]>=original.split(|b|*b==b'\n').collect();
+    for (index,line) in chunks.iter().enumerate() {
+        if index+1==chunks.len() && line.is_empty() {continue;}
         let line=line.strip_suffix(b"\r").unwrap_or(line);
         let trimmed=line.trim_ascii();
         if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
-            if in_scorch && !video_found {
-                out.push(path_line.clone());
-                video_found=true;
+            if in_scorch {
+                for i in 0..4 {
+                    if !seen[i] {out.push(values[i].clone());seen[i]=true;}
+                }
             }
             in_scorch=trimmed.eq_ignore_ascii_case(b"[scorch]");
             section_found |= in_scorch;
         }
-        if in_scorch && trimmed.len()>=6 && trimmed[..6].eq_ignore_ascii_case(b"video=") {
-            out.push(path_line.clone());
-            video_found=true;
-        }else {
-            out.push(line.to_vec());
+        if in_scorch {
+            let mut handled=false;
+            for i in 0..4 {
+                if trimmed.len()>=names[i].len() &&
+                   trimmed[..names[i].len()].eq_ignore_ascii_case(names[i]) {
+                    if i==0 {
+                        out.push(values[0].clone());
+                    }else{
+                        out.push(line.to_vec());
+                    }
+                    seen[i]=true;
+                    handled=true;
+                    break;
+                }
+            }
+            if handled {continue;}
         }
+        out.push(line.to_vec());
     }
     if !section_found {
         out.push(b"[scorch]".to_vec());
         in_scorch=true;
     }
-    if in_scorch && !video_found {out.push(path_line);}
+    if in_scorch {
+        for i in 0..4 {if !seen[i]{out.push(values[i].clone());}}
+    }
     let mut bytes=Vec::new();
     for line in out {
         bytes.extend_from_slice(&line);
