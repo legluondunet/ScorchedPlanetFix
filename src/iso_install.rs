@@ -560,9 +560,47 @@ mod tests {
         assert!(!checked.files.contains_key("splanet.ini"));
         assert_eq!(checked.video_files,1);
         assert_eq!(checked.skipped_legacy_drivers,3);
+        assert_eq!(checked.splanet_files.len(),2); // geometry + video
+        assert_eq!(checked.voodoo_files.len(),2); // exe + RenderWare DLL
+        assert!(checked.splanet_files.contains_key("video/intro.smk"));
+        assert_eq!(checked.voodoo_files["spvoodoo.exe"].relative,PathBuf::from("spvoodoo.exe"));
+        assert_eq!(checked.splanet_files["video/intro.smk"].relative,
+            PathBuf::from("video").join("intro.smk"));
         for legacy in ["glide.dll","fxmemmap.vxd","sst1init.dll"] {
             assert!(!checked.files.contains_key(legacy));
         }
+    }
+    #[test] fn install_tree_rejects_case_fold_collisions_and_file_dir_conflicts(){
+        let mut root=TreeNode::new_directory("/".into());
+        let mut sp=TreeNode::new_directory("sPlAnEt".into());
+        sp.add_child(TreeNode::new_file_with_location("GEOMETRY.RWB".into(),10,2048,10));
+        sp.add_child(TreeNode::new_file_with_location("geometry.rwb".into(),10,4096,10));
+        let mut video=TreeNode::new_directory("VIDEO".into());
+        video.add_child(TreeNode::new_file_with_location("INTRO.SMK".into(),10,8192,10));
+        sp.add_child(video);
+        let mut vd=TreeNode::new_directory("VoOdOo".into());
+        vd.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,10240,10));
+        vd.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
+        root.add_child(sp);root.add_child(vd);
+        assert!(inventory(&root).unwrap_err().contains("casse différente"));
+    }
+    #[test] fn usr_edition_has_only_two_3dfx_components_and_no_legacy_drivers(){
+        let mut root=TreeNode::new_directory("/".into());
+        let mut sp=TreeNode::new_directory("SPLANET".into());
+        sp.add_child(TreeNode::new_file_with_location("GEOMETRY.RWB".into(),10,2048,10));
+        let mut video=TreeNode::new_directory("VIDEO".into());
+        video.add_child(TreeNode::new_file_with_location("START.SMK".into(),10,4096,10));
+        sp.add_child(video);
+        let mut vd=TreeNode::new_directory("VOODOO".into());
+        vd.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,8192,10));
+        vd.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
+        root.add_child(sp);root.add_child(vd);
+        let expected=inventory(&root).unwrap();
+        assert_eq!(expected.skipped_legacy_drivers,0);
+        assert_eq!(expected.voodoo_files.len(),2);
+        assert_eq!(expected.splanet_files.len(),2);
+        assert_eq!(expected.files.len(),4);
+        assert!(expected.files.keys().all(|name|name==&name.to_ascii_lowercase()));
     }
     #[test] fn creates_missing_ini_with_local_video_and_defaults(){
         let dir=std::env::temp_dir().join(format!("scorched-new-ini-test-{}",std::process::id()));
