@@ -254,6 +254,31 @@ Collection may fail due to kernel perf policy, missing tool, or perf
 capabilities. The script neither changes kernel policy nor patches any
 Wine/game files. Review metadata/paths before sharing; send text first.
 
+### Fourth real diagnostic (2026-10-30, 10:26): game exits before perf sampling
+
+The run used `--perf-sudo` with the correct Wine prefix. It captured
+`snapshot-1` at **10:26:39**, then reported **game terminated before
+`snapshot-2`** at 10:26:44. The original script returned before its
+perf stage, so **no perf command ran**, and therefore `perf-report.txt`,
+`perf-samples.txt`, and `perf-record.txt` were not generated. This is
+a control-flow issue in the diagnostic script, not evidence of a perf
+installation/permission issue.
+
+The first snapshot caught the principal process (Linux TID 427298)
+in running state `R`, with its accumulated CPU accounting high.
+`xrandr --current` showed desktop mode 1920x1080 at 120 Hz;
+no physical X11 resolution switch was observed in that snapshot.
+The process disappearance can reflect a crash, user exit, or an
+external termination; a process status snapshot does not reveal why.
+
+Fix: when `--perf-sudo` is requested, the tool now starts perf
+**immediately after snapshot-1**, for the configured `--interval`
+seconds, then captures `snapshot-2` if the target still exists.
+If the target exits during perf, the script still tries to generate
+reports from any recorded `perf.data` and keeps a partial log.
+The main `.log` now captures errors from `perf-record.txt` as well.
+Test coverage includes a mocked process terminating while perf runs.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
