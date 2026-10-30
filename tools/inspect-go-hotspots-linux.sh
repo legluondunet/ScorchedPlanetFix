@@ -65,6 +65,21 @@ fi
   printf '\n=== Direct call sites referring to suspected functions ===\n'
   # Static call-site inventory is an index, not proof the call runs at Go.
   objdump -d -M intel -- "$exe" | grep -Ei 'call[[:space:]]+0x(4495c0|436100|432b00|427d00|427d24|432870)([[:space:]]|$)' || true
+  printf '\n=== Runtime clock startup: indirect calls and QPC frequency writes ===\n'
+  # Find references to the imported timer routines and to the divisor
+  # used by 0x432b8a. The disassembler prints virtual addresses,
+  # enabling follow-up on their exact call sites.
+  objdump -d -M intel -- "$exe" |
+    grep -Ei '(call.*(0x57f398|0x57f3d4)|\b(0x57bc58|0x52051c|0x520500|0x520514)\b)' || true
+  printf '\n=== Palette fade initialization (call sites to 0x449450) ===\n'
+  objdump -d -M intel -- "$exe" |
+    grep -Ei 'call[[:space:]]+0x449450([[:space:]]|$)' || true
+  printf '\n=== Fade countdown: all direct references to 0x4c99c8 ===\n'
+  objdump -d -M intel -- "$exe" |
+    grep -Ei '0x4c99c8\b' || true
+  printf '\n=== Fade thresholds as float32 ===\n'
+  printf '0x38d1b717 is approximately 0.0001 seconds; 0x3a83126f is approximately 0.001 seconds.\n'
+  printf 'These comparisons use signed integer ordering of nonnegative float bit patterns.\n'
   printf '\nAddresses observed in Wine near image base 0x00400000.\n'
   printf 'Do not patch before confirming what these instructions do.\n'
 } > "$report"
