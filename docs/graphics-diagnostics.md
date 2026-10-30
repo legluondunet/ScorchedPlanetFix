@@ -279,6 +279,61 @@ reports from any recorded `perf.data` and keeps a partial log.
 The main `.log` now captures errors from `perf-record.txt` as well.
 Test coverage includes a mocked process terminating while perf runs.
 
+### Fifth real diagnostic: Go freezes and music repeats (2026-10-30, 10:49)
+
+User reports: from the game's main menu, clicking **Go** to start a new game
+freezes the window; approximately the last four seconds of music continue
+looping. This matters because the audio may be replaying a buffered fragment
+while the main gameplay transition is stalled; **this does not prove** that
+DirectSound is the root cause.
+
+The latest `perf` run successfully sampled main Linux TID `446078` for five
+seconds, with **178 samples and zero lost samples**. A summary of direct
+sample counts (not inclusive call-stack CPU cost):
+
+| Mapped image / category | Samples | Share |
+| --- | ---: | ---: |
+| native Wine `ntdll.so` | 76 | 42.7% |
+| `/tmp/perf-446078.map` / perf JIT-coded image | 28 | 15.7% |
+| Wine i386 `ntdll.dll` | 24 | 13.5% |
+| Linux vDSO clock | 16 | 9.0% |
+| Wine `wow64cpu.dll` | 16 | 9.0% |
+| 32-bit `d3d11.dll` | 11 | 6.2% |
+| remaining | 7 | 3.9% |
+
+The particularly frequent runtime IPs are `0x7fdf3cb79192`
+(39 samples), `0x7fdf3cb791df` (15 samples),
+`0x7fdf3cf35c6c` / `__vdso_clock_gettime` (13 samples),
+and several Windows-code addresses within `0x00432b00-0x00432bff`
+(20 samples total, 11.2%). The Windows address range overlaps the
+mapped `SPVOODOO.EXE` image range shown in the previous GDB snapshots
+(base `0x00400000`), but perf labeled it JIT and an **exact module/code
+attribution remains to be verified from the matching executable**.
+
+The combination of recurring clock calls, WoW64 transitions and an active
+main thread is consistent with polling or a tight timing loop; it is not
+conclusive evidence of which function is faulty or whether the music loop
+causes the freeze. No observed direct CPU samples were assigned to
+`RWDLVOOD.DLL` or `Glide.dll` in this interval. A five-second main-thread
+sample cannot exclude wrapper involvement.
+
+**Next step: static code analysis**, without restarting the game:
+
+```bash
+cd /path/to/installed/scorched-planet
+bash ./inspect-go-hotspots-linux.sh ./SPVOODOO.EXE
+```
+
+The read-only `tools/inspect-go-hotspots-linux.sh` verifies SHA-256 against
+the already supplied retail `SPVOODOO.EXE` hash
+`fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a`
+and uses GNU objdump to extract import names, section VMAs and instructions
+around `0x00432b62`, `0x0043610d`, `0x00427d38`.
+Output is a standalone timestamped `ScorchedPlanetFix-Go-code-*.txt`
+in the current/game directory. The tool neither modifies nor executes the
+commercial game executable. If binary hash differs, it warns the perf
+addresses may not map to the same build.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
