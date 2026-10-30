@@ -6,17 +6,17 @@ This is a **console-only** program. It has no graphical user interface. The 32-b
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe --nogui
-.\ScorchedPlanetFix.exe --nogui "D:\ISO\Scorched Planet.iso"
-.\ScorchedPlanetFix.exe --nogui "D:\ISO\Scorched Planet.cue"
-.\ScorchedPlanetFix.exe --nogui "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
+.\ScorchedPlanetFix.exe
+.\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.iso"
+.\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue"
+.\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --launch
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
 
-- No arguments and `--nogui`: extract a single ISO/CUE into **current working directory**; if there is already `splanet`, verify and patch its recognized EXE and normalize its INI without overwriting the game assets. The `--nogui` name is retained only as a compatibility alias.
+- No arguments: extract a single ISO/CUE found in the **current working directory**; if there is already `splanet`, verify and patch its recognized EXE and normalize its INI without overwriting the game assets. To choose media explicitly, provide `<image.iso>` or `<image.cue> [track.bin]` as positional arguments. There is no GUI and no GUI-related command-line switch.
 - `--verify`: read-only check of the `splanet` directory **next to ScorchedPlanetFix.exe**; validates patch and `.bak`, all immutable files' SHA-256, `splanet.ini`, local `glide.dll`. Does not overwrite savegames or mutable configuration.
 - `--launch`: run **the same full verification first**, then launch the game from `splanet` and monitor its exit status.
 - `--help`: commands and version; `--version`: version only.
