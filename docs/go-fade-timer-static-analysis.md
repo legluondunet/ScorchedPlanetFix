@@ -271,7 +271,7 @@ Separately, the read-only live-value test of timer delta
 other causes when the user is ready for in-game diagnostics.
 No live-memory capture is performed by the offline tools.
 
-## Prepared first user test: low-threshold executable copy (not run)
+## Prepared first user test: low-threshold executable copy (historical pre-test record)
 
 The exact retail original was independently re-checked offline, including
 PE image mapping, 7 timing/fade signatures, all 12 byte-level backward
@@ -304,4 +304,33 @@ instead conduct a later trial on an isolated installation copy.
 the test copy in the real Wine/nGlide environment. Offline validation
 cannot establish that the Go freeze is fixed, and no claim of
 in-game success has been made.
+
+## Initial real-game test: FadeLow reported working (2026-10-30)
+
+**User test result:** after receiving the experimental
+`SPVOODOO-FadeLow.EXE`, the user reported in French:
+**« ça fonctionne ! »**. This is the first positive real-world
+report for the copy-only `low` threshold change under their
+Wine/nGlide installation. It was reported in direct reply to
+the instruction to test whether clicking Go can proceed.
+
+**Interpretation:** the original failure after clicking Go is
+reported resolved with `low`, strongly supporting the hypothesis
+that subthreshold palette-fade timing was responsible for the hang.
+This is a user-reported result, **not independent lab reproduction**.
+The user has not yet provided separate observations for every
+sound symptom, sustained gameplay, multiple missions, repeated
+launches or other palette fades. These remain acceptance tests.
+
+**Patch identity:** exact original SHA-256
+`fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a`;
+candidate `low` SHA-256
+`0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45`;
+change only 4 bytes of the float32 fade gate at file offset
+`0x489CD`: `17 B7 D1 38` -> `AC C5 27 37`.
+The `zero` variant is **not needed or tested** at this stage.
+
+**Status:** first manual gameplay test **PASS as reported**.
+Keep PR draft and do not merge until repeatability and
+regressions are assessed. No binary is distributed in GitHub.
 
