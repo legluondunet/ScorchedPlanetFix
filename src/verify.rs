@@ -104,6 +104,16 @@ fn allowed_language(label:&str,lang:u8)->bool{
         _=>false
     }
 }
+/// Used only by installation/repair workflows, never by read-only
+/// verification. Preserve a preselected valid edition language when
+/// migrating older absolute-video INI files to video= video.
+pub fn preferred_language(folder:&Path,label:&str)->u8 {
+    let default=if label.starts_with("FR/DE") {2} else {1};
+    read_scorch_ini(&folder.join("splanet.ini")).ok()
+        .and_then(|(_,lang)|lang)
+        .filter(|code|allowed_language(label,*code))
+        .unwrap_or(default)
+}
 fn inspect_file(root:&Path, entry:&ReferenceFile)->Result<u64,String>{
     let path=resolve_case_fold(root,entry.path)?;
     let (size,digest)=hash_file(&path)?;
@@ -127,11 +137,11 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
             profile.label));
     }
     // A backup must match the exact edition: never blindly trust a .bak.
-     // Construct backup from the file name to stay in its own directory.
+    // Construct backup from the file name to stay in its own directory.
     let mut name=exe.file_name().ok_or("Nom d'exécutable absent")?.to_os_string();
     name.push(".bak");
     let backup=exe.with_file_name(name);
-     let (_,backup_hash)=hash_file(&backup)?;
+    let (_,backup_hash)=hash_file(&backup)?;
     if backup_hash!=profile.original_hash {
         return Err(format!("Sauvegarde originale non conforme : {} (SHA-256 {backup_hash})",
             backup.display()));
