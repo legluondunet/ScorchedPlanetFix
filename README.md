@@ -2,7 +2,8 @@
 
 **Version 1.0.0 — Windows GUI ISO installer and FadeLow patcher for Scorched Planet (1996).**
 
-Rust native **Windows only**, usable on Linux through Wine.
+Rust native **Windows x64 (64-bit) only**, usable on Linux through a compatible 64-bit Wine environment.
+The patcher is 64-bit; the original Scorched Planet game remains 32-bit.
 No game files, CD ISO, nGlide or proprietary DLLs are bundled.
 License: **GNU GPL-3.0-or-later**.
 
@@ -14,7 +15,8 @@ When an ISO is detected and `splanet` is absent, the program
 checks its structure, the exact original game executable and
 RenderWare DLL hashes, copies the `SPLANET/` and `VOODOO/`
 trees (with videos) into a staged `splanet` installation and
-updates `splanet.ini` to use local videos. It never overwrites
+creates `splanet.ini` if absent (or updates an existing copy)
+to use local videos. It never overwrites
 an existing game directory.
 
 The graphical UI displays `1.0.0-<commit>`, a checkbox for
