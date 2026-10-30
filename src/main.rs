@@ -20,8 +20,8 @@ fn main(){
     if let Err(message)=result {
         let directory=std::env::current_exe().ok().and_then(|p|p.parent().map(|x|x.to_path_buf()));
         logger::Logger::emergency_error(directory.as_deref(),&message);
-        eprintln!("ScorchedPlanetFix : ERREUR : {message}");
-        eprintln!("Détails : ScorchedPlanetFix.log");
+        eprintln!("ScorchedPlanetFix: ERROR: {message}");
+        eprintln!("Details: ScorchedPlanetFix.log");
         std::process::exit(1);
     }
 }
