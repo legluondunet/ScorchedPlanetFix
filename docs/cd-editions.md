@@ -18,8 +18,18 @@ European editions include three legacy driver files in the `VOODOO` tree (`glide
 
 - Identify an edition using exact SHA-256 of `VOODOO/SPVOODOO.EXE`, `SPLANET/GEOMETRY.RWB` and the shared RenderWare driver. Refuse unrecognized or mixed binaries.
 - Copy the original game trees without changes; create `splanet.ini` if absent and redirect its video path to local game data.
-- **FadeLow patch: validated only for the US executable.** European executables differ and remain deliberately unpatched until separately reverse-engineered and tested. Do not apply the US 4-byte patch to them.
+- **FadeLow patch: validated for US and EN/ES/IT executables.** The EN/ES/IT test copy was reported working by the owner on 2026-10-30. FR/DE remains unvalidated and disabled in the Rust GUI. Each enabled edition uses its own exact binary hash and four-byte patch offset.
 - The complete inventoried per-file hashes are preserved in `data/cd-inventories/` for future media verification, but the current installer verifies only required binary/resource identities and checks extracted file copies against the source ISO. It does *not yet* compare all CD files to these manifests.
 - No fully authenticated retail-master provenance or end-to-end European installation/playability test is claimed. All changes remain in draft PR #5 until separately approved.
 
 Developed by legluondunet, assisted by ChatGPT (OpenAI).
+
+## Language mapping determined from the original game executables
+
+A PE32 data table of pointers to language resource names is indexed as follows: `1=English`, `2=French`, `3=German`, `4=Italian`, `5=Spanish` (index zero is null). The owner-provided tested EN/ES/IT `splanet.ini` has `language=4` (Italian). The GUI offers only languages for which the CD inventory has a corresponding `SPLANET/*.REZ` resource:
+
+- US: English (1)
+- EN/ES/IT: English (1), Italian (4), Spanish (5)
+- FR/DE: French (2), German (3)
+
+The installer sets `video=` to the local installation folder and `HighQualityVideo=1`, adding the edition default `language=`. Existing keymapping, gamma, joystick, and other personal options are preserved. The complete original GUI install path has not yet been user-validated.
