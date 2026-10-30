@@ -2,9 +2,11 @@
 
 **Status: development build for owner validation; not yet a stable release.**
 
-ScorchedPlanetFix is a Rust **Windows-only** graphical application.
-Linux users may run the Windows executable using Wine; there is no
-native Linux release.
+ScorchedPlanetFix is a Rust **Windows x64-only** graphical application
+for modern 64-bit Windows systems. Linux users may run the same x64
+executable through a compatible 64-bit Wine environment; there is no
+native Linux release or 32-bit patcher build. The original game is
+still a 32-bit executable and needs an environment that supports 32-bit games.
 
 ## Version and license
 
@@ -29,8 +31,9 @@ or commercial DLLs are included.
 5. If `splanet` does not exist, and exactly one ISO is present, the
    patcher parses it, validates the supported 3dfx edition, merges the
    original `SPLANET/` then `VOODOO/` trees into a temporary directory,
-   checks all installed file transfers, rewrites the local `video=`
-   setting in `splanet.ini` and finally atomically names the new
+   checks all installed file transfers, generates `splanet.ini` if absent
+   (or preserves its settings if present), writes the local `video=`
+   path and finally atomically names the new
    installation `splanet`.
 6. During extraction a percentage progress bar is displayed. An OK
    dialog reports completion or error. The installer never deletes or
@@ -80,8 +83,9 @@ The preflight checks:
 - bounded entry count and bounded file sizes;
 - safe, unambiguous Windows file and directory names;
 - presence of `SPLANET/` and `VOODOO/`;
-- presence of `GEOMETRY.RWB`, `SPLANET.INI`,
-  `SPVOODOO.EXE`, `RWDLVOOD.DLL` and Smacker `.SMK` video files;
+- presence of `GEOMETRY.RWB`, `SPVOODOO.EXE`, `RWDLVOOD.DLL`
+  and Smacker `.SMK` video files; `SPLANET.INI` is optional and
+  generated when absent;
 - **exact SHA-256** of original `SPVOODOO.EXE` and `RWDLVOOD.DLL`
   against verified retail reference binaries;
 - streamed extraction of the selected complete `SPLANET` and `VOODOO`
@@ -130,13 +134,14 @@ users should review it before posting publicly.
 Requires stable Rust with Windows MSVC target, and no system Python:
 
 ```powershell
-cargo test --all-targets
-cargo build --release --bin scorched-planet-fix
+rustup target add x86_64-pc-windows-msvc
+cargo test --target x86_64-pc-windows-msvc --all-targets
+cargo build --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
 ```
 
 The `.cargo/config.toml` requests static MSVC CRT linkage.
 The workflow `.github/workflows/rust-fadelow-patcher.yml` builds
-**Windows x86_64 only**, checks the PE GUI subsystem, and packages
+**Windows x86_64 only**, checks the AMD64 PE architecture and GUI subsystem, and packages
 the EXE, README, GPL license and SHA256SUMS.
 
 ## Workstream boundaries
