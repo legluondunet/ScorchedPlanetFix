@@ -8,4 +8,4 @@ The first component is a Windows installer written in Rust, intended to read fil
 
 ## Graphics compatibility research
 
-The first 3dfx/RenderWare investigation provides a read-only Windows PowerShell diagnostic tool to capture process and thread state while `SPVOODOO.EXE` is frozen at the transition from menu to a mission. It does not patch game files. See [the graphics diagnostic guide](docs/graphics-diagnostics.md).
+The 3dfx/RenderWare investigation provides **Linux/Wine/nGlide Bash** and Windows PowerShell diagnostic tools to capture process and thread state while `SPVOODOO.EXE` is frozen at the transition from menu to a mission. They do not patch game files. Linux users should start with `tools/diagnose-3dfx-hang-linux.sh`. See [the graphics diagnostic guide](docs/graphics-diagnostics.md).
