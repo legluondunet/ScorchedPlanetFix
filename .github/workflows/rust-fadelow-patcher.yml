@@ -1,0 +1,88 @@
+name: Rust FadeLow patcher (Windows + Linux)
+
+on:
+  push:
+    branches: [feat/rust-fadelow-patcher]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: FadeLow Rust - ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: Linux-x64
+          - os: windows-latest
+            platform: Windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Test all Rust targets
+        run: cargo test --locked --all-targets
+      - name: Build standalone release binary
+        run: cargo build --locked --release
+      - name: CLI smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./target/release/scorched-planet-fix --version
+          ./target/release/scorched-planet-fix --help
+          if ./target/release/scorched-planet-fix status --exe /does-not-exist.exe; then
+            echo 'Unexpected success for missing EXE' >&2
+            exit 1
+          fi
+      - name: CLI smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\target\release\scorched-planet-fix.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Version smoke test failed" }
+          & .\target\release\scorched-planet-fix.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "Help smoke test failed" }
+      - name: Package Windows release ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/scorched-planet-fix.exe dist/
+          Copy-Item docs/rust-fadelow-patcher.md dist/README.md
+          Copy-Item LICENSE dist/LICENSE.txt
+          $file = Get-Item dist/scorched-planet-fix.exe
+          $digest = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  scorched-planet-fix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v0.1.0-Windows-x64.zip
+      - name: Package Linux release tar.gz
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/scorched-planet-fix dist/
+          cp docs/rust-fadelow-patcher.md dist/README.md
+          cp LICENSE dist/LICENSE.txt
+          ( cd dist && sha256sum scorched-planet-fix > SHA256SUMS.txt )
+          tar -C dist -czf ScorchedPlanetFix-v0.1.0-Linux-x64.tar.gz .
+      - name: Upload Windows distribution artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v0.1.0-Windows-x64
+          path: ScorchedPlanetFix-v0.1.0-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Linux distribution artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v0.1.0-Linux-x64
+          path: ScorchedPlanetFix-v0.1.0-Linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
