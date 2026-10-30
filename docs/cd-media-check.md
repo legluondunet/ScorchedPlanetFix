@@ -118,3 +118,39 @@ record the first missing file and its path. The likely next step is
 fixing or configuring resource paths, not bypassing further checks.
 The user must provide the in-game observation; static analysis does
 not establish the missing assets or the environment's drive mapping.
+
+## User no-CD baseline observation (2026-10-30)
+
+**User report, before running the NoCD candidate:**
+
+1. The working game installation is located under
+   `/mnt/LUTRIS/Games/scorched-planet/drive_c/splanet`.
+2. The user renamed the directory holding their original CD files from
+   `/mnt/LUTRIS/Games/scorched-planet/drive_c/splanetcd` to
+   `/mnt/LUTRIS/Games/scorched-planet/drive_c/splanetcd .bak`
+   (the exact backup suffix may have been described informally).
+3. With that directory absent at its expected name, **the game would not start**.
+4. When the directory was renamed back to `splanetcd`,
+   **the game launched normally**.
+
+**Interpretation:** startup depends on the *presence or path* of
+`splanetcd`, or on files / an emulated Wine drive that points into that
+directory. The observation **does not yet distinguish** optical-media
+presence checking from actual resource loading, nor does it prove a
+cryptographic CD protection. The previous candidate only changes a
+two-byte return-value instruction in a particular media-availability
+probe. It cannot restore missing assets or broken drive mappings.
+
+**Next controlled test:** keep `splanetcd` renamed to the backup name,
+keep the same prefix, runner, graphics wrapper and game working directory,
+and launch the privately provided
+`SPVOODOO-FadeLow-NoCD-TEST.EXE` as a *separately named* executable.
+If it launches, repeat mission, video, music and save/load checks.
+If it fails at the same point, restore `splanetcd` and the working
+FadeLow executable; inspect the first missing file / drive mapping
+rather than developing further blind bypasses. Note whether "does not
+start" means a missing-CD prompt, silent exit, crash, blank screen,
+or menu displayed but Go failed.
+
+**No result of this NoCD candidate trial has been received yet.**
+
