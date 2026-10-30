@@ -17,7 +17,7 @@ European editions include three legacy driver files in the `VOODOO` tree (`glide
 ## Integration and validation boundary
 
 - Identify an edition using exact SHA-256 of `VOODOO/SPVOODOO.EXE`, `SPLANET/GEOMETRY.RWB` and the shared RenderWare driver. Refuse unrecognized or mixed binaries.
-- Copy the original game trees without changes; create `splanet.ini` if absent and redirect its video path to local game data.
+- Extract only the original `SPLANET/` and `VOODOO/` trees into an isolated temporary workspace; install the full `SPLANET/` tree plus `VOODOO/SPVOODOO.EXE` and `VOODOO/RWDLVOOD.DLL` only. Normalize all resulting names to lowercase and refuse case-fold collisions. Exclude `glide.dll`, `sst1init.dll` and `fxmemmap.vxd`. Create and verify `spvoodoo.exe.bak`, patch, and finally generate `splanet.ini` with local videos.
 - **Validated patch combinations:** US 1.08: FadeLow only (4 bytes); EN/ES/IT 1.06: FadeLow only (4 bytes); FR/DE 1.06: FadeLow plus a separate, edition-specific CD-media result change (6 bytes). The owner confirmed the combined FR/DE candidate works in gameplay on 2026-10-30 after the FadeLow-only candidate reached a "PAS DE CD" menu. This does **not** establish that standalone FR/DE FadeLow is sufficient, that physical CD media are never needed for any gameplay resource, or that the automated GUI installer has already been tested.
 - The complete inventoried per-file hashes are preserved in `data/cd-inventories/` for future media verification, but the current installer verifies only required binary/resource identities and checks extracted file copies against the source ISO. It does *not yet* compare all CD files to these manifests.
 - No fully authenticated retail-master provenance or end-to-end European installation/playability test is claimed. All changes remain in draft PR #5 until separately approved.
@@ -32,4 +32,4 @@ A PE32 data table of pointers to language resource names is indexed as follows: 
 - EN/ES/IT: English (1), Italian (4), Spanish (5)
 - FR/DE: French (2), German (3)
 
-The installer sets `video=` to the local installation folder and `HighQualityVideo=1`, adding the edition default `language=`. Existing keymapping, gamma, joystick, and other personal options are preserved. The complete original GUI install path has not yet been user-validated.
+After the game EXE is backed up and patched, the installer sets `video=` to the local installation folder and `HighQualityVideo=1`, adding the edition default `language=`. Existing keymapping, gamma, joystick, and other personal options are preserved. The complete original GUI install path has not yet been user-validated.
