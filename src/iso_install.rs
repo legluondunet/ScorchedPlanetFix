@@ -266,12 +266,12 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
 }
 /// Keep all existing user settings unmodified except video, selected language
 /// and HighQualityVideo; add conservative defaults when no INI exists.
-pub fn update_ini(ini:&Path,video:&Path,language:u8)->Result<(),String>{
+pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     if !(1..=5).contains(&language) {
         return Err(format!("Code de langue invalide: {language}"));
     }
     // Preserve all legacy non-UTF8 bytes in original INI lines; replace
-    // video= as ASCII, add missing 3dfx defaults from the user's Lutris
+    // video= video (working-directory-relative), plus defaults from Lutris
     // installation script without overwriting existing user settings.
     let original=match fs::read(ini) {
         Ok(bytes)=>bytes,
@@ -282,7 +282,7 @@ pub fn update_ini(ini:&Path,video:&Path,language:u8)->Result<(),String>{
     // pointer table: 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
     let names: [&[u8];5]=[b"video=",b"language=",b"HighQualityVideo=",b"settings=",b"name="];
     let values: [Vec<u8>;5]=[
-        format!("video={}",video.display()).into_bytes(),
+        b"video= video".to_vec(),
         format!("language={language}").into_bytes(),
         b"HighQualityVideo=1".to_vec(),
         b"settings=1 0 1 1 5 95 127 0 0 5 320".to_vec(),
@@ -492,7 +492,7 @@ pub fn install_image(
         let ini=staging.join("splanet.ini");
         let generated_ini=!ini.exists();
         let default_language=if edition.label=="FR/DE" {2}else{1};
-        update_ini(&ini,&destination.join("video"),default_language)?;
+        update_ini(&ini,default_language)?;
         log(&format!("INI: edition={} language={} sha256={}",
             edition.label,default_language,file_digest(&ini)?));
         // Publish only after every validation, copy, backup, patch and INI
@@ -610,10 +610,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let ini=dir.join("splanet.ini");
         assert!(!ini.exists());
-        update_ini(&ini,Path::new(r"C:\splanet\video"),1).unwrap();
+        update_ini(&ini,1).unwrap();
         let result=fs::read_to_string(&ini).unwrap();
         assert!(result.contains("[scorch]"));
-        assert!(result.contains(r"video=C:\splanet\video"));
+        assert!(result.contains("video= video"));
         assert!(result.contains("HighQualityVideo=1"));
         assert!(result.contains("language=1"));
         assert!(result.contains("settings=1 0 1 1 5 95 127 0 0 5 320"));
@@ -632,11 +632,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let ini=dir.join("splanet.ini");
         fs::write(&ini,b"[scorch]\r\nvideo= c:\\old\\video\r\nlanguage= 4\r\nkeymap= 0 29 37\r\ngamma= 1.000000\r\njoystick= 0 0 0.000000\r\nHighQualityVideo= 0\r\nsettings= 1 0 1 1\r\nname= Testeur\r\n").unwrap();
-        update_ini(&ini,Path::new(r"C:\new\video"),5).unwrap();
+        update_ini(&ini,5).unwrap();
         let out=fs::read_to_string(&ini).unwrap();
         assert!(out.contains("language=5"));
         assert!(out.contains("HighQualityVideo=1"));
-        assert!(out.contains(r"video=C:\new\video"));
+        assert!(out.contains("video= video"));
         for v in ["keymap= 0 29 37","gamma= 1.000000","joystick= 0 0 0.000000","settings= 1 0 1 1","name= Testeur"]{
             assert!(out.contains(v),"missing {v}");
         }
@@ -648,9 +648,9 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let ini=dir.join("splanet.ini");
         fs::write(&ini,b"[scorch]\r\nHighQualityVideo=1\r\nvideo=c:\\splanetcd\\splanet\\video\r\n").unwrap();
-        update_ini(&ini,Path::new(r"C:\splanet\video"),4).unwrap();
+        update_ini(&ini,4).unwrap();
         let result=fs::read_to_string(&ini).unwrap();
-        assert!(result.contains(r"video=C:\splanet\video"));
+        assert!(result.contains("video= video"));
         assert!(!result.contains("splanetcd"));
         fs::remove_dir_all(&dir).unwrap();
     }
