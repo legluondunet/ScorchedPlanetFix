@@ -71,7 +71,7 @@ pub fn run(arguments:&[OsString],root:&Path,
             emit(logger,&mut sink,&format!("WARNING: nGlide is missing. Install it from {}",nglide::OFFICIAL_URL));
         }
         emit(logger,&mut sink,&outcome);
-        emit(logger,&mut sink,&format!("Configuration portable : video= video, language={language}"));
+        emit(logger,&mut sink,&format!("Portable configuration: video= video, language={language}"));
         emit(logger,&mut sink,&format!("Done. Original backup preserved: {}.bak",exe.display()));
         return Ok(());
     }
