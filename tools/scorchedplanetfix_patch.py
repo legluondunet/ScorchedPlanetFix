@@ -113,7 +113,10 @@ def atomic_replace(path, data, mode):
     temp = Path(name)
     try:
         with os.fdopen(fd, "wb") as f:
-            os.fchmod(f.fileno(), mode)
+            if hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
+            else:
+                os.chmod(temp, mode)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
