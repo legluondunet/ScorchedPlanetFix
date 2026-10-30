@@ -404,7 +404,7 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
             let state = match profile {
                 Some(p) if hash == p.original_hash => format!("ORIGINAL {}", p.label),
                 Some(p) if hash == p.patched_hash => format!("PATCHED {}", p.label),
-                Some(p) if legacy_fadelow_hash(p)==Some(hash) =>
+                Some(p) if legacy_fadelow_hash(p)==Some(hash.as_str()) =>
                     format!("{} LEGACY FADELOW (CD check unpatched)",p.label),
                 _ => "UNKNOWN/UNSUPPORTED".into(),
             };
@@ -431,7 +431,7 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
             // Upgrade a legacy US or EN/ES/IT FadeLow-only executable without
             // touching its original backup or user saves. Rebuild the entire
             // six-byte patch from the original, never from a guessed byte state.
-            let upgrading_legacy=legacy_fadelow_hash(p)==Some(hash);
+            let upgrading_legacy=legacy_fadelow_hash(p)==Some(hash.as_str());
             let (original,patch)=if upgrading_legacy {
                 let original=backed.as_ref().ok_or(
                     "Cannot upgrade the legacy FadeLow patch: verified original .bak backup is missing")?;
@@ -460,7 +460,7 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
                 return Ok(format!("Original {} already restored. Backup preserved.",p.label));
             }
             if hash != p.patched_hash &&
-               legacy_fadelow_hash(p)!=Some(hash) {
+               legacy_fadelow_hash(p)!=Some(hash.as_str()) {
                 return Err("Unsupported installed EXE; refusing to overwrite".into());
             }
             if sha256_hex(&read_regular(exe)?) != hash {
