@@ -6,22 +6,29 @@ export LC_ALL=C
 usage() {
   cat <<'EOF'
 Usage: diagnose-3dfx-hang-linux.sh [--pid LINUX_PID] [--game-dir PATH]
-          [--interval SECONDS] [--delay SECONDS] [--output NEW_DIR] [--gdb]
+          [--interval SECONDS] [--delay SECONDS] [--wait] [--output NEW_DIR] [--gdb]
 
-Launch SPVOODOO.EXE in Wine first. Run this tool during the menu freeze.
+By default, launch SPVOODOO.EXE in Wine first, then run this script.
+With --wait, start the script BEFORE the game, then launch the game normally.
+This avoids using Alt+Tab once the game enters fullscreen.
 No WINEPREFIX argument is required: it inspects the running Linux process.
 --pid: specify Linux PID if spvoodoo.exe is not detected automatically
 --game-dir: optionally hash the game's original EXE and local Glide DLLs
 --interval: seconds between snapshots (default 5, range 1-60)
---delay: seconds before first snapshot (default 0, range 0-600)
---output: a NEW, non-existing directory for reports
+--delay: seconds after process detection before the first snapshot (0-600)
+--wait: wait up to 120 seconds for the game to launch (avoids Alt+Tab)
+--output: a NEW, non-existing directory for detailed reports
+Default: a dated report directory plus a .log in your current directory.
 --gdb: optionally attach native GDB to capture thread backtraces; this
        pauses the target temporarily and might fail due to ptrace policy
 EOF
 }
 
 die() { printf 'Erreur : %s\n' "$*" >&2; exit 1; }
-log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$out/summary.txt"; }
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" |
+    tee -a "$out/summary.txt" "$log_file"
+}
 
 pid=""
 game_dir=""
@@ -29,6 +36,7 @@ interval=5
 delay=0
 out=""
 with_gdb=0
+wait_for_game=0
 
 while (($# > 0)); do
   case "$1" in
@@ -44,6 +52,7 @@ while (($# > 0)); do
       esac
       ;;
     --gdb) with_gdb=1 ;;
+    --wait) wait_for_game=1 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "Option inconnue : $1" ;;
   esac
@@ -56,7 +65,17 @@ done
   die "Le delai doit etre compris entre 0 et 600 secondes."
 
 if [[ -z "$pid" ]]; then
-  mapfile -t candidates < <(ps -eo pid=,comm= | awk 'tolower($2) == "spvoodoo.exe" {print $1}')
+  if ((wait_for_game)); then
+    printf 'En attente de SPVOODOO.EXE (max 120 s). Lance le jeu maintenant, sans Alt+Tab ulterieur...\n'
+  fi
+  candidates=()
+  for ((attempt=0; attempt<=120; attempt++)); do
+    mapfile -t candidates < <(ps -eo pid=,comm= | awk 'tolower($2) == "spvoodoo.exe" {print $1}')
+    if (("${#candidates[@]}" > 0)) || (( !wait_for_game || attempt == 120 )); then
+      break
+    fi
+    sleep 1
+  done
   case "${#candidates[@]}" in
     0) die "Jeu non detecte. Lance SPVOODOO.EXE, ou precise --pid (ps -eo pid,comm,args | grep -i '[s]pvoodoo')." ;;
     1) pid="${candidates[0]}" ;;
@@ -74,15 +93,19 @@ if [[ -n "$game_dir" ]]; then
   game_dir="$(realpath -- "$game_dir")"
 fi
 
+# Save a visible, timestamped log directly in the directory from which this
+# script is run (normally the game directory). Keep auxiliary files grouped.
+run_id="$(date +%Y%m%d-%H%M%S)-pid$pid-$"
+log_file="$PWD/ScorchedPlanetFix-3dfx-$run_id.log"
 if [[ -z "$out" ]]; then
-  state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
-  mkdir -p -- "$state_home/ScorchedPlanetFix/diagnostics"
-  out="$state_home/ScorchedPlanetFix/diagnostics/$(date +%Y%m%d-%H%M%S)-pid$pid-$$"
+  out="$PWD/ScorchedPlanetFix-3dfx-$run_id"
 fi
 [[ ! -e "$out" ]] || die "Le dossier existe deja : $out"
 mkdir -p -- "$out"
 out="$(realpath -- "$out")"
+[[ ! -e "$log_file" ]] || die "Le fichier de log existe deja : $log_file"
 log "Diagnostic Scorched Planet / Wine / nGlide"
+log "Fichier de log : $log_file"
 log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb"
 log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
 log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
@@ -169,4 +192,13 @@ if ((with_gdb)); then
   fi
 fi
 log "Rapport cree : $out"
-log "Partager les fichiers texte / TSV apres verification des chemins personnels."
+if [[ -s "$out/thread-cpu-delta.tsv" ]]; then
+  {
+    printf '\n=== Evolution CPU par thread (ticks sur %s s) ===\n' "$interval"
+    cat "$out/thread-cpu-delta.tsv"
+    printf '\n=== Modules graphiques detectes ===\n'
+    cat "$out/snapshot-2-graphics-modules.txt" 2>/dev/null || true
+  } >> "$log_file"
+fi
+log "Le fichier .log se trouve directement dans le dossier de lancement."
+log "Partager le .log et eventuellement les fichiers detail (relire les chemins prives)."
