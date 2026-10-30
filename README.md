@@ -89,7 +89,6 @@ To update a supported existing installation, run the latest patcher **without ar
 
 Use the same working directory and Wine prefix for the patcher and nGlide:
 
-**Compatibility note:** Wine 11.17 has been tested with all three CUE/BIN editions. Proton is Wine-based, but has not been independently tested with this patcher.
 
 ```bash
 wine ScorchedPlanetFix.exe
