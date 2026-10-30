@@ -17,7 +17,7 @@ impl Logger {
     pub fn new(root:&Path,version:&str)->Result<Self,String>{
         let path=root.join("ScorchedPlanetFix.log");
         let file=OpenOptions::new().create(true).append(true).open(&path)
-            .map_err(|e|format!("Impossible de créer le log {}: {e}",path.display()))?;
+            .map_err(|e|format!("Unable to create log file {}: {e}",path.display()))?;
         let result=Self{handle:Arc::new(Mutex::new(file)),path};
         let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         result.write("---------------------------------------------");
