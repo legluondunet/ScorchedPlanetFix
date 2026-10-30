@@ -133,15 +133,17 @@ mod app {
                 return;
             }
             if self.install.exists(){
-                if !self.install.is_dir() || !self.install.join("SPVOODOO.EXE").is_file() {
-                    self.detect="Répertoire splanet incomplet".into();
-                    self.stop_on_modal=true;
-                    self.info("Installation non compatible",
-                        "Le dossier splanet existe, mais SPVOODOO.EXE est absent. Aucune modification effectuée.",true);
-                    return;
-                }
-                self.game_ready=true;
-                let (edition,can_patch)=installed_edition(&self.install.join("SPVOODOO.EXE"));
+                let exe=match scorched_planet_fix::find_installed_exe(&self.install) {
+                    Ok(path)=>path,
+                    Err(e)=>{
+                        self.detect="Répertoire splanet incomplet ou ambigu".into();
+                        self.stop_on_modal=true;
+                        self.info("Installation non compatible",e,true);
+                        return;
+                    }
+                };
+                self.game_ready=false; // Enable Launch only after verified patch.
+                let (edition,can_patch)=installed_edition(&exe);
                 self.fadelow_allowed=can_patch;
                 self.edition=edition;
                 let configured=read_ini_language(&self.install.join("splanet.ini"));
@@ -210,7 +212,7 @@ mod app {
                                 self.status="Installation et correctif terminés".into();
                                 self.detect=format!("Edition {} : correctif appliqué automatiquement",report.edition);
                                 self.info("Installation réussie",
-                                    format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\nSPVOODOO.EXE.bak sauvegardé avant le patch.\nCorrectif automatique appliqué.\nDétails dans ScorchedPlanetFix.log",
+                                    format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\nspvoodoo.exe.bak sauvegardé avant le patch.\nCorrectif automatique appliqué.\nDétails dans ScorchedPlanetFix.log",
                                         report.edition,report.files,report.bytes,report.folder.display()),false);
                             },
                             Err(e)=>{
@@ -228,7 +230,7 @@ mod app {
                                 self.progress=1.0;
                                 self.game_ready=true;
                                 self.status="Correctif automatique vérifié".into();
-                                self.info("Correctif automatique",format!("{text}\nSauvegarde : SPVOODOO.EXE.bak\nConsultez ScorchedPlanetFix.log."),false);
+                                self.info("Correctif automatique",format!("{text}\nSauvegarde : <nom de l'exécutable>.bak\nConsultez ScorchedPlanetFix.log."),false);
                             },
                             Err(e)=>{
                                 self.progress=0.0;
@@ -267,7 +269,10 @@ mod app {
             self.phase=Phase::Patching;
             self.progress=0.0;
             self.status="Sauvegarde .bak et correction automatique…".into();
-            let exe=self.install.join("SPVOODOO.EXE");
+            let exe=match scorched_planet_fix::find_installed_exe(&self.install){
+                Ok(path)=>path,
+                Err(e)=>{self.info("Exécutable introuvable",e,true);return;}
+            };
             let log=self.logger.clone();
             let tx=self.tx.clone();
             std::thread::spawn(move ||{
@@ -284,10 +289,10 @@ mod app {
             if !self.game_ready {
                 self.info("Impossible de lancer","Le jeu n'est pas installé.",true);return;
             }
-            let game=self.install.join("SPVOODOO.EXE");
-            if !game.is_file(){
-                self.info("Impossible de lancer","SPVOODOO.EXE est absent.",true);return;
-            }
+            let game=match scorched_planet_fix::find_installed_exe(&self.install){
+                Ok(path)=>path,
+                Err(e)=>{self.info("Impossible de lancer",e,true);return;}
+            };
             self.logger.write("LAUNCH: launching user's SPVOODOO.EXE, working directory splanet");
             match Command::new(&game).current_dir(&self.install).spawn(){
                 Ok(child)=>{
@@ -352,7 +357,7 @@ mod app {
                     "Pour FR/DE, applique les deux modifications testées ensemble : seuil FadeLow et résultat du contrôle de présence CD. Ne remplace pas les fichiers du CD manquants."
                 } else {DESCRIPTION};
                 ui.label(patch_label).on_hover_text(patch_info);
-                ui.label(RichText::new("Appliqué après extraction, après sauvegarde de l'original en .bak.")
+                ui.label(RichText::new("Appliqué après extraction, avant génération de l'INI, avec sauvegarde .bak.")
                     .small().color(Color32::LIGHT_GRAY));
                 if self.game_ready && !self.fadelow_allowed {
                     ui.label(RichText::new("FadeLow non validé pour cet exécutable ; application désactivée.")
