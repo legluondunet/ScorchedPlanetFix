@@ -1,0 +1,2938 @@
+{
+  "format": "scorched-planet-cd-file-inventory-v1",
+  "edition_label": "EN-ES-IT",
+  "file_count": 576,
+  "directory_count": 41,
+  "total_file_bytes": 656149792,
+  "directories": [
+    "directx",
+    "directx/drivers",
+    "directx/drivers.j",
+    "directx/drivers.j/audio",
+    "directx/drivers.j/audio/bin",
+    "directx/drivers.j/audio/msdsound",
+    "directx/drivers.j/display",
+    "directx/drivers.j/display/bin",
+    "directx/drivers.j/display/msddraw",
+    "directx/drivers.nec",
+    "directx/drivers.nec/audio",
+    "directx/drivers.nec/audio/bin",
+    "directx/drivers.nec/audio/msdsound",
+    "directx/drivers.nec/display",
+    "directx/drivers.nec/display/bin",
+    "directx/drivers.nec/display/msddraw",
+    "directx/drivers/audio",
+    "directx/drivers/audio/bin",
+    "directx/drivers/audio/msdsound",
+    "directx/drivers/display",
+    "directx/drivers/display/bin",
+    "directx/drivers/display/msddraw",
+    "install",
+    "install/dos",
+    "install/dos/english",
+    "install/dos/italian",
+    "install/dos/spanish",
+    "install/windows",
+    "mystique",
+    "setsound",
+    "splanet",
+    "splanet/audio",
+    "splanet/english",
+    "splanet/italian",
+    "splanet/spanish",
+    "splanet/video",
+    "splanet/video/english",
+    "splanet/video/italian",
+    "splanet/video/spanish",
+    "verite",
+    "voodoo"
+  ],
+  "autorun_inf": {
+    "sha256": "96a2586d43f9456aaf165e68bd9ce682899865717306d2e29f8757fa62d9d18f",
+    "size": 6917,
+    "install_key": "SOFTWARE\\Criterion Studios\\Scorched Planet\\1.06",
+    "french_install": null
+  },
+  "files": [
+    {
+      "path": "autorun.exe",
+      "bytes": 256512,
+      "sha256": "14d544f4ed85bdb302c7cf78ddfab8c34adad5ecae5b0f077d1e901e59ccf924"
+    },
+    {
+      "path": "autorun.inf",
+      "bytes": 6917,
+      "sha256": "96a2586d43f9456aaf165e68bd9ce682899865717306d2e29f8757fa62d9d18f"
+    },
+    {
+      "path": "directx/d3d.inf",
+      "bytes": 1097,
+      "sha256": "e9b2bc76b6095c1044a4298974ccdc22d4a694c1e89fc3fd460b2a729611aeba"
+    },
+    {
+      "path": "directx/d3dhalf.dll",
+      "bytes": 107008,
+      "sha256": "04a597f1a06a704a5a01ae851ce93da81de8b9b6fc48dbcbd89f98cf3e6ea3cf"
+    },
+    {
+      "path": "directx/d3dim.dll",
+      "bytes": 68096,
+      "sha256": "a2677f4033dafc75e77b365ba5e08afc6642b13c5d85c11961a304c87578e03d"
+    },
+    {
+      "path": "directx/d3drampf.dll",
+      "bytes": 110080,
+      "sha256": "0dde44f4731910525dcaf1bb9e1924fbe7a29dae6dff8456c7daafe313a55342"
+    },
+    {
+      "path": "directx/d3drg16f.dll",
+      "bytes": 217088,
+      "sha256": "3324b7d182d174edf5849d2275d4d625a64aa25974374a63e57a5e1d68656c5c"
+    },
+    {
+      "path": "directx/d3drg24f.dll",
+      "bytes": 156672,
+      "sha256": "544c79e3c7043b1f3e21633ef445af0d5f23a56e81036500dd0814721856ea42"
+    },
+    {
+      "path": "directx/d3drg32f.dll",
+      "bytes": 154624,
+      "sha256": "6f6ec6ced0d243d514501b207d3a94e5d47e9c67ad5550b825ca0a15586e3756"
+    },
+    {
+      "path": "directx/d3drg8f.dll",
+      "bytes": 217088,
+      "sha256": "e8ffaf90c2c8faecbe3042593d3ab6b2cc0623c0a7bf84b3a8266d807f52f267"
+    },
+    {
+      "path": "directx/d3drgbf.dll",
+      "bytes": 110080,
+      "sha256": "926a9cd9b49f51629fadba0b0ad017dfb142a2e1656d43802d6a44c1eca0e40b"
+    },
+    {
+      "path": "directx/d3drm.dll",
+      "bytes": 282112,
+      "sha256": "86ed8f71eff5acf436354b528c12a52d8f3ffba151aca53e9b05228ee0149112"
+    },
+    {
+      "path": "directx/d3drm16f.dll",
+      "bytes": 470528,
+      "sha256": "2e7007d03531cd2a1ae7542ec2d9c36df6724974f0dbe0d59e70f06481154275"
+    },
+    {
+      "path": "directx/d3drm24f.dll",
+      "bytes": 137216,
+      "sha256": "2160e095139b41f6f735eebc26751a3d6c13f241ec94503e629a05c45cfcffe1"
+    },
+    {
+      "path": "directx/d3drm32f.dll",
+      "bytes": 134656,
+      "sha256": "45ce3270d180a4968500e8e926c6c3185b33c46f6f4dfa8496f1278bb1002e81"
+    },
+    {
+      "path": "directx/d3drm8f.dll",
+      "bytes": 469504,
+      "sha256": "642bc9e2c70d7cf6d3f315f4c76c2759d9dc4b1f293ba6d978d031320c255865"
+    },
+    {
+      "path": "directx/d3dxof.dll",
+      "bytes": 72704,
+      "sha256": "9435ae1d23db92a4f4ae5ac499a924016b414863ce1d585f0f55dd4f6f022d30"
+    },
+    {
+      "path": "directx/ddhelp.exe",
+      "bytes": 31744,
+      "sha256": "7c8e38b95816ab94c6a59cb0d3606b8495ab15f19d02e7a762e6975c0e3cd8f7"
+    },
+    {
+      "path": "directx/ddraw.dll",
+      "bytes": 159744,
+      "sha256": "50c0d4d01da1791bb3495ea6203d3da69bcc2f3365ecab191364f75619d93536"
+    },
+    {
+      "path": "directx/ddraw.inf",
+      "bytes": 820,
+      "sha256": "6e9b6c8ac674032c083220e12b287dcd4b4844f683f74f6d93af4b9e0be89166"
+    },
+    {
+      "path": "directx/ddraw16.dll",
+      "bytes": 22992,
+      "sha256": "e1ba9b49e4db53224432535fcac9060db08fbe8ebd6548278b1ff30541df4f0b"
+    },
+    {
+      "path": "directx/directx.inf",
+      "bytes": 2311,
+      "sha256": "a86611f535bad485f6d71b4c02b0d75ce02f676464832117bf3283aa9ab28b3a"
+    },
+    {
+      "path": "directx/dplay.dll",
+      "bytes": 39936,
+      "sha256": "7f3978149dd401c33ab0cf34bf776d794005dccf8307cce5006710976c6df545"
+    },
+    {
+      "path": "directx/dplay.inf",
+      "bytes": 1549,
+      "sha256": "12f12b0ad6d19dfe5e79e6ba1ceb8f394fcd5d7af000cdfedfec3ad4b2d3103b"
+    },
+    {
+      "path": "directx/dpserial.dll",
+      "bytes": 41472,
+      "sha256": "cb1f629e92f41766ec3eae10779edbd122f5f636ebb4a835de8df28bbc81cdc8"
+    },
+    {
+      "path": "directx/dpwsock.dll",
+      "bytes": 24064,
+      "sha256": "90e28f9d5b7d5f8c84b29b85b8ac94792524f31f0fbcfb93f4e9d1d9cc2f2a49"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/azt16.vxd",
+      "bytes": 26770,
+      "sha256": "2259f52c69936f3f25229a7256085fd158e3717f189c78c19b5748a2a3fc63f5"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/azt16c.drv",
+      "bytes": 41792,
+      "sha256": "1fbbc7ce7c1d490a1f2e35e716cbf9ede6832ab5ac9f60551fa6accc70ae137f"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/azt16w.drv",
+      "bytes": 43328,
+      "sha256": "057ccb8d0f68bd140bbb9686d8c2c5fbb82c90e955b17568a2214f53372d52e9"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/cspman.dll",
+      "bytes": 17776,
+      "sha256": "0c77fd77aa05be2db46d8e0b23cbd3e1d907e26f437a6379e4d25d80a26fd282"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es1488.drv",
+      "bytes": 43648,
+      "sha256": "03b2805a8a835e23601e514ed88b4cfbd3c91d0f7ab5d6a5fca9a6bf8f16a73c"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es1488.vxd",
+      "bytes": 20116,
+      "sha256": "92ebe7130db3fcf1c7d24723af093256c8ef4164e5de27f00ba07d0a8e1548c0"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es1688.drv",
+      "bytes": 49792,
+      "sha256": "37811ba72ae4d0d8a64c09ddb81e08132168eaa4134ff39ad86063b24cb2ae55"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es1688.vxd",
+      "bytes": 25236,
+      "sha256": "1b0d57bda20da0d660b964d471fc26e43be8996139e3634689b15ac9100655f6"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es488.drv",
+      "bytes": 36736,
+      "sha256": "b52b2c8874d2c2e5606adcbe87d48e80679080010c11195eb4fe5ee2baa6355e"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es488.vxd",
+      "bytes": 19603,
+      "sha256": "f8eec51a4187c88e90bdc54666bb33fb20d4cbc760ae2c01293ae3cf0e3ba21b"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es688.drv",
+      "bytes": 46736,
+      "sha256": "1ea9bfa36f7072d4486a1b9495c9613dd27baedf538e591d765b9235d8f32f85"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/es688.vxd",
+      "bytes": 22675,
+      "sha256": "d88878830d9b12a5e3264c7d71b8c01306ca1f1a8f963d56c19c633c9a785701"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/essfm.drv",
+      "bytes": 17840,
+      "sha256": "8edef3807e58c2918fccbdb3b2f4ee702c7fb87b295d5e58b90def30a57f1950"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/essmport.drv",
+      "bytes": 9824,
+      "sha256": "c0a92e8744adffb9b04698814db4a58a5ad47f9ea77363870e8f02ae8d020c3b"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/essmpu.drv",
+      "bytes": 8240,
+      "sha256": "cfb646ecf84e9fc3dcc40e03fa02b97e2d767278a6fe7ce9054182ec8b1af7f6"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/findmvi.dll",
+      "bytes": 5728,
+      "sha256": "9e42116e3368dae18e48690850968b982f8c7052eabff27b0887b7176b1f9970"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mmmixer.dll",
+      "bytes": 5120,
+      "sha256": "03c099caa6dd02de8cf739357d72042783d5669244ec9b8052af11fb7c38b435"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/msjstick.drv",
+      "bytes": 7728,
+      "sha256": "e2891e1a44db3409b8780bb4631b11a2c00724f18f65891fb2daca62a4454d85"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/msmpu401.drv",
+      "bytes": 8704,
+      "sha256": "804bb15d0b16ddc514a2a68b83b2551a8da8b299ecfdf40418bb65718537387c"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/msopl.drv",
+      "bytes": 17888,
+      "sha256": "e35b22ed9d28765373dc7359082313b1950a8ba5da897c54414bd6a6ea18819f"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mssblst.drv",
+      "bytes": 40640,
+      "sha256": "ea001c77ed6a7929e4b2e01e06f93975ed0c8761ff47c5a221eb7f90e2d87b9e"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mssblst.vxd",
+      "bytes": 21142,
+      "sha256": "cf47f6de8413d312a0d480d95656c547ad13946b67bce9166d3c5a5e5b71a05d"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mssndsys.drv",
+      "bytes": 39424,
+      "sha256": "d1c32def08d0e334a1af21379690fe7c3c92b017eda9affb7d7eb6f4ac094199"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mssndsys.vxd",
+      "bytes": 29932,
+      "sha256": "d149090d81027c9a1f2f0f4035a2f84cdcfc8f0895fa63f0d5a3d56346cfaa74"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mvi514mx.drv",
+      "bytes": 38320,
+      "sha256": "e522e7df0dc73826cc95b792dfbcad820b1cffff85320e4e030021f6100a9851"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mviwave.drv",
+      "bytes": 19488,
+      "sha256": "60326e38e6bddaeb3e1aee896c8b1a9fb116fc2df67b8e872688c0cbbce5fd79"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mvmixer.drv",
+      "bytes": 59264,
+      "sha256": "51dd5a9391d67a74877753610aac6698aaa9b805c14f4868096a1495acab3b85"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mvpas.vxd",
+      "bytes": 8898,
+      "sha256": "ccccb5fa0991d2a7f658841b96814d139ca62fb5b3e45a86a133bee682d65416"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/mvproaud.drv",
+      "bytes": 26112,
+      "sha256": "7d3c50b8850d20d5c9d291146ec5f97be66a6e9e5b1fb250233912b75760da32"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/pa3dmxd.drv",
+      "bytes": 53104,
+      "sha256": "44d8b12791a9de970c2ed07121d8d2a73a2fa4dc2aa2120a0e3bc00c1c8e50cb"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/sb16.vxd",
+      "bytes": 70235,
+      "sha256": "159cee8d63be1e0c1e0bee3e568852cdf17491ec25db78ffb47d1dc3b8743256"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/sb16snd.drv",
+      "bytes": 46016,
+      "sha256": "4bc5c8f4d243b5037d02b3b6874428488eaff5e58d34f85373a8a512e6e498b9"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/sbawe.vxd",
+      "bytes": 42226,
+      "sha256": "6902dbe884783ab50e968a6114656ef10924c3c05183bc122895fc2ebc115ee4"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/sbawe32.drv",
+      "bytes": 23232,
+      "sha256": "9b574f0c6dd3e0f551218960a9d714b44e7d59643aba705e78440e69f9160c76"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/sbfm.drv",
+      "bytes": 4160,
+      "sha256": "f35df22bb7e1c13d5e22f38956f3b7e8a36250daaad53481975897925657797d"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/synthgm.sbk",
+      "bytes": 34832,
+      "sha256": "fd2e35a260fef22fe809918dda3c921c6d48d53a29c3515af8a41019ce72d586"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/tmv1.mpd",
+      "bytes": 12048,
+      "sha256": "712c9290499f95786a42d02bf63abba9c5363b61d8bcb5a66192593bf0fe02f6"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/tsd32.dll",
+      "bytes": 17408,
+      "sha256": "dbe998cacbb333c69f14353a22767e85e688e97691b26bb051875ee217ee4d06"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/vjoyd.vxd",
+      "bytes": 20590,
+      "sha256": "1e453290eb086a2f13c291f2aa0e998005d7f15008451872f0d893ec296432b0"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/vmvid.vxd",
+      "bytes": 18586,
+      "sha256": "f5fb0b03cecbad685096f8dc776a1297aff0cff49c2b54e3f552cda720cc3378"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/vpasd.vxd",
+      "bytes": 24162,
+      "sha256": "f944476deb2750761bbda74d2526656c2888548184bc4a411d4e01780a4d2217"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0200.acv",
+      "bytes": 13456,
+      "sha256": "6ce9a0f662b13f23bb22fb82074a83611d4c05788a1a9d780ac5845fb831a62d"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0200a.csp",
+      "bytes": 2238,
+      "sha256": "fecd9e22612ca089412b30a72688544b166d8e84dee4cb09adb1359e9fedca14"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0201.acv",
+      "bytes": 5184,
+      "sha256": "a17ee3d88f2dbc37113a6b20882517f905245270ec988640a32e8653f52cf42a"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0201a.csp",
+      "bytes": 6776,
+      "sha256": "a917422449b168714a955afeabfb7ff825f5e12a79353f499530b0d410ea75b4"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0202.acv",
+      "bytes": 9056,
+      "sha256": "e9767e4b996a587ca4d60a4ae81bb97c8e0661c34ee011613436eab9444f3dae"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0202a.csp",
+      "bytes": 9004,
+      "sha256": "1a366490e6ed0c2bcec52bfe9a81dc61be51f0f3a6ba49ea815de23cb6e71671"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0203.acv",
+      "bytes": 9056,
+      "sha256": "e72f35da00ea237356c5140c3cfe57b1954a995e72fc70b5941a4082c9cd806d"
+    },
+    {
+      "path": "directx/drivers.j/audio/bin/wfm0203a.csp",
+      "bytes": 9004,
+      "sha256": "edb3a97141d29ef53ad56dcb5995cd095890c3ab9225c5211da559afc3d4153a"
+    },
+    {
+      "path": "directx/drivers.j/audio/msdsound.inf",
+      "bytes": 64285,
+      "sha256": "c5dd411b4883b02fb21616f6918b3d70e473604381ce7280405c2f03341f6ff0"
+    },
+    {
+      "path": "directx/drivers.j/audio/msdsound/isna.dll",
+      "bytes": 6064,
+      "sha256": "35d77ef35c6963b922815ce87bd970cb03e515c3b5024f09f68340645d9bcda6"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/5631_dig.ini",
+      "bytes": 38690,
+      "sha256": "0cfbd2bada2dc84fe9665212942ccd93e85b6392d50e6df1a9ce1d47ce9873a3"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/5631_hwc.ini",
+      "bytes": 38120,
+      "sha256": "d3851a8e924820b3bcf507dfa729496a722617650d7f710e0efaf83d21147aed"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/5631_swc.ini",
+      "bytes": 38549,
+      "sha256": "faaffa98e47aebf8f8fdb7554a67abeb143bfe42d09ed93e4d8389e83b39c1a9"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/883d_dig.ini",
+      "bytes": 38690,
+      "sha256": "0cfbd2bada2dc84fe9665212942ccd93e85b6392d50e6df1a9ce1d47ce9873a3"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/883d_hwc.ini",
+      "bytes": 38120,
+      "sha256": "d3851a8e924820b3bcf507dfa729496a722617650d7f710e0efaf83d21147aed"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/883d_swc.ini",
+      "bytes": 38549,
+      "sha256": "faaffa98e47aebf8f8fdb7554a67abeb143bfe42d09ed93e4d8389e83b39c1a9"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/ati.vxd",
+      "bytes": 27440,
+      "sha256": "6bc61db6dc636633a3c70ca8f39103a7f1fc9a765c57ea355525132e8b63ab40"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/ati3d.dll",
+      "bytes": 204288,
+      "sha256": "89c4f0ad26658ae7361ac5099ea1ad18f6f20a8c18ab3ea61311817e5cd63f5d"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/atim32.dll",
+      "bytes": 11264,
+      "sha256": "f55650dd2308eb0d63a34a112666b651e23d62ce2f3d4d4504eddc881421fcca"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/atim32.drv",
+      "bytes": 99184,
+      "sha256": "e29683a38fc62811ee58a6148b8e586cdb0f6f43aa342e03305e40c1481848c2"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/atim64.dll",
+      "bytes": 19968,
+      "sha256": "16a83a867a2c2e1a9e384904561564dfbe407c087a950765d197ccbca77efc66"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/atim64.drv",
+      "bytes": 81104,
+      "sha256": "e07a9d3333c35ee3cf5331087f24298f0a0445ae17229fd7ef77c4e4df7f21d4"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/atim8.drv",
+      "bytes": 129504,
+      "sha256": "4e1b7bc40f2f87bb894a3fd2e9bafcac2eaa62008dc7bd2c78afde194e58963f"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/chips.dll",
+      "bytes": 9216,
+      "sha256": "ff2dbdc71fe5c4aa0ff28cedfa65afce8c1ad63681841d347c46d6851f1b29df"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/chips.drv",
+      "bytes": 29280,
+      "sha256": "c56ae00c86453efc10efdaaf73edf7c5ed70e1ecc7d398b1e6f49301f87ae8e4"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/chips.vxd",
+      "bytes": 18591,
+      "sha256": "69fa8a8ce258d66eba78f4d7547374787778d84c4d824b3f0e7a4aa827c93069"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirrus.dll",
+      "bytes": 23552,
+      "sha256": "5ddff7c07a445de70b94a1d7bcd30b26d1f5ba7f368ea756cb483722d2e478c5"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirrus.drv",
+      "bytes": 70560,
+      "sha256": "7ec43aeae044180bb122ea690ff58146bcebd4b8f36554cd307ed591bf71b885"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirrus.vxd",
+      "bytes": 17964,
+      "sha256": "84badd4add9f6daad1009727644dddb67988f565e644b2bf2b006fcc77abe934"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirruslg.dll",
+      "bytes": 9216,
+      "sha256": "c0ca01f31e3a6c7b4c68355e74fa74d99f80ace9e10f8e10d86a8a99bdc60ec2"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirruslg.drv",
+      "bytes": 41616,
+      "sha256": "3761706925371ea9eafd50728d0b6dc00e0f9636d0150914db907c3653d718a8"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirruslg.vxd",
+      "bytes": 15678,
+      "sha256": "7ae99d1464ee33e881eb75e414bf74d90f2823f69152ec0547f5014d85847416"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirrusmm.dll",
+      "bytes": 39424,
+      "sha256": "8da7c0126878e0f849a52b065afe8c7bb79dd8f1a23c2ff04254d43690ab313e"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/cirrusmm.drv",
+      "bytes": 72144,
+      "sha256": "1c81d658966d600e4328656e0e3fbef93f06300f02c63d1d8ddbf49a54490108"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/d3d.uc",
+      "bytes": 94744,
+      "sha256": "66bcfffe291ccfe9f50c8c576585222973b1f0cb254de845b05e0db4b5994518"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/framebuf.dll",
+      "bytes": 8192,
+      "sha256": "4d19a075f21339d3881ad968b636cd314bc912f8ff42a470de281140f0f639b9"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/framebuf.drv",
+      "bytes": 22112,
+      "sha256": "a2b9766d8f5c17352f4300dceb17086e293a7ea3cbb9efbb7d3fdba89ada3ac4"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/k2v_dig.ini",
+      "bytes": 38080,
+      "sha256": "f8917bf97a38e2b1f0c164309c01e9ea1a1558b34a7510a74ae54987aa922429"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/k2v_hwc.ini",
+      "bytes": 38401,
+      "sha256": "9e310ff7cdad5b4f6a2ba9cac602efad29d87cb0dcd6fe31f3d85fbcff54c766"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/k2v_swc.ini",
+      "bytes": 37734,
+      "sha256": "ab065f395844f25e2624c7aae788b63f0ee311e212ee154ffcf45eab9011226e"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/mgamil.dll",
+      "bytes": 73728,
+      "sha256": "a8ad14ff451cd8d2f3b6447d92a1ee540625d5035c9be5a53e8726c86b158310"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/mgamil.drv",
+      "bytes": 88720,
+      "sha256": "f2db79835f2ecce01cfdef08a524c16a54001228035ca4e3db329225b3147315"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/mgamil.vxd",
+      "bytes": 26954,
+      "sha256": "f7a5c276328b9a5ebbb8f08f956f83f56506929037dc928c0e28c93a97a9cdd6"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/mgapdx64.dll",
+      "bytes": 63344,
+      "sha256": "70082280fc76851af936aca16efc545f6744ba4c31d532823238af24fbd9fef4"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/oak.vxd",
+      "bytes": 14481,
+      "sha256": "898d681a75a88acc757ed4f96354ccb14a2803e8f54fe8a1998debe73bba0307"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/rend.drv",
+      "bytes": 39504,
+      "sha256": "e5f6a5cac5130baf9496ee0bc1a5a43c7b968937b0ff30e86921ce3073466ca7"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/rend32.dll",
+      "bytes": 61440,
+      "sha256": "5259d71fd1cc34e72d957e825cbdcf9265c654d3c8455a536ecb9c18b5421d41"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3.dll",
+      "bytes": 9216,
+      "sha256": "289a5df3e3912571cea5a0e50d68d59390abb5488cbcc4e2260f6b447162a6ac"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3.drv",
+      "bytes": 64976,
+      "sha256": "12c5356dbecc71880ce33868d63200606283a2aecdd8b6adc90f0631550590b5"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3.vxd",
+      "bytes": 22255,
+      "sha256": "c1bbc32450d173ae7c863994781a74753b132e4d61f6c79223f4bc1d3e02f447"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3mm.dll",
+      "bytes": 14336,
+      "sha256": "3db6a3b7da74eb3c8fbedb4afebe7a2b52df6e7aba113a6adbeb7e2dbd7b0fb0"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3mm.drv",
+      "bytes": 76688,
+      "sha256": "c17e070cbbd94139d8b1306f5045c145e595478a2bddef603bc115efd663f06d"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3mm.vxd",
+      "bytes": 23847,
+      "sha256": "1fb413667e91b1653f1a4d6aadcfd66d8270c08795f979e59350e80920043110"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3v.dll",
+      "bytes": 477184,
+      "sha256": "bfcbd679ef780fc9709826a0f98554cf29aaca0fd2d54b0b31765df35a389450"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3v.drv",
+      "bytes": 83920,
+      "sha256": "a8f0db0aab08c9779cd7cf274aa1c71e40f1377b8439ff26195d2e37583f1b24"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/s3v.vxd",
+      "bytes": 19481,
+      "sha256": "e17191cfa37e88853e65b55ea6b449cb3395343d8c36339736b5daa18d470bcb"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/supervga.drv",
+      "bytes": 51984,
+      "sha256": "cf01447d27fa61791bcc01d114de5c65b2cd3dab218009d4162c46a3c9526d4c"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/tseng.dll",
+      "bytes": 10240,
+      "sha256": "4239b35c307efbea4bb26c8139266faa3209fa8ae1566f9167cc852a84343f52"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/tseng.drv",
+      "bytes": 37744,
+      "sha256": "7d1b5d52149657527a508e5f82e364b54262a49e7bd1df8d2499bc752d406250"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/tseng.vxd",
+      "bytes": 14536,
+      "sha256": "59f47f247117be184cbfd4a6c7f65afb5fa60b8cffd17b4cfb033bca2a870002"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/ucman.dll",
+      "bytes": 23872,
+      "sha256": "050d2bcdb80104f211fc6a408220aa78660e51609c6388e115a08412cffa18e7"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/vb102f.com",
+      "bytes": 31095,
+      "sha256": "94ca8b4eac92f6d4212a25e77b8f01122aa8227f89d2ac8a13f07ee2685aa93a"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/verite.vxd",
+      "bytes": 24576,
+      "sha256": "f0c5d56ea6913c3ca9df2480720a972729d28f4d935211bf3ce6ca301dd31108"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/video7.vxd",
+      "bytes": 14947,
+      "sha256": "c5e98e639048d1427342913c05ae2dbae39f8c1db0527ec91b6968d0020f3dfe"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/wd.dll",
+      "bytes": 10752,
+      "sha256": "5642f2764dd0449217ac6fb952ec0b49e42ac293a2ac85cfa996fb944e7ae361"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/wd.drv",
+      "bytes": 25760,
+      "sha256": "2d9e6712cc059676b404b86a114cce74f81d8462439fcfc30c0c4c07fd8200e3"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/wd.vxd",
+      "bytes": 18333,
+      "sha256": "635f9fa7f4d5ddaaa500b481a762967500c529f3c3fdea1741f251826f9a8a16"
+    },
+    {
+      "path": "directx/drivers.j/display/bin/win31.uc",
+      "bytes": 21216,
+      "sha256": "a945208c3761df11a72d93e5d9194a64ad38a7b719de86f8681e52948dc616ea"
+    },
+    {
+      "path": "directx/drivers.j/display/msddraw.inf",
+      "bytes": 39547,
+      "sha256": "852911b00d1e4d65f8819d5104ca0e2a6dbc78c9a472bb732642872ffd63e5ee"
+    },
+    {
+      "path": "directx/drivers.j/display/msddraw/iss3_765.dll",
+      "bytes": 3520,
+      "sha256": "d1d9adbd83f4080107a31e3e7a38a7bfa3a0ced37a4623609a0339791aed5070"
+    },
+    {
+      "path": "directx/drivers.j/display/msddraw/s3_cp3cq.dll",
+      "bytes": 4560,
+      "sha256": "0d6c07f1869f086f82be066987c350b8af9df10e2bf44c0f1dcc13e0173e7db8"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/ds118.inf",
+      "bytes": 25701,
+      "sha256": "70213ed34b39339ae665d95a1915a02d3d7ff348c1c17fb2ae7189da0316dad2"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/nec73pcm.drv",
+      "bytes": 60400,
+      "sha256": "6a582dc45afc462052c0fbf9251c3e179236ada5cd43d2238462b4d4475fccac"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/neccspcm.118",
+      "bytes": 47936,
+      "sha256": "c3110a351b1dc2f53d5cd3090a699f186553dea5ec639d73263b75d8fa181bd3"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/neccspcm.drv",
+      "bytes": 47616,
+      "sha256": "de08f9ed50d89dacd453f2043a804aeed61f63d558ed6575cc46e47da8e5a4d4"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/neccspcm.new",
+      "bytes": 47936,
+      "sha256": "c3110a351b1dc2f53d5cd3090a699f186553dea5ec639d73263b75d8fa181bd3"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necjstk.drv",
+      "bytes": 7776,
+      "sha256": "abbeb4b7a5cd78ef51d8af865ae1bc366b0a6eb4b0a8fc80bbaebdf9d6572c0e"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necjstk.new",
+      "bytes": 7776,
+      "sha256": "abbeb4b7a5cd78ef51d8af865ae1bc366b0a6eb4b0a8fc80bbaebdf9d6572c0e"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necmidi.drv",
+      "bytes": 9280,
+      "sha256": "d56e6ccea9820b8cd1f87dbf645887594829265e141877d6c37ab0b4332796d3"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necmidi.new",
+      "bytes": 9280,
+      "sha256": "d56e6ccea9820b8cd1f87dbf645887594829265e141877d6c37ab0b4332796d3"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necmidi.vxd",
+      "bytes": 18550,
+      "sha256": "3ca968be19f48a1bf02b08e4fb237999cf791e7c93ab85bd46aca5fa482fdd00"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necmix.drv",
+      "bytes": 20000,
+      "sha256": "f7de9b70a035b7d5e66fd0699ed50eb64835e243c47732fe231a1f6151704982"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necmix.new",
+      "bytes": 20784,
+      "sha256": "321af903ee117cd6bab2ad35ff30e69ad3e7a432b7d2afb94cb6e59a976bcea8"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necopl.drv",
+      "bytes": 18624,
+      "sha256": "33c271335adfd08c1cf87dae4a581b71cfbca96b94d9a7610a8f8f640bfb9c07"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necopl.new",
+      "bytes": 20368,
+      "sha256": "ce1bbc1980050a20121b83d3d07422b2fc54fda3e5e59520125d952e247b4fb2"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necopl.vxd",
+      "bytes": 16500,
+      "sha256": "b7a48e30e55e08f969faddca9d84c5dced92cf4c444d3ad517f9b73e8cbdab36"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/necopn.drv",
+      "bytes": 30096,
+      "sha256": "79be96ba6d80f1ade6599a61df915cb40b985b4d2b104d66585a82353a362597"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vjoyd.118",
+      "bytes": 26226,
+      "sha256": "e16911dc57fd08e9dc88fb5fd22da2696fc32523dd74fdda2688c8807795132e"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vjoyd.new",
+      "bytes": 26186,
+      "sha256": "67b22ce3741550f66f1c477bc1647ec972505a08b09efbd36d042fc2416d461f"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vn73pcmd.vxd",
+      "bytes": 21672,
+      "sha256": "37ab9317a27ab54bd3536702b1efcd59dbe1d46558f1f0bedc0fc050a794dea2"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vncspcmd.118",
+      "bytes": 25320,
+      "sha256": "6cd4d8ddeb0babbcab37b6582fa4c46711de55f25c12e2f22701e8b256393338"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vncspcmd.new",
+      "bytes": 25320,
+      "sha256": "0eb09069404040a908048e9bd4477405d691542009009745f18560177d5a6711"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vncspcmd.vxd",
+      "bytes": 25320,
+      "sha256": "7eebddbdf54ba528806a02a9e30d39662d3e60863ea081c9bbf822a2f5a71dc7"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vnecmidi.new",
+      "bytes": 17554,
+      "sha256": "7b75df7528d4d4948964878676df0cf3e902878b17c03ce529ed01bd62a6e8ba"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vnecmixd.new",
+      "bytes": 27159,
+      "sha256": "31cb4afc6a8f57c408872ce2455ea37a0ebb802ae3ff10a094c66ec3604e071c"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vnecmixd.vxd",
+      "bytes": 27138,
+      "sha256": "86e5bd42e2450b61c492525da9ea3c5b0aa7ce05036bf50e506801a28231823a"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vnecopl.new",
+      "bytes": 22148,
+      "sha256": "06d9b868937ec10f15deaf59cf94cb2fa1ede24e25c2c18807366e6cf8cd0fe1"
+    },
+    {
+      "path": "directx/drivers.nec/audio/bin/vnopnd.vxd",
+      "bytes": 29311,
+      "sha256": "61c52151e735ab7ce5ab09ba190e4920fcf29799364c5418ba21c78ba26dc6e3"
+    },
+    {
+      "path": "directx/drivers.nec/audio/msdsound.inf",
+      "bytes": 27454,
+      "sha256": "40f3760d1624bbaf1fffa074484f0f7ce150bed73fc65c243151fef53673ff19"
+    },
+    {
+      "path": "directx/drivers.nec/audio/msdsound/isnewcb.dll",
+      "bytes": 3856,
+      "sha256": "d62e04ee63b09abda30adbbc2ef9c6aac3c0fb4feacbac3529bb77c8b7b7e5d9"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accm24j.drv",
+      "bytes": 84384,
+      "sha256": "798d9b79f53b1edd10322d602471f2c209c1763e1d988c06bd476367da07d36b"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accm32.drv",
+      "bytes": 84384,
+      "sha256": "798d9b79f53b1edd10322d602471f2c209c1763e1d988c06bd476367da07d36b"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accm32ab.drv",
+      "bytes": 84384,
+      "sha256": "798d9b79f53b1edd10322d602471f2c209c1763e1d988c06bd476367da07d36b"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accm8.drv",
+      "bytes": 84384,
+      "sha256": "798d9b79f53b1edd10322d602471f2c209c1763e1d988c06bd476367da07d36b"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accm8ab.drv",
+      "bytes": 84384,
+      "sha256": "798d9b79f53b1edd10322d602471f2c209c1763e1d988c06bd476367da07d36b"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accmdd16.dll",
+      "bytes": 3856,
+      "sha256": "fa4d641ffc54efe3a8acb0ebc94d1d46570363aacad835c28c1f181cf1c005a0"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/accmdd32.dll",
+      "bytes": 8704,
+      "sha256": "99389e5c6288e594a07ef7f670c07d5b748f4d2f599e3174c1d893c144c90456"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/acl3u8.drv",
+      "bytes": 48000,
+      "sha256": "72736519930b538b8b6dc3dddd81cdb07de16d77ebe0e38141db74bf9f59cd09"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/acl3v24.drv",
+      "bytes": 48000,
+      "sha256": "96f0c094f8b6e6a11ff8c321754fb939da33381880caa2cc488df79eb2ad5480"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/acl7543.drv",
+      "bytes": 66032,
+      "sha256": "8c3fa26770502068a675d1a360f5eb59186add8e9e0c83434600d4caef1548b9"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/acl7548.drv",
+      "bytes": 71920,
+      "sha256": "8679ada66b94e5d5c94c9b08a7899989c4ce4b207dd7981fdfde056c3d79be89"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/acl7548.jam",
+      "bytes": 67376,
+      "sha256": "5a7318c682228a80b2883118a9db4c2a3be91973593d5268f77945555a12233d"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/aclu8.drv",
+      "bytes": 67040,
+      "sha256": "35ed41f64182abe0737e66c2854a81a5add78b9988d9a6e65bfb953b2406a494"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/aclu8b.drv",
+      "bytes": 67168,
+      "sha256": "35dcac1326225fb5059e4a615512124f8201707a633792d53e076e6cc0523b97"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/aclv24.drv",
+      "bytes": 67040,
+      "sha256": "f8527a7ba18d496b616c24b236491ea177428ad0d3c3f5b9e70f436a7a37b3ce"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/aclv24b.drv",
+      "bytes": 67168,
+      "sha256": "d4db73f295352ecbeb997274cdb59a79fb74ce9dd9629933982e22e485ba56e7"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/astm3d32.dll",
+      "bytes": 55808,
+      "sha256": "8ebd5e7683da17f3d96a2f1174c9a9f549be19fee4a21019e93eb88d2efbf402"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/astminit.dll",
+      "bytes": 54480,
+      "sha256": "1430219783e658e1ea844790ac4bca3014116dfb495d4c59132c265de1b8f4a7"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/astmxx.drv",
+      "bytes": 88448,
+      "sha256": "1ac14b1750df2d5318770c1a15792332063abddcb2ec0ce14107dc8988490eee"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atls.dll",
+      "bytes": 93328,
+      "sha256": "d5b3d9fd5b1684091fd24723e3a2320b4847206d651c3382631cc27cbfb224ac"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atls32.drv",
+      "bytes": 88384,
+      "sha256": "e0f6aebc5b772c858a6119702f826d1dfcbbb67fdab7b6c5c918250044897409"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atls8.drv",
+      "bytes": 88384,
+      "sha256": "e0f6aebc5b772c858a6119702f826d1dfcbbb67fdab7b6c5c918250044897409"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atlsdd.drv",
+      "bytes": 10368,
+      "sha256": "37fd805b0ee69f7439b2829d3516db53ec29debb39e4dff18b0a3f501b74e0ca"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atlsdd16.dll",
+      "bytes": 3872,
+      "sha256": "0e559a30d6900c8154762ef1cf41c91f7566991b885a52629f6d35f32cfd8590"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/atlsdd32.dll",
+      "bytes": 13824,
+      "sha256": "f7c5cc07a616354f32e4d7d493badaa297597f42348ca9edb0d364b6c8f2efdf"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c28dd16.dll",
+      "bytes": 3824,
+      "sha256": "3e78adb09affb2a424e157ad7d8903744653e9cc61c452da9e937849cbf8643e"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c28dd32.dll",
+      "bytes": 8192,
+      "sha256": "da1011998a39d448a8324cdb54915e05da46f76ff4d9cbcc7eb229e2c02c88b5"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c30dd16.dll",
+      "bytes": 3824,
+      "sha256": "b0416f2f2cdd920c4c5e39c5c1acf1ac4a534bf9f48e99b89a2575ce83f30a65"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c30dd32.dll",
+      "bytes": 25600,
+      "sha256": "5f42d8b398fba353d201f8c359167ad508a1ffb3301717898a1793de36f418a4"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c43dd16.dll",
+      "bytes": 3840,
+      "sha256": "5a60048e34a1e0758dea82ed6a41755215123f3e3d49f8d1fd45d85d5345ed08"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c43dd32.dll",
+      "bytes": 22528,
+      "sha256": "97f0e3367c1baa9789aa2b24dfbbb26bf8ade06660fd15164ced8c973afd65d1"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c48dd16.dll",
+      "bytes": 3824,
+      "sha256": "3d80f92ad60a9357e798335f9974467333471df6e59a536a15837e80ad36ebb7"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/c48dd32.dll",
+      "bytes": 27648,
+      "sha256": "571f95d763e5525cb71498b35af6be444d6b4c0f2b60dc3f55197e0a09494615"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/cb3dd16.dll",
+      "bytes": 3824,
+      "sha256": "284066a616eff7f6c369297202b504275e93f35f0d43e7b08af0d64af218f8ee"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/cb3dd32.dll",
+      "bytes": 8192,
+      "sha256": "41252a1425ce9d261248fea2ba2b115a9b174899d5c5926faa34d8d9416a3e89"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/necgmmut.exe",
+      "bytes": 15360,
+      "sha256": "1989b1fa08c4cc9e924a5aafdcd44c9274fbb4cf49e2197b3a6b31e449024bed"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/readmous.txt",
+      "bytes": 4312,
+      "sha256": "65d0dc29b2c9fb317f706e818494b6f8cfb5d89440c9f31ee1ba5cae6277ed2c"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/tdci9680.ini",
+      "bytes": 776,
+      "sha256": "189304dfec627a0cf3ae05e9cc7d6c1b3bfe2d5878dbef4511fe83d2f886d02f"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/tridentl.drv",
+      "bytes": 206799,
+      "sha256": "70e8d305e6a268f4589ba2f778140258f2ba1a70ac53d0e1ffdf11010b64f450"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/tridentn.drv",
+      "bytes": 200301,
+      "sha256": "99828265442e1ab2a70b4e48378cd3c506226877075c7fa500bedfac0613f1d4"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacc.vxd",
+      "bytes": 30121,
+      "sha256": "474098974bd0254332596618b480286b766c8b950381aaefc3320d018d3c8ca2"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vaccab.vxd",
+      "bytes": 30125,
+      "sha256": "95f982931154d35a1023a2002ef282c4b5fc602d0cffabc40052a115ed487b20"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vaccj.vxd",
+      "bytes": 30123,
+      "sha256": "07e73ed9510a136a2af3d0cceef1c019330b76ea28742812f7065c6108d68e72"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacl.vxd",
+      "bytes": 16882,
+      "sha256": "6a1135ddcf2f12ce61983d8a444b37da93d347dc1a9202d549764fb35e808f00"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacl7543.vxd",
+      "bytes": 15506,
+      "sha256": "f0fed7b7064dc894ba2b674509b6447c56d380f58304a03da3ad4c11163db906"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacl7548.dat",
+      "bytes": 7188,
+      "sha256": "564b618b2a536d06194e255738ae5a0b73dccc27eeed730328d5b459ea5f891a"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacl7548.jam",
+      "bytes": 15534,
+      "sha256": "15fd6fc9206e9b1ac4fa440b8b9f4cc753b6479374e0158b89ea48e1c54c2ca2"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vacl7548.vxd",
+      "bytes": 16374,
+      "sha256": "df24d7ca91a3e92dd5a7a7311c7aecc3c893101e96ed73e61ff22c413309878f"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vaclb.vxd",
+      "bytes": 16884,
+      "sha256": "8830bdcfe03a4fb0337b039712b5c931f3cb59ae4d2ab4c206ff90851599e138"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vastmxx.vxd",
+      "bytes": 31060,
+      "sha256": "f7c7ec8035cf06953fcf22fd2c044e30c005befe2465a6324022cd2182900b02"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vatls.vxd",
+      "bytes": 21912,
+      "sha256": "5f6e959931ad3df6b251c921be0327a61a42380beadaf18ac7aab8d128974778"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vflatd.vxd",
+      "bytes": 7784,
+      "sha256": "e815a007e8c6c2df6ad2093c50e6226cbbfd7b78827a24ef6ff6232f29046a81"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vtril.vxd",
+      "bytes": 16617,
+      "sha256": "fa2e142a2b2be15f1781085ea10b572f036f042fc2d40952143f059c6231b867"
+    },
+    {
+      "path": "directx/drivers.nec/display/bin/vtrin.vxd",
+      "bytes": 20785,
+      "sha256": "920509d2ef8ac194321dc8c551c64eced9672db034fd790e4b84744c4e84c29e"
+    },
+    {
+      "path": "directx/drivers.nec/display/msddraw.inf",
+      "bytes": 29873,
+      "sha256": "c3efcdf8e0bce8963d3b03de8487c46971fefd5e45d87aef356a15533f57ca49"
+    },
+    {
+      "path": "directx/drivers.nec/display/msddraw/iscyber.dll",
+      "bytes": 3584,
+      "sha256": "fec2c43339afc2896f4e9c992e3bf069a88173648721a9da8bc97c914110c39a"
+    },
+    {
+      "path": "directx/drivers.nec/display/msddraw/isjamcb.dll",
+      "bytes": 3552,
+      "sha256": "d66c3eab93f3b768c3f15fe498f487e67e50f7f25674c2a0352ab59f149d24e4"
+    },
+    {
+      "path": "directx/drivers.nec/display/msddraw/isna13.dll",
+      "bytes": 3552,
+      "sha256": "b8820060826782308861df1e7ccf76eca3dea9ef63f8a275b5753e04d5b6d883"
+    },
+    {
+      "path": "directx/drivers.nec/display/msddraw/istri.dll",
+      "bytes": 3552,
+      "sha256": "d1567c069ceb400d9350d5cc850bfab35241cd6946cb98c414a3e0cb8685efaa"
+    },
+    {
+      "path": "directx/drivers.nec/install.txt",
+      "bytes": 16580,
+      "sha256": "fb61c9b696960e682532f6008ef3c0107db0a93f8da7ae600f7c748f5ccc1b24"
+    },
+    {
+      "path": "directx/drivers/audio/bin/azt16.vxd",
+      "bytes": 26770,
+      "sha256": "2259f52c69936f3f25229a7256085fd158e3717f189c78c19b5748a2a3fc63f5"
+    },
+    {
+      "path": "directx/drivers/audio/bin/azt16c.drv",
+      "bytes": 42080,
+      "sha256": "962a6b17a1d7080944af214fc054624bb5a18eddfb57186ecc97ce87def9a397"
+    },
+    {
+      "path": "directx/drivers/audio/bin/azt16w.drv",
+      "bytes": 43664,
+      "sha256": "2e67d5d42f14e9e932c7112e79e19f5bdab13e66eeff2d33c8426eb63a9a2ba7"
+    },
+    {
+      "path": "directx/drivers/audio/bin/cspman.dll",
+      "bytes": 17776,
+      "sha256": "0c77fd77aa05be2db46d8e0b23cbd3e1d907e26f437a6379e4d25d80a26fd282"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es1488.drv",
+      "bytes": 43936,
+      "sha256": "c9baa570adf4c44ebea68fffec0870bf6a7b2de4e32c00090ceb97891b07c2d8"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es1488.vxd",
+      "bytes": 20116,
+      "sha256": "92ebe7130db3fcf1c7d24723af093256c8ef4164e5de27f00ba07d0a8e1548c0"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es1688.drv",
+      "bytes": 50128,
+      "sha256": "c33b7f9e2b74b9f81e32f19b62081e7d69ead5d6d8191f65988af97b6e3eb731"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es1688.vxd",
+      "bytes": 25236,
+      "sha256": "1b0d57bda20da0d660b964d471fc26e43be8996139e3634689b15ac9100655f6"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es488.drv",
+      "bytes": 36976,
+      "sha256": "4470ac3822f57184cc49f6e69ad0356f350ec4fee41baae279973c21d268b123"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es488.vxd",
+      "bytes": 19603,
+      "sha256": "f8eec51a4187c88e90bdc54666bb33fb20d4cbc760ae2c01293ae3cf0e3ba21b"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es688.drv",
+      "bytes": 47008,
+      "sha256": "8f57b1dec5f8cedf1b100b9eafa6c300001e7205958cd31ba4a5b27a5c25b398"
+    },
+    {
+      "path": "directx/drivers/audio/bin/es688.vxd",
+      "bytes": 22675,
+      "sha256": "d88878830d9b12a5e3264c7d71b8c01306ca1f1a8f963d56c19c633c9a785701"
+    },
+    {
+      "path": "directx/drivers/audio/bin/essfm.drv",
+      "bytes": 17920,
+      "sha256": "20e777efe0273a9388ec683245ba211ff1427a412a57f5f044a472cb5bcd9d68"
+    },
+    {
+      "path": "directx/drivers/audio/bin/essmport.drv",
+      "bytes": 9904,
+      "sha256": "7860d1e33c80562af1dc897584d8311b2136515a23bd4a94788d54e354778141"
+    },
+    {
+      "path": "directx/drivers/audio/bin/essmpu.drv",
+      "bytes": 8240,
+      "sha256": "cae7d238822bb3f2addf967a189af0392b9ccf6921efd1a76514042bde18eb07"
+    },
+    {
+      "path": "directx/drivers/audio/bin/findmvi.dll",
+      "bytes": 5728,
+      "sha256": "9e42116e3368dae18e48690850968b982f8c7052eabff27b0887b7176b1f9970"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mmmixer.dll",
+      "bytes": 5152,
+      "sha256": "626feb65cc60bb377c7e903ff5a62bdb1978a6557e11cfea43e8f2f5bd8d48e5"
+    },
+    {
+      "path": "directx/drivers/audio/bin/msjstick.drv",
+      "bytes": 7744,
+      "sha256": "30bb1c74a17b43e16ea945cc4a840ef09450ff031cebc6ad341df5f622e294fa"
+    },
+    {
+      "path": "directx/drivers/audio/bin/msmpu401.drv",
+      "bytes": 8704,
+      "sha256": "804bb15d0b16ddc514a2a68b83b2551a8da8b299ecfdf40418bb65718537387c"
+    },
+    {
+      "path": "directx/drivers/audio/bin/msopl.drv",
+      "bytes": 17952,
+      "sha256": "86bd3daa73fcf6261effc3e2a04503234b6efe6111d662e76b9b48a812e392c5"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mssblst.drv",
+      "bytes": 40848,
+      "sha256": "bf9200d09f91a8612e5a272dd6a3531892470331f8df2ed93a2664bb8120228b"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mssblst.vxd",
+      "bytes": 21142,
+      "sha256": "cf47f6de8413d312a0d480d95656c547ad13946b67bce9166d3c5a5e5b71a05d"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mssndsys.drv",
+      "bytes": 39728,
+      "sha256": "7e068fc7553f4e9b8bafea7cf6451e1d6a6c95a4b7cbc5257ef76d0cb8271f10"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mssndsys.vxd",
+      "bytes": 29932,
+      "sha256": "d149090d81027c9a1f2f0f4035a2f84cdcfc8f0895fa63f0d5a3d56346cfaa74"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mvi514mx.drv",
+      "bytes": 38432,
+      "sha256": "61126a5d7ad63ead75e07ba0918aaa929b8978c9e6eaacf9e566af31c9a68d6b"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mviwave.drv",
+      "bytes": 19760,
+      "sha256": "07208d7736950e35f4f3233caef7899afbbb0e68c862f41e1f3bc9b9159040a9"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mvmixer.drv",
+      "bytes": 59568,
+      "sha256": "74bac43605b5fc31c04e3c96245ae5d0046bfe21b3b823c58c1b75c3cf68e115"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mvpas.vxd",
+      "bytes": 8898,
+      "sha256": "ccccb5fa0991d2a7f658841b96814d139ca62fb5b3e45a86a133bee682d65416"
+    },
+    {
+      "path": "directx/drivers/audio/bin/mvproaud.drv",
+      "bytes": 26128,
+      "sha256": "25770dcd120dd7e9bd1c51a4e11f145fc9372be32b071633b7734f799358a5ec"
+    },
+    {
+      "path": "directx/drivers/audio/bin/pa3dmxd.drv",
+      "bytes": 53200,
+      "sha256": "5dfc26284d6dece1c5ad9c0648c200257f470308a3f626f339efc83968222ac1"
+    },
+    {
+      "path": "directx/drivers/audio/bin/sb16.vxd",
+      "bytes": 70235,
+      "sha256": "159cee8d63be1e0c1e0bee3e568852cdf17491ec25db78ffb47d1dc3b8743256"
+    },
+    {
+      "path": "directx/drivers/audio/bin/sb16snd.drv",
+      "bytes": 46000,
+      "sha256": "40578585ed6d265f57c3e6c35ec9be841bf58548aaed2de7e5ca55044673a298"
+    },
+    {
+      "path": "directx/drivers/audio/bin/sbawe.vxd",
+      "bytes": 42226,
+      "sha256": "6902dbe884783ab50e968a6114656ef10924c3c05183bc122895fc2ebc115ee4"
+    },
+    {
+      "path": "directx/drivers/audio/bin/sbawe32.drv",
+      "bytes": 23216,
+      "sha256": "9b36edf45d8d45f999422b750ed74fb8c39681f9efbd7a0ee4915853505d07a4"
+    },
+    {
+      "path": "directx/drivers/audio/bin/sbfm.drv",
+      "bytes": 4128,
+      "sha256": "1e5ae8c81df421d292b92c1bd4cce363f0b736960ebcbc28d17c3ec0a0352e5d"
+    },
+    {
+      "path": "directx/drivers/audio/bin/synthgm.sbk",
+      "bytes": 34832,
+      "sha256": "fd2e35a260fef22fe809918dda3c921c6d48d53a29c3515af8a41019ce72d586"
+    },
+    {
+      "path": "directx/drivers/audio/bin/tmv1.mpd",
+      "bytes": 12048,
+      "sha256": "712c9290499f95786a42d02bf63abba9c5363b61d8bcb5a66192593bf0fe02f6"
+    },
+    {
+      "path": "directx/drivers/audio/bin/tsd32.dll",
+      "bytes": 17408,
+      "sha256": "dbe998cacbb333c69f14353a22767e85e688e97691b26bb051875ee217ee4d06"
+    },
+    {
+      "path": "directx/drivers/audio/bin/vjoyd.vxd",
+      "bytes": 20590,
+      "sha256": "1e453290eb086a2f13c291f2aa0e998005d7f15008451872f0d893ec296432b0"
+    },
+    {
+      "path": "directx/drivers/audio/bin/vmvid.vxd",
+      "bytes": 18586,
+      "sha256": "f5fb0b03cecbad685096f8dc776a1297aff0cff49c2b54e3f552cda720cc3378"
+    },
+    {
+      "path": "directx/drivers/audio/bin/vpasd.vxd",
+      "bytes": 24162,
+      "sha256": "f944476deb2750761bbda74d2526656c2888548184bc4a411d4e01780a4d2217"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0200.acv",
+      "bytes": 13456,
+      "sha256": "6ce9a0f662b13f23bb22fb82074a83611d4c05788a1a9d780ac5845fb831a62d"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0200a.csp",
+      "bytes": 2238,
+      "sha256": "fecd9e22612ca089412b30a72688544b166d8e84dee4cb09adb1359e9fedca14"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0201.acv",
+      "bytes": 5184,
+      "sha256": "a17ee3d88f2dbc37113a6b20882517f905245270ec988640a32e8653f52cf42a"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0201a.csp",
+      "bytes": 6776,
+      "sha256": "a917422449b168714a955afeabfb7ff825f5e12a79353f499530b0d410ea75b4"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0202.acv",
+      "bytes": 9056,
+      "sha256": "e9767e4b996a587ca4d60a4ae81bb97c8e0661c34ee011613436eab9444f3dae"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0202a.csp",
+      "bytes": 9004,
+      "sha256": "1a366490e6ed0c2bcec52bfe9a81dc61be51f0f3a6ba49ea815de23cb6e71671"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0203.acv",
+      "bytes": 9056,
+      "sha256": "e72f35da00ea237356c5140c3cfe57b1954a995e72fc70b5941a4082c9cd806d"
+    },
+    {
+      "path": "directx/drivers/audio/bin/wfm0203a.csp",
+      "bytes": 9004,
+      "sha256": "edb3a97141d29ef53ad56dcb5995cd095890c3ab9225c5211da559afc3d4153a"
+    },
+    {
+      "path": "directx/drivers/audio/msdsound.inf",
+      "bytes": 64285,
+      "sha256": "c5dd411b4883b02fb21616f6918b3d70e473604381ce7280405c2f03341f6ff0"
+    },
+    {
+      "path": "directx/drivers/audio/msdsound/isna.dll",
+      "bytes": 6064,
+      "sha256": "c26792a0496fb250a3fa7cd12c2b745287e99087e6c7d53ad75c34e10cc25c43"
+    },
+    {
+      "path": "directx/drivers/display/bin/5631_dig.ini",
+      "bytes": 38690,
+      "sha256": "0cfbd2bada2dc84fe9665212942ccd93e85b6392d50e6df1a9ce1d47ce9873a3"
+    },
+    {
+      "path": "directx/drivers/display/bin/5631_hwc.ini",
+      "bytes": 38120,
+      "sha256": "d3851a8e924820b3bcf507dfa729496a722617650d7f710e0efaf83d21147aed"
+    },
+    {
+      "path": "directx/drivers/display/bin/5631_swc.ini",
+      "bytes": 38549,
+      "sha256": "faaffa98e47aebf8f8fdb7554a67abeb143bfe42d09ed93e4d8389e83b39c1a9"
+    },
+    {
+      "path": "directx/drivers/display/bin/883d_dig.ini",
+      "bytes": 38690,
+      "sha256": "0cfbd2bada2dc84fe9665212942ccd93e85b6392d50e6df1a9ce1d47ce9873a3"
+    },
+    {
+      "path": "directx/drivers/display/bin/883d_hwc.ini",
+      "bytes": 38120,
+      "sha256": "d3851a8e924820b3bcf507dfa729496a722617650d7f710e0efaf83d21147aed"
+    },
+    {
+      "path": "directx/drivers/display/bin/883d_swc.ini",
+      "bytes": 38549,
+      "sha256": "faaffa98e47aebf8f8fdb7554a67abeb143bfe42d09ed93e4d8389e83b39c1a9"
+    },
+    {
+      "path": "directx/drivers/display/bin/ati.vxd",
+      "bytes": 27440,
+      "sha256": "6bc61db6dc636633a3c70ca8f39103a7f1fc9a765c57ea355525132e8b63ab40"
+    },
+    {
+      "path": "directx/drivers/display/bin/ati3d.dll",
+      "bytes": 204288,
+      "sha256": "89c4f0ad26658ae7361ac5099ea1ad18f6f20a8c18ab3ea61311817e5cd63f5d"
+    },
+    {
+      "path": "directx/drivers/display/bin/atim32.dll",
+      "bytes": 11264,
+      "sha256": "f55650dd2308eb0d63a34a112666b651e23d62ce2f3d4d4504eddc881421fcca"
+    },
+    {
+      "path": "directx/drivers/display/bin/atim32.drv",
+      "bytes": 99184,
+      "sha256": "e29683a38fc62811ee58a6148b8e586cdb0f6f43aa342e03305e40c1481848c2"
+    },
+    {
+      "path": "directx/drivers/display/bin/atim64.dll",
+      "bytes": 19968,
+      "sha256": "16a83a867a2c2e1a9e384904561564dfbe407c087a950765d197ccbca77efc66"
+    },
+    {
+      "path": "directx/drivers/display/bin/atim64.drv",
+      "bytes": 81104,
+      "sha256": "e07a9d3333c35ee3cf5331087f24298f0a0445ae17229fd7ef77c4e4df7f21d4"
+    },
+    {
+      "path": "directx/drivers/display/bin/atim8.drv",
+      "bytes": 129584,
+      "sha256": "303565704b22b3e0fd2a4d437d388dabe0985d8a2a4364cb60f83d5d064910f6"
+    },
+    {
+      "path": "directx/drivers/display/bin/chips.dll",
+      "bytes": 9216,
+      "sha256": "ff2dbdc71fe5c4aa0ff28cedfa65afce8c1ad63681841d347c46d6851f1b29df"
+    },
+    {
+      "path": "directx/drivers/display/bin/chips.drv",
+      "bytes": 29280,
+      "sha256": "c56ae00c86453efc10efdaaf73edf7c5ed70e1ecc7d398b1e6f49301f87ae8e4"
+    },
+    {
+      "path": "directx/drivers/display/bin/chips.vxd",
+      "bytes": 18591,
+      "sha256": "69fa8a8ce258d66eba78f4d7547374787778d84c4d824b3f0e7a4aa827c93069"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirrus.dll",
+      "bytes": 23552,
+      "sha256": "5ddff7c07a445de70b94a1d7bcd30b26d1f5ba7f368ea756cb483722d2e478c5"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirrus.drv",
+      "bytes": 70640,
+      "sha256": "a9acbfd81c8fc8ba831c521d8e1bff78b37ed984c967aa5df35480e39e268272"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirrus.vxd",
+      "bytes": 17964,
+      "sha256": "84badd4add9f6daad1009727644dddb67988f565e644b2bf2b006fcc77abe934"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirruslg.dll",
+      "bytes": 9216,
+      "sha256": "c0ca01f31e3a6c7b4c68355e74fa74d99f80ace9e10f8e10d86a8a99bdc60ec2"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirruslg.drv",
+      "bytes": 41616,
+      "sha256": "3761706925371ea9eafd50728d0b6dc00e0f9636d0150914db907c3653d718a8"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirruslg.vxd",
+      "bytes": 15678,
+      "sha256": "7ae99d1464ee33e881eb75e414bf74d90f2823f69152ec0547f5014d85847416"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirrusmm.dll",
+      "bytes": 39424,
+      "sha256": "8da7c0126878e0f849a52b065afe8c7bb79dd8f1a23c2ff04254d43690ab313e"
+    },
+    {
+      "path": "directx/drivers/display/bin/cirrusmm.drv",
+      "bytes": 72208,
+      "sha256": "b8deda7800ca917a099d06339de503216062775d71a12c349021662c403d83fe"
+    },
+    {
+      "path": "directx/drivers/display/bin/d3d.uc",
+      "bytes": 94744,
+      "sha256": "66bcfffe291ccfe9f50c8c576585222973b1f0cb254de845b05e0db4b5994518"
+    },
+    {
+      "path": "directx/drivers/display/bin/framebuf.dll",
+      "bytes": 8192,
+      "sha256": "4d19a075f21339d3881ad968b636cd314bc912f8ff42a470de281140f0f639b9"
+    },
+    {
+      "path": "directx/drivers/display/bin/framebuf.drv",
+      "bytes": 22192,
+      "sha256": "b35dd1b6a5b7a8f1656fb612fe085102d5641d5514b57a6fd26322ded4119d41"
+    },
+    {
+      "path": "directx/drivers/display/bin/k2v_dig.ini",
+      "bytes": 38080,
+      "sha256": "f8917bf97a38e2b1f0c164309c01e9ea1a1558b34a7510a74ae54987aa922429"
+    },
+    {
+      "path": "directx/drivers/display/bin/k2v_hwc.ini",
+      "bytes": 38401,
+      "sha256": "9e310ff7cdad5b4f6a2ba9cac602efad29d87cb0dcd6fe31f3d85fbcff54c766"
+    },
+    {
+      "path": "directx/drivers/display/bin/k2v_swc.ini",
+      "bytes": 37734,
+      "sha256": "ab065f395844f25e2624c7aae788b63f0ee311e212ee154ffcf45eab9011226e"
+    },
+    {
+      "path": "directx/drivers/display/bin/mgamil.dll",
+      "bytes": 73728,
+      "sha256": "a8ad14ff451cd8d2f3b6447d92a1ee540625d5035c9be5a53e8726c86b158310"
+    },
+    {
+      "path": "directx/drivers/display/bin/mgamil.drv",
+      "bytes": 88720,
+      "sha256": "f2db79835f2ecce01cfdef08a524c16a54001228035ca4e3db329225b3147315"
+    },
+    {
+      "path": "directx/drivers/display/bin/mgamil.vxd",
+      "bytes": 26954,
+      "sha256": "f7a5c276328b9a5ebbb8f08f956f83f56506929037dc928c0e28c93a97a9cdd6"
+    },
+    {
+      "path": "directx/drivers/display/bin/mgapdx64.dll",
+      "bytes": 63344,
+      "sha256": "70082280fc76851af936aca16efc545f6744ba4c31d532823238af24fbd9fef4"
+    },
+    {
+      "path": "directx/drivers/display/bin/oak.vxd",
+      "bytes": 14481,
+      "sha256": "898d681a75a88acc757ed4f96354ccb14a2803e8f54fe8a1998debe73bba0307"
+    },
+    {
+      "path": "directx/drivers/display/bin/rend.drv",
+      "bytes": 39504,
+      "sha256": "e5f6a5cac5130baf9496ee0bc1a5a43c7b968937b0ff30e86921ce3073466ca7"
+    },
+    {
+      "path": "directx/drivers/display/bin/rend32.dll",
+      "bytes": 61440,
+      "sha256": "5259d71fd1cc34e72d957e825cbdcf9265c654d3c8455a536ecb9c18b5421d41"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3.dll",
+      "bytes": 9216,
+      "sha256": "289a5df3e3912571cea5a0e50d68d59390abb5488cbcc4e2260f6b447162a6ac"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3.drv",
+      "bytes": 65056,
+      "sha256": "15aa87a9d929c68a5746db461d9cff7d22737e16124bca0bee44b7e0ef2882b2"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3.vxd",
+      "bytes": 22255,
+      "sha256": "c1bbc32450d173ae7c863994781a74753b132e4d61f6c79223f4bc1d3e02f447"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3mm.dll",
+      "bytes": 14336,
+      "sha256": "3db6a3b7da74eb3c8fbedb4afebe7a2b52df6e7aba113a6adbeb7e2dbd7b0fb0"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3mm.drv",
+      "bytes": 76688,
+      "sha256": "c17e070cbbd94139d8b1306f5045c145e595478a2bddef603bc115efd663f06d"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3mm.vxd",
+      "bytes": 23847,
+      "sha256": "1fb413667e91b1653f1a4d6aadcfd66d8270c08795f979e59350e80920043110"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3v.dll",
+      "bytes": 477184,
+      "sha256": "bfcbd679ef780fc9709826a0f98554cf29aaca0fd2d54b0b31765df35a389450"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3v.drv",
+      "bytes": 83920,
+      "sha256": "a8f0db0aab08c9779cd7cf274aa1c71e40f1377b8439ff26195d2e37583f1b24"
+    },
+    {
+      "path": "directx/drivers/display/bin/s3v.vxd",
+      "bytes": 19481,
+      "sha256": "e17191cfa37e88853e65b55ea6b449cb3395343d8c36339736b5daa18d470bcb"
+    },
+    {
+      "path": "directx/drivers/display/bin/supervga.drv",
+      "bytes": 52320,
+      "sha256": "15a273ffad2e690ce35d2565d2e2d3f71d2111714502f7d09b3ed879bf4327fe"
+    },
+    {
+      "path": "directx/drivers/display/bin/tseng.dll",
+      "bytes": 10240,
+      "sha256": "4239b35c307efbea4bb26c8139266faa3209fa8ae1566f9167cc852a84343f52"
+    },
+    {
+      "path": "directx/drivers/display/bin/tseng.drv",
+      "bytes": 37824,
+      "sha256": "32cf87a961bdd4622e7bbf08200b8487cc6b22f3d1e34105b1bcafd6ea3567cc"
+    },
+    {
+      "path": "directx/drivers/display/bin/tseng.vxd",
+      "bytes": 14536,
+      "sha256": "59f47f247117be184cbfd4a6c7f65afb5fa60b8cffd17b4cfb033bca2a870002"
+    },
+    {
+      "path": "directx/drivers/display/bin/ucman.dll",
+      "bytes": 23872,
+      "sha256": "050d2bcdb80104f211fc6a408220aa78660e51609c6388e115a08412cffa18e7"
+    },
+    {
+      "path": "directx/drivers/display/bin/vb102f.com",
+      "bytes": 31095,
+      "sha256": "94ca8b4eac92f6d4212a25e77b8f01122aa8227f89d2ac8a13f07ee2685aa93a"
+    },
+    {
+      "path": "directx/drivers/display/bin/verite.vxd",
+      "bytes": 24576,
+      "sha256": "f0c5d56ea6913c3ca9df2480720a972729d28f4d935211bf3ce6ca301dd31108"
+    },
+    {
+      "path": "directx/drivers/display/bin/video7.vxd",
+      "bytes": 14947,
+      "sha256": "c5e98e639048d1427342913c05ae2dbae39f8c1db0527ec91b6968d0020f3dfe"
+    },
+    {
+      "path": "directx/drivers/display/bin/wd.dll",
+      "bytes": 10752,
+      "sha256": "5642f2764dd0449217ac6fb952ec0b49e42ac293a2ac85cfa996fb944e7ae361"
+    },
+    {
+      "path": "directx/drivers/display/bin/wd.drv",
+      "bytes": 25840,
+      "sha256": "f5df2f8a5aaacc2a293c2cc77d54955d84b8f302e8f20fee81c5e9ca4c358880"
+    },
+    {
+      "path": "directx/drivers/display/bin/wd.vxd",
+      "bytes": 18333,
+      "sha256": "635f9fa7f4d5ddaaa500b481a762967500c529f3c3fdea1741f251826f9a8a16"
+    },
+    {
+      "path": "directx/drivers/display/bin/win31.uc",
+      "bytes": 21216,
+      "sha256": "a945208c3761df11a72d93e5d9194a64ad38a7b719de86f8681e52948dc616ea"
+    },
+    {
+      "path": "directx/drivers/display/msddraw.inf",
+      "bytes": 39547,
+      "sha256": "852911b00d1e4d65f8819d5104ca0e2a6dbc78c9a472bb732642872ffd63e5ee"
+    },
+    {
+      "path": "directx/drivers/display/msddraw/iss3_765.dll",
+      "bytes": 3520,
+      "sha256": "d1d9adbd83f4080107a31e3e7a38a7bfa3a0ced37a4623609a0339791aed5070"
+    },
+    {
+      "path": "directx/drivers/display/msddraw/s3_cp3cq.dll",
+      "bytes": 4560,
+      "sha256": "0d6c07f1869f086f82be066987c350b8af9df10e2bf44c0f1dcc13e0173e7db8"
+    },
+    {
+      "path": "directx/dsound.dll",
+      "bytes": 86016,
+      "sha256": "b0d70a4821bc3fabbe653ca85f3933b8e21735002e36b60349972f4d805f5d77"
+    },
+    {
+      "path": "directx/dsound.inf",
+      "bytes": 435,
+      "sha256": "e10389afcb46b71374f8043f5d7c832a950145f82cba3cebc1b212d580888178"
+    },
+    {
+      "path": "directx/dsound.vxd",
+      "bytes": 17087,
+      "sha256": "f0c2b42acb7d3a3a0daf76b55c1062d30c9658464b3396214350621b60dc5a19"
+    },
+    {
+      "path": "directx/dxsetup.exe",
+      "bytes": 29184,
+      "sha256": "03c64fdc6cb801e209f63888351ff6636807fbfb36599c8176bf1304d497a378"
+    },
+    {
+      "path": "directx/dxsetupj.exe",
+      "bytes": 29184,
+      "sha256": "bc30325344d3645032a5ca98282ca34bbb6071f3bbe0b3c1253a59cf7d840e7a"
+    },
+    {
+      "path": "directx/license.txt",
+      "bytes": 1151,
+      "sha256": "ebad64838db118333ce72b4f1d6b75ac67be459610aa8b1c5a34b034eb3858bd"
+    },
+    {
+      "path": "dsetup.dll",
+      "bytes": 20992,
+      "sha256": "db195e52e57dba41262d4a83217aeba084edcb2fce44a988d6e247e40c0b1f35"
+    },
+    {
+      "path": "dsetup6e.dll",
+      "bytes": 34400,
+      "sha256": "4d46ef625341c5d3f71ad143d03af1ccce3205ab86867813c85b5e7475c119ce"
+    },
+    {
+      "path": "dsetup6j.dll",
+      "bytes": 34288,
+      "sha256": "463b3913a252f7fcc3f6b3adc6472179a78cdd7ac2088363442233e992552ba0"
+    },
+    {
+      "path": "dsetupe.dll",
+      "bytes": 41984,
+      "sha256": "a309b767a36868a0785b7a8681f19c67a5721927751a63e0a3107c1c20f164b1"
+    },
+    {
+      "path": "dsetupj.dll",
+      "bytes": 41984,
+      "sha256": "371a337f70a7cf3ce960572c229fc61d437d52d0ef7cb10b593bd425af7fe7b1"
+    },
+    {
+      "path": "install/dos/copyhard.bat",
+      "bytes": 1146,
+      "sha256": "539eda9f785e203a96cd4cb04afa3deb330fd0f3510762a309f956a11cd804dc"
+    },
+    {
+      "path": "install/dos/copysoft.bat",
+      "bytes": 1101,
+      "sha256": "82285691f84c2d396d8f3842ad5bbfef69fa13c63a2872fe92d6dd6d8bfbbb47"
+    },
+    {
+      "path": "install/dos/english/enghard.001",
+      "bytes": 935,
+      "sha256": "a8c8c05d62b7cc12a0ae95ff1e154ad7ba54641966b0fe42e89d48fa51bc6abb"
+    },
+    {
+      "path": "install/dos/english/engsoft.001",
+      "bytes": 914,
+      "sha256": "7bbc2b1f5dba170d6dfe0083f39679a3ed92055f683c07243cf1e23d325b151f"
+    },
+    {
+      "path": "install/dos/english/instpro.exe",
+      "bytes": 86864,
+      "sha256": "57f6afae91afa4dcdda7a332a7afad5164dc15d86585e098bd49e84553d27e83"
+    },
+    {
+      "path": "install/dos/install.bat",
+      "bytes": 1101,
+      "sha256": "fdbea58807f2923d21acedb3ffe77c8173379ed816c6181dbb435b480740962a"
+    },
+    {
+      "path": "install/dos/italian/external.lng",
+      "bytes": 11825,
+      "sha256": "68feb05a9f707c7a1589ee3f3f3f650378766765b5125ef03bbe8fecbae3f9af"
+    },
+    {
+      "path": "install/dos/italian/instpro.exe",
+      "bytes": 86864,
+      "sha256": "57f6afae91afa4dcdda7a332a7afad5164dc15d86585e098bd49e84553d27e83"
+    },
+    {
+      "path": "install/dos/italian/italhard.001",
+      "bytes": 952,
+      "sha256": "9842a76b60ac2ff8d20e5b3ad9100c778d0aedb557708481472b7cd5d2db4dd6"
+    },
+    {
+      "path": "install/dos/italian/italsoft.001",
+      "bytes": 932,
+      "sha256": "2f75f163fc0ab23f09aa386bed006a124295ed0ed8dc2752788a743765e9b61c"
+    },
+    {
+      "path": "install/dos/spanish/external.lng",
+      "bytes": 6937,
+      "sha256": "e7fdf4c072b5a3ad7f96d05aef0d451eff7bb6b3d2fdb82b3ead58c4e4670696"
+    },
+    {
+      "path": "install/dos/spanish/instpro.exe",
+      "bytes": 86864,
+      "sha256": "57f6afae91afa4dcdda7a332a7afad5164dc15d86585e098bd49e84553d27e83"
+    },
+    {
+      "path": "install/dos/spanish/spanhard.001",
+      "bytes": 973,
+      "sha256": "7948277a9da374f42963fb5d6d195d90981614d2c1afeb2a3f5c37bc10e95efe"
+    },
+    {
+      "path": "install/dos/spanish/spansoft.001",
+      "bytes": 952,
+      "sha256": "289dbabf7f899fab0956b1b594009a6e90528cb857c79fcac3a979859b9c9ec7"
+    },
+    {
+      "path": "install/dos/splanet.ini",
+      "bytes": 16,
+      "sha256": "20ab6860642369fae7f79cd355ddfd33ee2dc38bf02342b65bf21cfce92d58e2"
+    },
+    {
+      "path": "install/windows/_inst32i.ex_",
+      "bytes": 306748,
+      "sha256": "50745bec364abf7579f549471153d9a47e9f3fbda2dcc060c4463fdc678ed381"
+    },
+    {
+      "path": "install/windows/_isdel.exe",
+      "bytes": 8192,
+      "sha256": "b526045cdf964674851fe70b54c1b486a78647be1aecb66bccc61d0a56eba183"
+    },
+    {
+      "path": "install/windows/_isres.dll",
+      "bytes": 90112,
+      "sha256": "a0088979b2b389ed36e6701ff5eac0c1a351892e439f38910ce0abfb73dfaec5"
+    },
+    {
+      "path": "install/windows/_setup.dll",
+      "bytes": 10752,
+      "sha256": "3c0ef26df26da559b609299ac5692e1b258d08e3029023d255d651fd74cd5d23"
+    },
+    {
+      "path": "install/windows/_setup.lib",
+      "bytes": 101374,
+      "sha256": "8b71ea089ae880950e10b46e4b6e68df53760c7a2a4c5ba6a7d141ae677e749e"
+    },
+    {
+      "path": "install/windows/cpuspeed.dll",
+      "bytes": 17408,
+      "sha256": "8d57ec5b2477645e7d5a46f4552e6f312f27f1cce2a1859b1eeab5f9bc262a63"
+    },
+    {
+      "path": "install/windows/fxmemmap.vxd",
+      "bytes": 6096,
+      "sha256": "d5c669b38ab398baa2145adb067370237465288ee79028dfc27634325808dfc9"
+    },
+    {
+      "path": "install/windows/glide.dll",
+      "bytes": 274432,
+      "sha256": "3e81d822a0185766089948114853ce4dfc4fb5ab76f2fdca5f81ce441f29986e"
+    },
+    {
+      "path": "install/windows/hardware.dll",
+      "bytes": 42496,
+      "sha256": "aac1ae6693ba24435748abac669bd29553a530b317bf33ce195ac07f35f23e9f"
+    },
+    {
+      "path": "install/windows/language.ini",
+      "bytes": 21118,
+      "sha256": "2050f85fc1b8023bd03c6a10aa0a3cb01646caab6b3fcdd1420d650782ea575c"
+    },
+    {
+      "path": "install/windows/msi95.dll",
+      "bytes": 112128,
+      "sha256": "1617ef3f0cf81916d2c834b79d9a6c7f76cff6f9c09de2f6ccce5337ac0a139b"
+    },
+    {
+      "path": "install/windows/setup.bmp",
+      "bytes": 65078,
+      "sha256": "221293a6b7526b64fc5472390654edb833e77722596c0945621495276f415517"
+    },
+    {
+      "path": "install/windows/setup.exe",
+      "bytes": 47616,
+      "sha256": "1f48ff1421c10f2c9ca322b2cd2ec997577f2f05cd5841b41b4018cf60ef5f07"
+    },
+    {
+      "path": "install/windows/setup.ini",
+      "bytes": 1526,
+      "sha256": "95f6287cac6370326199bb45fd68a10e91e119c0159f7aff9892ea30180ba081"
+    },
+    {
+      "path": "install/windows/setup.ins",
+      "bytes": 71458,
+      "sha256": "b1cea18cd871cf30551e291f4b5cce1f8a2e33e2d8c00798fb551f34c2b394ec"
+    },
+    {
+      "path": "install/windows/sst1init.dll",
+      "bytes": 279356,
+      "sha256": "39e0db0a80f7ce103db15ec06b1d8a906e755cec6f2df416645e519f9982ec7f"
+    },
+    {
+      "path": "install/windows/uninst.exe",
+      "bytes": 283648,
+      "sha256": "819234fd8524bf305360883efaf9a90bcdce5d3960ff84568805ec1d9f1ed2f2"
+    },
+    {
+      "path": "mystique/compress.bin",
+      "bytes": 5689835,
+      "sha256": "8430d3f77c0d58cfa2504d5d3110de4b429f998306d6d01120521f0a6d2aad29"
+    },
+    {
+      "path": "mystique/msi95.dll",
+      "bytes": 112128,
+      "sha256": "6c219a0dc25a7c948e2973ac99f8b900696ad87aeb2a08a6b162f96b5bc07820"
+    },
+    {
+      "path": "mystique/rwspmys1.dll",
+      "bytes": 113152,
+      "sha256": "c2fa31a3ad34a02466ed10e49a12de05a318acce5b466461315c87e776001a54"
+    },
+    {
+      "path": "mystique/spmyst.exe",
+      "bytes": 848384,
+      "sha256": "a5a951f41d66f66e1118665bcfcd7da197e7eea785cb848fec654bacbeb62d79"
+    },
+    {
+      "path": "setsound/adrv688.dig",
+      "bytes": 11278,
+      "sha256": "294a7de77d88a7f38f58b32fc7166ced87a4c44e6c9be760f78b1724744d7161"
+    },
+    {
+      "path": "setsound/aildrvr.lst",
+      "bytes": 17340,
+      "sha256": "03d90c1c0e5c029b9016e593fce2ce3d4ceb6f67d016d291821031f0406388f8"
+    },
+    {
+      "path": "setsound/dos4gw.exe",
+      "bytes": 265396,
+      "sha256": "b8265123ac8a189637448618409ef3ecd2e9f3e1a47062c685a02240f688dec1"
+    },
+    {
+      "path": "setsound/jammer.dig",
+      "bytes": 3219,
+      "sha256": "cca38c28eabe00b88e4bddd627fa68a68b2559029098b777129ca00201831a9c"
+    },
+    {
+      "path": "setsound/proaudio.dig",
+      "bytes": 2127,
+      "sha256": "63cc6ba6c0bebf80ebb073cfbef2b0de1ce508d006a94180095a0223ac4bb33c"
+    },
+    {
+      "path": "setsound/rap10.dig",
+      "bytes": 2849,
+      "sha256": "d4e03dd5313e02291df43d41be2d289f7006a30ed24a195d8e872518999566bf"
+    },
+    {
+      "path": "setsound/sb16.dig",
+      "bytes": 2836,
+      "sha256": "c8a1e7a0e14c8b696e665520e338711e4c20cc3bb4733f83527add41dd6f6b38"
+    },
+    {
+      "path": "setsound/sblaster.dig",
+      "bytes": 3125,
+      "sha256": "e1864d8dc965e4499a981561dae31a25609968fc4361b2b45fb82a76fa8e9efd"
+    },
+    {
+      "path": "setsound/sbpro.dig",
+      "bytes": 2763,
+      "sha256": "250c3afdb960a8b3c6fb268e7e610db4a2a43f626c0e1ddee7ff952150a94dae"
+    },
+    {
+      "path": "setsound/setsound.exe",
+      "bytes": 168741,
+      "sha256": "188c5cce07391a761202d19797d965cff2f1dff8a2e4f8c7c8447fb77846681f"
+    },
+    {
+      "path": "setsound/setsound.pif",
+      "bytes": 967,
+      "sha256": "183136683c74b32ad31c9c61d1e8c0a8f9b03e1fa831213b1fc36ab0c6c34d24"
+    },
+    {
+      "path": "setsound/sndscape.dig",
+      "bytes": 4171,
+      "sha256": "a1459763f2fdcb1ada4f9fc6d28c9ea33077c00dad91b5809ee899f5a1b6c05c"
+    },
+    {
+      "path": "setsound/sndsys.dig",
+      "bytes": 3332,
+      "sha256": "7f62b787fb85bfbc468267c4e21aff06eb7e70cf2e6b59938e1e46fef2423742"
+    },
+    {
+      "path": "setsound/ultra.dig",
+      "bytes": 9478,
+      "sha256": "4e63a94e272f37907910cc2a73120d2d21f3651a66bd06fcac7e80c93af55478"
+    },
+    {
+      "path": "splanet/audio/opscreen.sb",
+      "bytes": 1155936,
+      "sha256": "af2a990b333234fb5182f7514fe66ec5d3a97a28590cc5c93a0c225862a74cc0"
+    },
+    {
+      "path": "splanet/dummy.dmb",
+      "bytes": 1,
+      "sha256": "58f7b0780592032e4d8602a3e8690fb2c701b2e1dd546e703445aabd6469734d"
+    },
+    {
+      "path": "splanet/english.rez",
+      "bytes": 4690,
+      "sha256": "7c5cdb2ec3d0ea87e7987a5766a80c241c9f97a1e255c6b2044935dc8884151e"
+    },
+    {
+      "path": "splanet/english/brief.rwb",
+      "bytes": 14402,
+      "sha256": "07f9fba56892ee6cecceba35353c7b0cf97fc6033386b832a819b57dc24c5ed7"
+    },
+    {
+      "path": "splanet/english/maps6.rwb",
+      "bytes": 514548,
+      "sha256": "e373ea81a8c038739244225aa879f3cfe88d17bbad1ba1a012e9ce178000aaa2"
+    },
+    {
+      "path": "splanet/english/maps8.rwb",
+      "bytes": 324056,
+      "sha256": "a74f44de605bfee9ccbc35ef103002e778bb0bbba9d978ff1e1ccc07da09240b"
+    },
+    {
+      "path": "splanet/english/sound.rwb",
+      "bytes": 588425,
+      "sha256": "850f1897f70f82f860f9014bfcab7c554c800ca79bc448034021c2987b6d75be"
+    },
+    {
+      "path": "splanet/espagnol.txt",
+      "bytes": 2326,
+      "sha256": "270005b5ec67505c1f6d90ca98125be85c2ecc7dd9331e7ca7cc234b374b2174"
+    },
+    {
+      "path": "splanet/geometry.rwb",
+      "bytes": 2171665,
+      "sha256": "29b3d8f87eed27ca933b81231b84f7e406506b498e5fc74bfee52f5b1004fb1b"
+    },
+    {
+      "path": "splanet/istage6.rwb",
+      "bytes": 548435,
+      "sha256": "8ae17381ad9cac870f25e7bc71c702b1e3c84a8dee540223cc3209c735bfced2"
+    },
+    {
+      "path": "splanet/istage8.rwb",
+      "bytes": 345654,
+      "sha256": "7977d15646285ee330db61facf2c5c7cac1cc57deae29bba3ba8f4a3d3631fae"
+    },
+    {
+      "path": "splanet/italian.rez",
+      "bytes": 5337,
+      "sha256": "7e4af862fc991db5dca344e2319e0b28be09ffe7482e1170b5961f56c722f24a"
+    },
+    {
+      "path": "splanet/italian/brief.rwb",
+      "bytes": 14402,
+      "sha256": "214163e7a88ddb86f3f32eee7c3aa5802bf4ed0885ced5594f758207dcc9dc9c"
+    },
+    {
+      "path": "splanet/italian/maps6.rwb",
+      "bytes": 514548,
+      "sha256": "f0604b0571ecf75290dd630dc1dfd36fe32c9d6944a09c05f707f75b99c80918"
+    },
+    {
+      "path": "splanet/italian/maps8.rwb",
+      "bytes": 324056,
+      "sha256": "c214cc00679f0cebfd44059815681d877702474965561529edd5f212e10faa0f"
+    },
+    {
+      "path": "splanet/italian/sound.rwb",
+      "bytes": 747088,
+      "sha256": "8626b708bae413e268f6ebddbbf91e6e2b7b4b832036ade54415c7d11bd55e98"
+    },
+    {
+      "path": "splanet/italiano.txt",
+      "bytes": 2573,
+      "sha256": "74978a6e87de1abd5ffcba66f85552760476a39ea31217471085c36608951690"
+    },
+    {
+      "path": "splanet/italianw.txt",
+      "bytes": 2573,
+      "sha256": "83a84fad7a03e67edc365ff810ff354eb3cfe7211b16eeb9be3aa77d96fa0755"
+    },
+    {
+      "path": "splanet/level.rwb",
+      "bytes": 539272,
+      "sha256": "6b331946a4fb7b71df79271b8ac0daa5628ba58d20a2cab73a1c7b942e5f670f"
+    },
+    {
+      "path": "splanet/maps6.rwb",
+      "bytes": 5342904,
+      "sha256": "068762d45f052b9ea46653f5d99c4455268b15cff5aa0356b8652424592ebd39"
+    },
+    {
+      "path": "splanet/maps8.rwb",
+      "bytes": 3340008,
+      "sha256": "5717eb906988060edf5abe8e6737576c5ee620c3c2aa69f2e89f6383ef620b8f"
+    },
+    {
+      "path": "splanet/overlay6.rwb",
+      "bytes": 1631864,
+      "sha256": "2e5b39c0a5b6b0a72485ccad16e2aa80ee8329ad6ac5e2547cdf4dc1cf4110cc"
+    },
+    {
+      "path": "splanet/overlay8.rwb",
+      "bytes": 1019128,
+      "sha256": "803cb92b9754419e1e69a9422fca61a133234b7776456b50dc432f1c44d01c02"
+    },
+    {
+      "path": "splanet/palette.rwb",
+      "bytes": 19760,
+      "sha256": "2e886d7253afc6aad2757420cc782f53b3c976ec9502cba2998faf01250e6d95"
+    },
+    {
+      "path": "splanet/readme.txt",
+      "bytes": 1946,
+      "sha256": "08517be3175eea330425a5cf22a0f175cd91aa2c271947451f100373686be1e1"
+    },
+    {
+      "path": "splanet/smackw32.dll",
+      "bytes": 66048,
+      "sha256": "3f21682e8b2eb3ce69f776be0ef84d8bb13c295da885d509329f4f873517ae0e"
+    },
+    {
+      "path": "splanet/sound.rwb",
+      "bytes": 2440143,
+      "sha256": "d502f8424f220253981299284c5aab10bca805371fe633383ea2a075b735a063"
+    },
+    {
+      "path": "splanet/sp00.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp01.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp02.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp03.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp04.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp05.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp06.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/sp07.sav",
+      "bytes": 192000,
+      "sha256": "48284ee8dd7c60ea1559e14e9c6f6e0f2239c82d4540f55ed54438a7ba89faad"
+    },
+    {
+      "path": "splanet/spanish.rez",
+      "bytes": 5365,
+      "sha256": "727b4f634c72ccf88d4cc10ae4562dc65fe8066d10df8d147d3ed4566b24043b"
+    },
+    {
+      "path": "splanet/spanish/brief.rwb",
+      "bytes": 14402,
+      "sha256": "95e9698ef3bf6b03e058d41ec1fce6639a17ed5d230e971caa274e95a1b8d23c"
+    },
+    {
+      "path": "splanet/spanish/maps6.rwb",
+      "bytes": 514548,
+      "sha256": "a14b854625d8dd7b1e1971c094e692e0c4cd96e41b2109a008b74e9b3093f42e"
+    },
+    {
+      "path": "splanet/spanish/maps8.rwb",
+      "bytes": 324056,
+      "sha256": "0b89d00eb652b3ff649d44b7d8db57382785fd25375e4eb865af291af29ad662"
+    },
+    {
+      "path": "splanet/spanish/sound.rwb",
+      "bytes": 662096,
+      "sha256": "9e94c3dae1d906a1e5a33509a5029c0faec346adca22d69cf94e0791ce5228bd"
+    },
+    {
+      "path": "splanet/spanishw.txt",
+      "bytes": 2326,
+      "sha256": "c8522801620bf7bfecbcfdaed4f342fe87d5ccfea9d36ce0e0e59ba1d8213829"
+    },
+    {
+      "path": "splanet/splanet.exe",
+      "bytes": 1619463,
+      "sha256": "c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"
+    },
+    {
+      "path": "splanet/splanetw.exe",
+      "bytes": 1141248,
+      "sha256": "e652319f606abea5bf0824df6c0cc75cb09d7f95ba8b2ab2bb4512e99317b199"
+    },
+    {
+      "path": "splanet/static6.rwb",
+      "bytes": 554848,
+      "sha256": "7262c9a2fed1147adc3ddd01222b3a36f2c46f0eeabfbc3c3214d5a98cff5cc5"
+    },
+    {
+      "path": "splanet/static8.rwb",
+      "bytes": 349088,
+      "sha256": "b78cb047d0a9341cddfae2ca1be84db1aad6a4824abfeeb830abf4edf8cb95ea"
+    },
+    {
+      "path": "splanet/terrain6.rwb",
+      "bytes": 28166744,
+      "sha256": "a09a287975fe82f4ea92dd8828aac8f09c6bedae6a31b1538a74b823f49269cc"
+    },
+    {
+      "path": "splanet/terrain8.rwb",
+      "bytes": 14338648,
+      "sha256": "06a2129325df73eec4fbc7fe71708d1fc540fd9a9024bd127eabf85609e1b79d"
+    },
+    {
+      "path": "splanet/texture6.rwb",
+      "bytes": 8804473,
+      "sha256": "eb43c8d7206f7728e02a80a7316be37a8a74684bd9b6afc81c095513b55cc500"
+    },
+    {
+      "path": "splanet/texture8.rwb",
+      "bytes": 4413561,
+      "sha256": "a2b59510b87451e719dbb9602d028b87e8393db56b996e9a25203454d72c3dc5"
+    },
+    {
+      "path": "splanet/title6.rwb",
+      "bytes": 1018345,
+      "sha256": "8740182fa1cd7d316579a79b4e473f58bc9e235334bdf719347b21b32dbde16b"
+    },
+    {
+      "path": "splanet/title8.rwb",
+      "bytes": 510833,
+      "sha256": "91d8b82d22a90902418ba3bf7116d0719143e33a9b9e8f15c6f4d8893187bbdf"
+    },
+    {
+      "path": "splanet/titlegeo.rwb",
+      "bytes": 149419,
+      "sha256": "9d56174126d75083ec5e85db97590da89bd9f80717cea501ef66e5b0ddaab646"
+    },
+    {
+      "path": "splanet/video/cut1.smk",
+      "bytes": 9896552,
+      "sha256": "276059d5ebb59981ebedd9629a524f72c09c950e430d376f584dc3e663d1935d"
+    },
+    {
+      "path": "splanet/video/cut2.smk",
+      "bytes": 6497716,
+      "sha256": "99b4225345c683f7df4e2ad661694a6777e97e04d352e426b7b1ffb1abfed8a6"
+    },
+    {
+      "path": "splanet/video/cut3.smk",
+      "bytes": 8626984,
+      "sha256": "ec485ff0f827e342b6e88465ec275a7a944af0ebc5ff342a5bf2c39a8f74975b"
+    },
+    {
+      "path": "splanet/video/cut4.smk",
+      "bytes": 5733536,
+      "sha256": "4a15ecb81eec5b5b2211580f51886a894541e3b155a5d963dc19cf48c64646de"
+    },
+    {
+      "path": "splanet/video/cut5.smk",
+      "bytes": 5900292,
+      "sha256": "0066f7dc11982d5604c17d0cde6b9452c52c1c1d7bbe4095c8d3368375d55a70"
+    },
+    {
+      "path": "splanet/video/cut6.smk",
+      "bytes": 7458552,
+      "sha256": "8bf32861192acbd97e2961a1da4d3f53696d234b1300409fab8b81579079de84"
+    },
+    {
+      "path": "splanet/video/cut7.smk",
+      "bytes": 4255388,
+      "sha256": "6233dfc7c8b2bfdb512cd8abf48839f7a6109cbad40c66e2f6fc7be4b5c162b3"
+    },
+    {
+      "path": "splanet/video/english/cut1.smk",
+      "bytes": 2817816,
+      "sha256": "7a1d6d08b30f04507d60d9d0a3ecda30800165d732e735af6e7cbb775164c2db"
+    },
+    {
+      "path": "splanet/video/english/cut2.smk",
+      "bytes": 2417764,
+      "sha256": "deed1c35d7c9aa1577530fec4709c64058dd2de9ca3ad81fc530e5e89ade0947"
+    },
+    {
+      "path": "splanet/video/english/cut3.smk",
+      "bytes": 3303172,
+      "sha256": "8929c8a788f79045e58a86559ef45f1e54dbb1351367df23b519d8e8f64e385e"
+    },
+    {
+      "path": "splanet/video/english/cut4.smk",
+      "bytes": 2093752,
+      "sha256": "b8c5c59350564b567ebdbf18aff1f464300118eddbce66af5a0ec3426562e899"
+    },
+    {
+      "path": "splanet/video/english/cut5.smk",
+      "bytes": 2471644,
+      "sha256": "1636eb5984fbcce63e43285b5e75f9ec7d5642f02cd39a6944bfc69d0e02fd93"
+    },
+    {
+      "path": "splanet/video/english/cut6.smk",
+      "bytes": 2791192,
+      "sha256": "bfc1522d399f3222b6f3ef3f494a69fbe7ac8245f055ca471ebd65aa8f28b584"
+    },
+    {
+      "path": "splanet/video/english/cut7.smk",
+      "bytes": 1570432,
+      "sha256": "4f41eefdead9e60c787f8857617525a1c4941962d0c20e1e31a8d0ba632e2626"
+    },
+    {
+      "path": "splanet/video/english/intro.smk",
+      "bytes": 20653724,
+      "sha256": "6dbb50eaf267bcc208a38a357a0ccd7b20ee158e4e090312953f232b816d2867"
+    },
+    {
+      "path": "splanet/video/english/logo.smk",
+      "bytes": 277412,
+      "sha256": "14775eec7c304fb308855da28c6ac0b789c1fe73ce960cfb7072f06f42f42729"
+    },
+    {
+      "path": "splanet/video/english/m1st1.smk",
+      "bytes": 2523236,
+      "sha256": "45c24aab2e3826182b0113b36d725cc8f4c185e06a15da7972f3004322a99426"
+    },
+    {
+      "path": "splanet/video/english/m1st2.smk",
+      "bytes": 3018112,
+      "sha256": "edf0448fd5887e42017b8a7312e433231c2d1bc877aa94679118428df678e621"
+    },
+    {
+      "path": "splanet/video/english/m1st3.smk",
+      "bytes": 2376108,
+      "sha256": "ad3e101ea0b625763b5021f067acd1b9d96be9aac3ce42ae11b40da61119ceb1"
+    },
+    {
+      "path": "splanet/video/english/m2st1.smk",
+      "bytes": 3178516,
+      "sha256": "74f667195312e82cbb7e81ce2e8228f5fb1dde6a40a2bdde325b22448c8ed6e4"
+    },
+    {
+      "path": "splanet/video/english/m2st2.smk",
+      "bytes": 3126528,
+      "sha256": "d62c481c953f05d7322ea8cc4f862864eac64bdc8f8c93afc02d9fd451f20628"
+    },
+    {
+      "path": "splanet/video/english/m2st3.smk",
+      "bytes": 2685064,
+      "sha256": "380408c2d3e076ac4bc3105481b7d1a3b059337715dc2e12a20ea9d45decfce7"
+    },
+    {
+      "path": "splanet/video/english/m3st1.smk",
+      "bytes": 2910656,
+      "sha256": "e8221c25b6b4e49bf3027d036edd18d76c6132b12855988689b5f54080264790"
+    },
+    {
+      "path": "splanet/video/english/m3st2.smk",
+      "bytes": 2250536,
+      "sha256": "104639262221006b376dc53b2d7486bf9b757015ce84872fb1aebee0405d4677"
+    },
+    {
+      "path": "splanet/video/english/m3st3.smk",
+      "bytes": 2770228,
+      "sha256": "d368351f78f9aa086f34ccfa4ec772fb82698f21952c22d179ecf394e559f23c"
+    },
+    {
+      "path": "splanet/video/english/m4st1.smk",
+      "bytes": 2818640,
+      "sha256": "ba5ebd157f13031356be8171b4ecbe87607ff1a7b817fd8a1e4fdf025b8b163f"
+    },
+    {
+      "path": "splanet/video/english/m4st2.smk",
+      "bytes": 2957096,
+      "sha256": "e4b88127fab6e37a8044aa2cc579a6a3c3e7b187ab2294a5e01734a193619555"
+    },
+    {
+      "path": "splanet/video/english/m4st3.smk",
+      "bytes": 2410104,
+      "sha256": "4261b9af7232935f14c76883587b9565ec45ddaee841bdff272a73bf712e2670"
+    },
+    {
+      "path": "splanet/video/english/m5st1.smk",
+      "bytes": 3523356,
+      "sha256": "86ec61b8d9c727a7170c02e6126f39247c1212a49e8650516ee70b87b8391b19"
+    },
+    {
+      "path": "splanet/video/english/m5st2.smk",
+      "bytes": 3387044,
+      "sha256": "b069c8dc74433a3d1c18fef5bbdf5a4faf383443a1aec50f60b6b63496258d0c"
+    },
+    {
+      "path": "splanet/video/english/m5st3.smk",
+      "bytes": 3068512,
+      "sha256": "b24c301ec2aecc05825987a1bc8fdc3c0057c6d71c34fab75addd043884eb635"
+    },
+    {
+      "path": "splanet/video/english/m6st1.smk",
+      "bytes": 3089724,
+      "sha256": "dd50e0719f592b3855bfefe8970ef937e2f72685fc2e3bee42f4dad264ed4943"
+    },
+    {
+      "path": "splanet/video/english/m6st2.smk",
+      "bytes": 1963288,
+      "sha256": "4334130d13a0703cc25cc91d4a02598ac4b1090e8d56e35f9bfba7c76cc896f8"
+    },
+    {
+      "path": "splanet/video/english/m6st3.smk",
+      "bytes": 3214884,
+      "sha256": "7b36b516e6813a09183baca6a3a6a286f93ebe38b50b9d7283e580d1a6a53697"
+    },
+    {
+      "path": "splanet/video/english/outro.smk",
+      "bytes": 2592756,
+      "sha256": "bf24de298b75921e112cfbc4297ef0e05f74de5a6f2cfb4949f3e0a818c26f68"
+    },
+    {
+      "path": "splanet/video/english/virgin.smk",
+      "bytes": 3289284,
+      "sha256": "9f4e45b776b2a62389b4938f709eba5af1087eadbdb351ab8e2cc2c09c4dded1"
+    },
+    {
+      "path": "splanet/video/intro.smk",
+      "bytes": 68608908,
+      "sha256": "8071368512d80ef4b06bc97b01e3b5138a44702baddc79b21e34c556e71c3e21"
+    },
+    {
+      "path": "splanet/video/italian/cut1.smk",
+      "bytes": 2826172,
+      "sha256": "e908ce749cc5a41e24db9dc97cc1c79a892b2c6af6543c63713b4747a1fe658b"
+    },
+    {
+      "path": "splanet/video/italian/cut2.smk",
+      "bytes": 2425420,
+      "sha256": "a385a25acd38e3c9ad15fc49c2bb5ddba484ccb88ad8370af85c83098c8015f7"
+    },
+    {
+      "path": "splanet/video/italian/cut3.smk",
+      "bytes": 3316496,
+      "sha256": "50f6ad5aa9883f80d8058fd5ad6bdbc5059d84a7dab433d52a67946172b74f37"
+    },
+    {
+      "path": "splanet/video/italian/cut4.smk",
+      "bytes": 2104636,
+      "sha256": "af713dce4731bd6a144cb51f50702676b9684b89f632017f70a6fb4ffcb8d376"
+    },
+    {
+      "path": "splanet/video/italian/cut5.smk",
+      "bytes": 2465916,
+      "sha256": "ee1bed4b3a1024b0866fda8f49839c91af65c1c458740ae36c7cdb8960448fb4"
+    },
+    {
+      "path": "splanet/video/italian/cut6.smk",
+      "bytes": 2805208,
+      "sha256": "3ac643dc9c543fb71804f2fd3308c53f1133fd945a113799c01d1b205d0f3c3d"
+    },
+    {
+      "path": "splanet/video/italian/cut7.smk",
+      "bytes": 1570432,
+      "sha256": "4f41eefdead9e60c787f8857617525a1c4941962d0c20e1e31a8d0ba632e2626"
+    },
+    {
+      "path": "splanet/video/italian/intro.smk",
+      "bytes": 20607248,
+      "sha256": "b2f2137293d3823bbdd5b7931196a61e5746372135650760ba017b2d9ae36848"
+    },
+    {
+      "path": "splanet/video/italian/logo.smk",
+      "bytes": 277412,
+      "sha256": "14775eec7c304fb308855da28c6ac0b789c1fe73ce960cfb7072f06f42f42729"
+    },
+    {
+      "path": "splanet/video/italian/m1st1.smk",
+      "bytes": 2545148,
+      "sha256": "38f69cf200e674f82a44986c16137bc8e87ebfc45ff9a883a5377d818f8aae1c"
+    },
+    {
+      "path": "splanet/video/italian/m1st2.smk",
+      "bytes": 3011608,
+      "sha256": "01d2a88e16db3ec81d7498c86670c6d7fc63af216872012b6b46b40a86deea81"
+    },
+    {
+      "path": "splanet/video/italian/m1st3.smk",
+      "bytes": 2380656,
+      "sha256": "908b4ca911381ebd60591723bd0092c0c9bb45820c3be40e4946147c536e47cc"
+    },
+    {
+      "path": "splanet/video/italian/m2st1.smk",
+      "bytes": 3172084,
+      "sha256": "969ac77363e7af4fb0a2b1afb8d92c66d209be2df16269cf1bbc1efb60ac6cea"
+    },
+    {
+      "path": "splanet/video/italian/m2st2.smk",
+      "bytes": 3134476,
+      "sha256": "85264b6a7d1a256e3010ea59e2a4b3dafb5a7c87a39fa121800a3262e5a6700b"
+    },
+    {
+      "path": "splanet/video/italian/m2st3.smk",
+      "bytes": 2671084,
+      "sha256": "b8349f5a607c67c585257119c8c0e935a635607abf4ffd421645df23ce4f55ed"
+    },
+    {
+      "path": "splanet/video/italian/m3st1.smk",
+      "bytes": 2874784,
+      "sha256": "7517dcc351fa0bd655f7a0b1181536392ba793f0dc3d4e1e1d7e9822097aca5e"
+    },
+    {
+      "path": "splanet/video/italian/m3st2.smk",
+      "bytes": 2250560,
+      "sha256": "2f2928b901195be599b144300658cda247b71890131f0708b9c0e11a800024e8"
+    },
+    {
+      "path": "splanet/video/italian/m3st3.smk",
+      "bytes": 2755704,
+      "sha256": "55dbd30346473649a91a136520b1c26d27d6f3ca583511e8549b1446ea331de6"
+    },
+    {
+      "path": "splanet/video/italian/m4st1.smk",
+      "bytes": 2808664,
+      "sha256": "eb8e88f32e4a9f7d5325b3a1ab0e4168024c136dbd24baeb8dee9cedafd8edc9"
+    },
+    {
+      "path": "splanet/video/italian/m4st2.smk",
+      "bytes": 2950872,
+      "sha256": "3118a405c4e8c2e2ee03325290175d58c42a8f5dce7ef31b3817498dab32ca20"
+    },
+    {
+      "path": "splanet/video/italian/m4st3.smk",
+      "bytes": 2412908,
+      "sha256": "5f6b1d95f8de00eeb7c61e0c8aef07799aa31956c35b067487f8a83925e33ad0"
+    },
+    {
+      "path": "splanet/video/italian/m5st1.smk",
+      "bytes": 3526180,
+      "sha256": "fa8789b2cbee05d5c845dd0f6a7f8f2fe6e2cd280402b9e0680422c71aad94f5"
+    },
+    {
+      "path": "splanet/video/italian/m5st2.smk",
+      "bytes": 3352300,
+      "sha256": "0d7f4d1a7d8889b1ca807e1713a67e703bfccb921d8d2d69f0c778b49fa58ec7"
+    },
+    {
+      "path": "splanet/video/italian/m5st3.smk",
+      "bytes": 3056076,
+      "sha256": "758e85a03eeceeecc7b9552f5487361c73905bd7575443c92be92bf3b3484991"
+    },
+    {
+      "path": "splanet/video/italian/m6st1.smk",
+      "bytes": 3096856,
+      "sha256": "288581240ac423e5054667dc5fa7f8ba2bdb856727a17e9da9f729c589074eb6"
+    },
+    {
+      "path": "splanet/video/italian/m6st2.smk",
+      "bytes": 1951092,
+      "sha256": "3ead50f629b7931a2058eabc8fcb15d35c13b6c0d409f285f439c45f12d213e0"
+    },
+    {
+      "path": "splanet/video/italian/m6st3.smk",
+      "bytes": 3204800,
+      "sha256": "18b471d2cf75f580736694ccc607bed6902d1d6b80fc2a9a9204b86d080a6440"
+    },
+    {
+      "path": "splanet/video/italian/outro.smk",
+      "bytes": 2592756,
+      "sha256": "bf24de298b75921e112cfbc4297ef0e05f74de5a6f2cfb4949f3e0a818c26f68"
+    },
+    {
+      "path": "splanet/video/italian/virgin.smk",
+      "bytes": 3289284,
+      "sha256": "9f4e45b776b2a62389b4938f709eba5af1087eadbdb351ab8e2cc2c09c4dded1"
+    },
+    {
+      "path": "splanet/video/logo.smk",
+      "bytes": 662352,
+      "sha256": "28dc8ebf634cdb5302c9e665813c1edff5318c366713caa35a0bd37bf3f88dee"
+    },
+    {
+      "path": "splanet/video/m1st1.smk",
+      "bytes": 6821764,
+      "sha256": "18cff07d8c7cda55a4702b13f161f6dcae125f3cf524321c9e40326d2ae84cd5"
+    },
+    {
+      "path": "splanet/video/m1st2.smk",
+      "bytes": 8018004,
+      "sha256": "6fbe6e12681f409bdc55eb57938f605a6e6d3816eda7132a9749c90992c9d374"
+    },
+    {
+      "path": "splanet/video/m1st3.smk",
+      "bytes": 6543028,
+      "sha256": "cf2d4a62d5a6e63c86544ca0ea1bdf2a172cf7f8ababb05da490501140baceb1"
+    },
+    {
+      "path": "splanet/video/m2st1.smk",
+      "bytes": 7340836,
+      "sha256": "bfcb77e93523e3cca11b38eefdb740e6303844e02193733dcbf44dd7822ef8ac"
+    },
+    {
+      "path": "splanet/video/m2st2.smk",
+      "bytes": 6837312,
+      "sha256": "a2f6b94a3227c1196b951057538f8737d38201418fa5340d6f5cb963b6e5b0c1"
+    },
+    {
+      "path": "splanet/video/m2st3.smk",
+      "bytes": 6596476,
+      "sha256": "5c476f223f5303d6e9ff42b41c02ebcc22af84d788fa4fc0b55ec3aad8b2ab55"
+    },
+    {
+      "path": "splanet/video/m3st1.smk",
+      "bytes": 7042824,
+      "sha256": "f50e4d96085ef97f052dc45423dd0f1182820ba7acbd6ad06219f37b9269d724"
+    },
+    {
+      "path": "splanet/video/m3st2.smk",
+      "bytes": 5208980,
+      "sha256": "c1253fa87d4f523e43cac147203bee04ac70c31ac026d664e584c92c041b839a"
+    },
+    {
+      "path": "splanet/video/m3st3.smk",
+      "bytes": 7083296,
+      "sha256": "e24064bbbca07811212d2dfd84af4e39051a929baf841ca50b452d38f0c0f795"
+    },
+    {
+      "path": "splanet/video/m4st1.smk",
+      "bytes": 6882908,
+      "sha256": "be3e36b82c8d5e826c8bc130dd8058036a2e87916dac105e9bed6bd96c8be605"
+    },
+    {
+      "path": "splanet/video/m4st2.smk",
+      "bytes": 7240792,
+      "sha256": "95e47b628f66ae73ed0acb73bb8b21d4f073fb3d89047fd1f4bab60925a2744a"
+    },
+    {
+      "path": "splanet/video/m4st3.smk",
+      "bytes": 6125568,
+      "sha256": "ee1e309de2bb8986c13f263e48ef012d62b3149c9e6753930f24d96f22df3a82"
+    },
+    {
+      "path": "splanet/video/m5st1.smk",
+      "bytes": 7647320,
+      "sha256": "4c53b000016deaf9caeee63ad55dce8a32b81a01a77ddbef3902270a7bd8d689"
+    },
+    {
+      "path": "splanet/video/m5st2.smk",
+      "bytes": 7151996,
+      "sha256": "4eb681a8f96614756096ec82a286800ea87c662063d0dfbced4fd1d074b8de51"
+    },
+    {
+      "path": "splanet/video/m5st3.smk",
+      "bytes": 6952012,
+      "sha256": "7770e48da24b824320f75d0d33fd65839367858b7962422c533bb258d9b3ec0f"
+    },
+    {
+      "path": "splanet/video/m6st1.smk",
+      "bytes": 7613224,
+      "sha256": "dfa76bd220585d27500cf837886cf732046d29d3d012a2c3d529854133092858"
+    },
+    {
+      "path": "splanet/video/m6st2.smk",
+      "bytes": 5299376,
+      "sha256": "8ac2923410b58f5e509f2eee8685568dddd6947d5827babc243209d49b52eeee"
+    },
+    {
+      "path": "splanet/video/m6st3.smk",
+      "bytes": 7148816,
+      "sha256": "064e9b10d588923e0849f7279127de0df7d7d5a3fc6e824ce46afaa44e83a6ac"
+    },
+    {
+      "path": "splanet/video/outro.smk",
+      "bytes": 9190620,
+      "sha256": "a7f078008bc34f4fe236a2fd63a4cda1877b342d1a767ab64c69771a49ff7212"
+    },
+    {
+      "path": "splanet/video/spanish/cut1.smk",
+      "bytes": 2857312,
+      "sha256": "1fd1d6813165e1e7329481ee0abdfdad436246f0d1df16dbd6fd046294984349"
+    },
+    {
+      "path": "splanet/video/spanish/cut2.smk",
+      "bytes": 2420168,
+      "sha256": "a1f4dbe0cdc0479605e0c6a538067d6c49a690af4dcefbefaf0d71cdb8f4cf2c"
+    },
+    {
+      "path": "splanet/video/spanish/cut3.smk",
+      "bytes": 3305032,
+      "sha256": "cc7f8aab4eb4fa24a6d4b80958b77819109e59264d0db71738007ae16a7527c1"
+    },
+    {
+      "path": "splanet/video/spanish/cut4.smk",
+      "bytes": 2093648,
+      "sha256": "e3b6827b85e9fc2304751df023956ff0f64fd749f9cf8869245ff5c026d15ae5"
+    },
+    {
+      "path": "splanet/video/spanish/cut5.smk",
+      "bytes": 2462060,
+      "sha256": "6e46c753743ea0276c762eb2a11ec4c330b2f26a8ebf81aebcd74cc8c502a047"
+    },
+    {
+      "path": "splanet/video/spanish/cut6.smk",
+      "bytes": 2787140,
+      "sha256": "d532deaae700c964a4bb25bfd02e199077bd33d7f075935b058a08d22160f628"
+    },
+    {
+      "path": "splanet/video/spanish/cut7.smk",
+      "bytes": 1570432,
+      "sha256": "4f41eefdead9e60c787f8857617525a1c4941962d0c20e1e31a8d0ba632e2626"
+    },
+    {
+      "path": "splanet/video/spanish/intro.smk",
+      "bytes": 20566652,
+      "sha256": "8979444a64f4fa7fd375371d97cb0f1d85a6d73a8ccd6f4cd8ebae7209e1d7b9"
+    },
+    {
+      "path": "splanet/video/spanish/logo.smk",
+      "bytes": 277412,
+      "sha256": "14775eec7c304fb308855da28c6ac0b789c1fe73ce960cfb7072f06f42f42729"
+    },
+    {
+      "path": "splanet/video/spanish/m1st1.smk",
+      "bytes": 2521380,
+      "sha256": "2421da16d35ac32a67581bbcbdf554362aab7066e9cbf8c4a8f12d1d49421828"
+    },
+    {
+      "path": "splanet/video/spanish/m1st2.smk",
+      "bytes": 3002368,
+      "sha256": "92bb28cf561c378a3e0caf4d205b368d7152b455f358d6ac09237cdb7308a00b"
+    },
+    {
+      "path": "splanet/video/spanish/m1st3.smk",
+      "bytes": 2386988,
+      "sha256": "80e1c39c071f319e18930afb4666800653d9407000c7185ddd03af0d804a5a0d"
+    },
+    {
+      "path": "splanet/video/spanish/m2st1.smk",
+      "bytes": 3174816,
+      "sha256": "ab0391cc4f7868f91a0aaaff62d9dbb0d16c8d695a4ef3237173e4ee7126f795"
+    },
+    {
+      "path": "splanet/video/spanish/m2st2.smk",
+      "bytes": 3151768,
+      "sha256": "9806703205a30dc8750f76b483b466f9a554dfc570d1711a587e8f6375872e25"
+    },
+    {
+      "path": "splanet/video/spanish/m2st3.smk",
+      "bytes": 2681088,
+      "sha256": "8c46a5d4cc0f04a8c73da320bf2f78074de383f27bd8b4aa25508a1cd2633e4e"
+    },
+    {
+      "path": "splanet/video/spanish/m3st1.smk",
+      "bytes": 2899132,
+      "sha256": "27c30d7360e9ed10363e5d7e128998b6159c3ab72b35ec3fb0bc7acc4929f67c"
+    },
+    {
+      "path": "splanet/video/spanish/m3st2.smk",
+      "bytes": 2243004,
+      "sha256": "af7a8b6048fd8edee859ac61cdf818a870942d75467fcc8c0d7a49ec950b480f"
+    },
+    {
+      "path": "splanet/video/spanish/m3st3.smk",
+      "bytes": 2778896,
+      "sha256": "ee9d5b2cff57056413342141136db2d8b5f1b227002cc54ef58b44f978df7d2d"
+    },
+    {
+      "path": "splanet/video/spanish/m4st1.smk",
+      "bytes": 2820272,
+      "sha256": "b4afba9e95c13f36eb7a1e0dda3b7b394fd1bf0288565b2fd465281a06378c0f"
+    },
+    {
+      "path": "splanet/video/spanish/m4st2.smk",
+      "bytes": 2954688,
+      "sha256": "f3ddf78c878769d69970424b3b5702896425d9c1d9c176de72fbed726d0d442e"
+    },
+    {
+      "path": "splanet/video/spanish/m4st3.smk",
+      "bytes": 2417208,
+      "sha256": "32bc7e14bd18bc8ee6177a5eec66dd4d3f6e88705a6fb4dcb63e8e9860854078"
+    },
+    {
+      "path": "splanet/video/spanish/m5st1.smk",
+      "bytes": 3537700,
+      "sha256": "7bc7fe8a1816b94f57a587beee7210338e56f91fb5e691e71403f68e78c2f039"
+    },
+    {
+      "path": "splanet/video/spanish/m5st2.smk",
+      "bytes": 3384036,
+      "sha256": "fdc70b381e7a7f1129782ef800601ae97b74056f5842d6f2d1b2436119914418"
+    },
+    {
+      "path": "splanet/video/spanish/m5st3.smk",
+      "bytes": 3075212,
+      "sha256": "fc621e01db54d5afe8138620a375384b96db810b2271a1e5de6a803ba49286bf"
+    },
+    {
+      "path": "splanet/video/spanish/m6st1.smk",
+      "bytes": 3099756,
+      "sha256": "055461b104df0214e9f7295133a425abb07d2f4d3b8c4e55b3b76c495f2b6bb3"
+    },
+    {
+      "path": "splanet/video/spanish/m6st2.smk",
+      "bytes": 1953396,
+      "sha256": "e6ef28d9153c38a3781c5fe92cfded03cea15dfd3aef6ffcdd430f7133e65b9e"
+    },
+    {
+      "path": "splanet/video/spanish/m6st3.smk",
+      "bytes": 3216728,
+      "sha256": "adba65b1e8410a379f776b9e94188cb4ff3a18409de3f7cc7c317a13e891f5e7"
+    },
+    {
+      "path": "splanet/video/spanish/outro.smk",
+      "bytes": 2592756,
+      "sha256": "bf24de298b75921e112cfbc4297ef0e05f74de5a6f2cfb4949f3e0a818c26f68"
+    },
+    {
+      "path": "splanet/video/spanish/virgin.smk",
+      "bytes": 3289284,
+      "sha256": "9f4e45b776b2a62389b4938f709eba5af1087eadbdb351ab8e2cc2c09c4dded1"
+    },
+    {
+      "path": "splanet/video/virgin.smk",
+      "bytes": 5982792,
+      "sha256": "290b99edd196746f8beac75757d4ce822138c2577267c9b75fd979e2fbeea925"
+    },
+    {
+      "path": "verite/spd3d.voh",
+      "bytes": 192517,
+      "sha256": "b058a428534d98a54f5a30ee539b5fa61b53edf3079c3a3d1166235f953c5c92"
+    },
+    {
+      "path": "verite/spverite.exe",
+      "bytes": 1474988,
+      "sha256": "e87b704384f933b21244fd8223c314631bbf8b2832e7422cd1d232707c40d040"
+    },
+    {
+      "path": "verite/spverite.pif",
+      "bytes": 967,
+      "sha256": "a08d6d5229ab229e09fd9769c010da42dd6af46ec721c5516070676fde12690a"
+    },
+    {
+      "path": "voodoo/fxmemmap.vxd",
+      "bytes": 6096,
+      "sha256": "d5c669b38ab398baa2145adb067370237465288ee79028dfc27634325808dfc9"
+    },
+    {
+      "path": "voodoo/glide.dll",
+      "bytes": 274432,
+      "sha256": "3e81d822a0185766089948114853ce4dfc4fb5ab76f2fdca5f81ce441f29986e"
+    },
+    {
+      "path": "voodoo/rwdlvood.dll",
+      "bytes": 101376,
+      "sha256": "1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de"
+    },
+    {
+      "path": "voodoo/spvoodoo.exe",
+      "bytes": 835584,
+      "sha256": "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f"
+    },
+    {
+      "path": "voodoo/sst1init.dll",
+      "bytes": 279356,
+      "sha256": "39e0db0a80f7ce103db15ec06b1d8a906e755cec6f2df416645e519f9982ec7f"
+    }
+  ]
+}

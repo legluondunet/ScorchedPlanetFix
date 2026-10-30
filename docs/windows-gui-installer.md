@@ -55,7 +55,10 @@ disabled until the selected installation is ready.
 ## Patch details
 
 The only supported patch fixes the **palette fade timer starvation /
-Go mission-launch hang** on modern CPUs.
+Go mission-launch hang** on modern CPUs. It has been validated **only
+for the original US executable**; on either European edition the FadeLow
+checkbox and Apply button remain disabled until a separate patch has been
+researched and validated.
 
 | Item | Known verified value |
 | --- | --- |
@@ -92,8 +95,13 @@ The preflight checks:
   trees, with individual SHA-256 comparison between bytes read from the
   ISO and bytes written to disk.
 
-The installer **rejects incompatible editions**, including the
-distinct Matrox Mystique release or a game EXE of unknown revision.
+The installer recognizes three **owner-inventoried 3dfx CD editions** using
+exact EXE + GEOMETRY + RWDLVOOD SHA-256 signatures: US (InstallKey 1.08),
+Europe EN/ES/IT (InstallKey 1.06), and Europe FR/DE (InstallKey 1.06).
+The keys are reported by original `autorun.inf`, not independently proven
+executable version resources. See [CD fingerprints](cd-editions.md).
+The installer **rejects incompatible or mixed file sets**, including
+the distinct Matrox Mystique release or a game EXE of unknown revision.
 It does **not** claim to verify every file against an authoritative
 full-disc hash manifest: that reference data is not yet available.
 Consequently, files that have been altered within an otherwise

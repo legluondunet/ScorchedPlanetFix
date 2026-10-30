@@ -37,6 +37,17 @@ structural validity, exact EXE/DLL identities and extracted hashes,
 but it cannot prove every data asset is identical to a retail master.
 The ISO workflow is experimental until tested with the owner's image.
 
+## Supported CD fingerprints
+
+Three owner-supplied edition inventories are documented in
+[CD edition fingerprints](docs/cd-editions.md): US (InstallKey 1.08),
+EN/ES/IT and FR/DE (InstallKey 1.06). Exact core file hashes are
+used to identify the edition. **FadeLow is still supported only for
+the verified US executable**, not the two European binaries.
+The complete per-file reference inventories are preserved under
+`data/cd-inventories/`. No claim of independent retail-master authenticity
+or of successful European gameplay testing is made.
+
 ## Links
 
 - [Detailed Windows GUI instructions](docs/windows-gui-installer.md)
