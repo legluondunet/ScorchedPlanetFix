@@ -1,6 +1,6 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
-Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE is still experimental and has not been gameplay-validated.** This report does not imply all missions, cinematics, or both wrappers have been tested.
+Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE failed the owner's gameplay test (reported 2026-10-30), with the exact failure symptom still unspecified.** This report does not imply all missions, cinematics, or both wrappers have been tested.
 
 This analysis used the two owner-supplied original executables, without modifying them, and compares the palette-fade mechanism with the previously validated US FadeLow 4-byte patch. No original or patched commercial executable is stored in this repository.
 
@@ -50,3 +50,16 @@ The owner-supplied INI also contains `keymap`, `gamma`, `joystick`, `settings`, 
 The installation workflow explicitly omits obsolete original 3dfx hardware drivers `glide.dll`, `sst1init.dll`, and `fxmemmap.vxd`, rather than shipping or installing historic drivers. An external modern Glide implementation remains necessary.
 
 **Confidence boundary:** the owner's original EN/ES/IT installation was tested in-game. The fully automated new installer, GUI language selection and patch/restore integration remain subject to CI and owner tests.
+
+## Negative FR/DE gameplay result (2026-10-30)
+
+The owner reports: **« l'executable patché ne fonctionne pas pour le FR-DE »**. This is a negative result for the privately supplied FR/DE four-byte FadeLow prototype, not evidence that the original unmodified FR/DE executable or manual installation also fails. The precise symptom (launch failure, crash, black screen, Go freeze, missing videos, etc.) has not yet been supplied.
+
+Reinspection of the locally supplied original and generated candidate confirms:
+- Original SHA-256: `eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72`.
+- Candidate SHA-256: `5373c7b24389556b7466932695e7e2d1076531105f9bb879749e783a64898d90`.
+- Four changed bytes only, offset `0x48A6D..0x48A70`: `17 B7 D1 38` to `AC C5 27 37`; file size is unchanged, 836608 bytes.
+- Both original European fade functions have comparable machine-code structure, but that does not guarantee equivalent game/runtime behavior.
+- FR/DE CD resources include `SPLANET/FRENCH.REZ` and `SPLANET/GERMAN.REZ`, while EN/ES/IT includes `ENGLISH.REZ`, `ITALIAN.REZ`, `SPANISH.REZ`. The corresponding `language` configuration must select only files present in the edition.
+
+**Disposition:** maintain the FR/DE safety gate; do not ship or enable the FR/DE patch. Determine whether the *unmodified* original FR/DE EXE runs in the same test installation, then record the failure stage and any error text before proposing a new binary change. Neither the cause nor a fix is established yet.
