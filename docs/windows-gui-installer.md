@@ -49,22 +49,24 @@ or commercial DLLs are included.
    personal `settings`. Defaults are English for US and EN/ES/IT, French
    for FR/DE. The original game's language-resource table maps
    English=1, French=2, German=3, Italian=4, Spanish=5.
-8. Select the edition-specific correction. US and EN/ES/IT offer
-   **FadeLow** (four bytes); FR/DE offers **FadeLow + détection CD**
-   (four FadeLow bytes plus two media-detection bytes).
-   Hover over the checkbox to see the detailed explanation.
-9. Click **Appliquer**. The exact original EXE SHA-256, PE address
-   mapping, expected old bytes, and final patched EXE SHA-256 are all
-   verified. The program creates a same-edition original backup, refuses
-   mismatched files and shows a result dialog.
-10. Click **Lancer**. The original game's EXE starts in its installation
+8. **The correct edition-specific fix is automatically and obligatorily
+   applied after extraction**: US and EN/ES/IT receive 4-byte FadeLow;
+   FR/DE receives 6-byte FadeLow + CD-media detection. The unmodified
+   `SPVOODOO.EXE` is saved as `SPVOODOO.EXE.bak` **before** patching.
+   Exact source/output SHA-256 hashes and expected PE bytes are checked.
+   If extraction or patching fails, the staged installation is discarded,
+   so no incomplete `splanet` folder is published.
+9. Click **Lancer**. The original game's EXE starts in its installation
    directory. A compatible Glide implementation (e.g. separately
    installed nGlide) must be available; this patcher does not
    bundle or install it.
 
 The interface is responsive during extraction and patching through a
-worker thread and messages to the GUI. `Appliquer` and `Lancer` are
-disabled until the selected installation is ready.
+worker thread and messages to the GUI. There is no manual patch checkbox
+or `Appliquer` button; `Lancer` is disabled until the mandatory
+patch has succeeded. When an existing installation is detected, its
+original supported EXE is also backed up and patched automatically.
+Unknown EXEs are refused.
 
 ## Patch details
 
@@ -86,13 +88,15 @@ The new GUI workflow remains untested end-to-end.
 | File offset | `0x489CD` |
 | Original bytes | `17 B7 D1 38` |
 | Patched bytes | `AC C5 27 37` |
-| Backup | `splanet/SPVOODOO.EXE.ScorchedPlanetFix-original.bak` |
+| Backup | `splanet/SPVOODOO.EXE.bak` (created before any modification) |
 
-The change itself is user-validated on Linux/Wine/nGlide, but this
-new graphical Rust program must still be tested on the user's actual
-ISO and game before public release. If `Appliquer` is clicked a
-second time after success, it recognizes the patched file and
-verified backup and makes no change.
+The independently tested patch binaries work on Linux/Wine/nGlide, but this
+new graphical Rust program must still be tested on the owner's actual
+disc images before public release. If the program is run again, it
+recognizes the already patched executable, verifies its `.bak`
+and makes no further change. A verified older backup named
+`SPVOODOO.EXE.ScorchedPlanetFix-original.bak` can be migrated safely
+to the new `.bak` name without deleting the older copy.
 
 ## ISO validation scope — important
 
@@ -226,6 +230,43 @@ If the application is forcibly killed mid-conversion, a leftover
 hidden temporary ISO may require manual deletion.
 
 **No conversion or mounting step is required from the user for these
-supported data tracks.** Do not claim all original mixed-mode CD music
-is preserved, and do not claim end-to-end testing with the owner's
-particular CUE/BIN dumps before those tests are performed.
+supported data tracks.** The owner confirms Scorched Planet has no
+CD audio tracks in the studied editions. The installer therefore needs
+only their data track. The code does not attempt CDDA emulation.
+Do not claim end-to-end testing with the owner's particular CUE/BIN
+dumps before those tests are performed.
+
+## Command-line mode (--nogui)
+
+The same Windows x64 binary can be used as a headless installer with
+no window opening. The default working directory is the **current
+directory**, and all extracted files are written to `./splanet`:
+
+```powershell
+.\ScorchedPlanetFix.exe --nogui
+.\ScorchedPlanetFix.exe --nogui "C:\images\Scorched Planet.iso"
+.\ScorchedPlanetFix.exe --nogui "C:\images\Scorched Planet.cue"
+.\ScorchedPlanetFix.exe --nogui "C:\images\Scorched Planet.cue" "C:\images\Scorched Planet.bin"
+```
+
+With no image argument, look for exactly one `.iso` or `.cue` in the
+current directory (a CUE's BIN is resolved from its FILE entry).
+Optional positional `.bin` is allowed only after a CUE and its name
+must match that CUE's declared data-track BIN filename. If there
+is an existing `splanet` folder and no explicit image, the program
+verifies and automatically patches its original EXE; if a particular
+image was specified, it refuses to overwrite the existing folder.
+
+The same hash verification, language defaults, stage/rollback behavior,
+mandatory automatic patch and `SPVOODOO.EXE.bak` apply to both modes.
+CLI does not launch the game and uses no other options. Its log is
+`ScorchedPlanetFix.log` in the **current working directory**.
+Return status is zero on success and nonzero on failure. The EXE keeps
+the Windows GUI PE subsystem to avoid a console appearing in normal
+GUI mode; a calling terminal is used for CLI messages if available.
+When launching from scripts, explicitly await the process exit to
+obtain its exit status (e.g. PowerShell `Start-Process -Wait -PassThru`).
+
+The owner reports that the Scorched Planet CD variants have **no audio
+tracks**, so audio-track extraction or CDDA emulation is not necessary
+for this game.
