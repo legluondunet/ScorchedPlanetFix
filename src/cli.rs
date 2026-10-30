@@ -42,14 +42,14 @@ fn regular_input(path:&Path)->Result<(),String>{
 }
 /// Sends informational events to the caller's console and the file logger.
 /// No GUI is ever created by this function.
+fn emit(logger:&Logger,sink:&mut impl FnMut(&str),msg:&str){
+    logger.write(&format!("CLI: {msg}"));
+    sink(msg);
+}
 pub fn run(arguments:&[OsString],root:&Path,
     logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
     let args=parse_args(arguments)?;
-    let mut emit=|msg:&str|{
-        logger.write(&format!("CLI: {msg}"));
-        sink(msg);
-    };
-    let install=root.join("splanet");
+     let install=root.join("splanet");
     if install.is_symlink() {
         return Err("Dossier splanet : lien symbolique refusé".into());
     }
@@ -60,10 +60,10 @@ pub fn run(arguments:&[OsString],root:&Path,
         if !install.is_dir() || !install.join("SPVOODOO.EXE").is_file() {
             return Err("Dossier splanet incomplet : SPVOODOO.EXE absent".into());
         }
-        emit("Installation existante détectée. Vérification du correctif automatique…");
+        emit(logger,&mut sink,logger,&mut sink,"Installation existante détectée. Vérification du correctif automatique…");
         let outcome=scorched_planet_fix::execute(Action::Apply,&install.join("SPVOODOO.EXE"),None,true)?;
-        emit(&outcome);
-        emit("Terminé. SPVOODOO.EXE.bak contient l'exécutable original.");
+        emit(logger,&mut sink,logger,&mut sink,&outcome);
+        emit(logger,&mut sink,logger,&mut sink,"Terminé. SPVOODOO.EXE.bak contient l'exécutable original.");
         return Ok(());
     }
     let source=match args.image {
@@ -73,7 +73,7 @@ pub fn run(arguments:&[OsString],root:&Path,
     };
     regular_input(&source)?;
     if let Some(ref b)=args.bin {regular_input(b)?;}
-    emit(&format!("Image sélectionnée : {}",source.display()));
+    emit(logger,&mut sink,&format!("Image sélectionnée : {}",source.display()));
     let report=iso_install::install_image(&source,args.bin.as_deref(),&install,
         |done,total,status|{
             // Progress output is intentionally throttled to avoid a line for
@@ -84,11 +84,11 @@ pub fn run(arguments:&[OsString],root:&Path,
             }
         },
         |message|logger.write(message))?;
-    emit(&format!("Edition reconnue : {}. {} fichiers, {} octets de jeu.",
+    emit(logger,&mut sink,&format!("Edition reconnue : {}. {} fichiers, {} octets de jeu.",
         report.edition,report.files,report.bytes));
-    emit("Sauvegarde : splanet/SPVOODOO.EXE.bak");
-    emit(&format!("Correctif automatique : {}",report.patch_report));
-    emit("Installation et correctif terminés. Le jeu n'a pas été lancé.");
+    emit(logger,&mut sink,"Sauvegarde : splanet/SPVOODOO.EXE.bak");
+    emit(logger,&mut sink,&format!("Correctif automatique : {}",report.patch_report));
+    emit(logger,&mut sink,"Installation et correctif terminés. Le jeu n'a pas été lancé.");
     Ok(())
 }
 
