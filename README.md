@@ -35,7 +35,7 @@ Development takes place in **draft pull requests**; nothing is merged before bui
 
 The setup screen includes **Analyser le contenu du CD…**, which saves
 `ScorchedPlanet-CD-audit.txt`. This read-only report lists source file names and
-sizes and small textual `SETUP.INI` files. It helps reconstruct the original
+sizes and small textual `SETUP.INI` and `SPLANET.INI` files. It helps reconstruct the original
 InstallShield file map and investigate language-specific resources without modifying
 the source CD. See [installer audit instructions](docs/installer.md).
 
