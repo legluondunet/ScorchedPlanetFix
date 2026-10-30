@@ -50,7 +50,7 @@ It creates a read-only inventory of the selected source directory:
 
 - Relative file names and byte sizes, without the local absolute CD path.
 - Presence of `SPLANET`, `VOODOO`, `SPVOODOO.EXE`, `RWDLVOOD.DLL`, and `COMPRESS.BIN`.
-- Contents of textual `SETUP.INI` files of at most 128 KiB, to help compare editions and reconstruct legacy setup instructions. Binary or larger files are not embedded.
+- Contents of textual `SETUP.INI` and `SPLANET.INI` files of at most 128 KiB, to help compare editions and reconstruct legacy setup instructions. Binary or larger files are not embedded.
 
 The report does not extract archives, execute the 1996 setup, inspect the registry, or
 change the original CD copy. Only the explicitly chosen report destination is written.
