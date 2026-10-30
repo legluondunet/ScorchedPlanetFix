@@ -26,10 +26,10 @@ Both supplied European files are PE32 i386, ImageBase `0x00400000`, Windows GUI 
 
 ## Release gate and testing
 
-- The Windows x64 Rust GUI now offers exactly three hash-locked combinations: **US FadeLow only**, **EN/ES/IT FadeLow only**, and **FR/DE FadeLow + CD-media gate**. Each uses an exact original hash, known raw PE offsets, the expected old bytes, a known patched SHA-256 and matching original backup for reversible application.
+- The Windows x64 Rust CLI now supports exactly three hash-locked combinations: **US FadeLow only**, **EN/ES/IT FadeLow only**, and **FR/DE FadeLow + CD-media gate**. Each uses an exact original hash, known raw PE offsets, the expected old bytes, a known patched SHA-256 and matching original backup for reversible application.
 - Trial binaries are separate private output files, supplied only to the original owner via this conversation. **Do not add original or modified commercial EXEs to GitHub, CI, or a public release**.
 - Test using an isolated copy of each installed edition, keeping its original `SPVOODOO.EXE` untouched. Launch the alternate-name trial EXE via Lutris/Wine or Windows, repeat the previous Go/mission fade scenario and verify menu, mission transitions, playback, input and audio. Revert simply by selecting the original EXE again.
-- Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. The owner then confirmed the **combined** FR/DE six-byte test copy works. Both editions are eligible for their exact tested Rust patch/restore combinations; the new Rust GUI/installer itself still requires a separate end-to-end test.
+- Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. The owner then confirmed the **combined** FR/DE six-byte test copy works. Both editions are eligible for their exact tested Rust patch/restore combinations; the new Rust CLI installer and launch commands still require separate end-to-end tests.
 
 No modification to `main`; research and proposed changes are kept in draft PR #5.
 
@@ -43,13 +43,13 @@ The owner extracted the CD, copied `VOODOO` game files into `SPLANET` while excl
 - `language=4` (**Italian**) in the owner's example
 - `HighQualityVideo=1`
 
-We independently inspected the original European PE32 language-resource pointer table and x86 lookup indexed from `base + 4 * language`: `1=english.rez`, `2=french.rez`, `3=german.rez`, `4=italian.rez`, `5=spanish.rez`; index zero is null. For EN/ES/IT, only 1, 4 and 5 are actually present on the CD. For FR/DE, only 2 and 3 are present. Avoid offering missing language resources in the GUI.
+We independently inspected the original European PE32 language-resource pointer table and x86 lookup indexed from `base + 4 * language`: `1=english.rez`, `2=french.rez`, `3=german.rez`, `4=italian.rez`, `5=spanish.rez`; index zero is null. For EN/ES/IT, only 1, 4 and 5 are actually present on the CD. For FR/DE, only 2 and 3 are present. Do not configure resource languages missing from the detected edition.
 
 The owner-supplied INI also contains `keymap`, `gamma`, `joystick`, `settings`, and `name`. Whether all these are required for first launch is **not established**. The installer supplies the already established fallback `settings` and generic player name when absent; when they exist, it leaves them untouched. `keymap`, `gamma`, and `joystick` are not fabricated or reset. The user-specific absolute path, name and keymap are deliberately not copied into this public repository.
 
 The installation workflow explicitly omits obsolete original 3dfx hardware drivers `glide.dll`, `sst1init.dll`, and `fxmemmap.vxd`, rather than shipping or installing historic drivers. An external modern Glide implementation remains necessary.
 
-**Confidence boundary:** the owner's original EN/ES/IT installation was tested in-game. The fully automated new installer, GUI language selection and patch/restore integration remain subject to CI and owner tests.
+**Confidence boundary:** the owner's original EN/ES/IT installation was tested in-game. The fully automated CLI installer, language-default configuration and patch/restore integration remain subject to CI and owner tests.
 
 ## Negative FR/DE gameplay result (2026-10-30)
 
@@ -121,6 +121,6 @@ FadeLow + media-gate trial. The precise breadth of tested missions,
 cinematics, video and audio playback has not been documented.
 The combined six-byte candidate (and only that candidate) was promoted
 to the Rust edition-specific profile with exact SHA-256 checks, backup
-and restore. The GUI installer remains awaiting independent testing
+and restore. The CLI installer remains awaiting independent testing
 with a real FR/DE ISO. There is **no general-purpose NoCD patch**
 for US, EN/ES/IT, or unknown versions.
