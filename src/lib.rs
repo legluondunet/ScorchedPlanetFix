@@ -494,9 +494,34 @@ mod tests {
     fn patch_fake(data: &[u8]) -> Vec<u8> {
         let mut expected = data.to_vec();
         expected[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET + 4].copy_from_slice(&FADELOW_BYTES);
-        patch_with_hashes_for(data, &sha256_hex(data), &sha256_hex(&expected), US_PROFILE).unwrap()
+        patch_with_hashes_for(data, &sha256_hex(data), &sha256_hex(&expected),
+            FadeProfile{media_gate:None,..US_PROFILE}).unwrap()
     }
 
+    #[test] fn us_has_exact_six_byte_media_gate_candidate(){
+        assert_eq!(US_PROFILE.media_gate,Some(MediaGate{va:0x43581B,file_offset:0x34C1B}));
+        assert_eq!(US_PROFILE.patched_hash,US_FADELOW_NOCD_SHA256);
+        assert_eq!(profile_from_hash(FADELOW_SHA256),Some(US_PROFILE));
+        assert_eq!(profile_from_hash(US_FADELOW_NOCD_SHA256),Some(US_PROFILE));
+        let mut raw=synthetic_pe();
+        raw[0x34C1B..0x34C1D].copy_from_slice(&MEDIA_GATE_ORIGINAL);
+        let mut expected=raw.clone();
+        expected[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET+4].copy_from_slice(&FADELOW_BYTES);
+        expected[0x34C1B..0x34C1D].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+        let patched=patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),US_PROFILE)
+            .expect("US six-byte patch");
+        assert_eq!(patched,expected);
+        let changed:Vec<_>=raw.iter().zip(&patched).enumerate()
+            .filter(|(_, (before,after))|before!=after).map(|(i,_)|i).collect();
+        assert_eq!(changed,vec![0x34C1B,0x34C1C,0x489CD,0x489CE,0x489CF,0x489D0]);
+        raw[0x34C1B]=0x90;
+        assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),US_PROFILE).is_err());
+    }
+    #[test] fn legacy_us_fadelow_copy_is_not_accepted_as_final_build(){
+        assert_eq!(profile_from_hash(FADELOW_SHA256),Some(US_PROFILE));
+        assert_ne!(FADELOW_SHA256,US_PROFILE.patched_hash);
+        assert_eq!(US_PROFILE.original_hash,ORIGINAL_SHA256);
+    }
     #[test] fn fr_de_profile_requires_combined_fix() {
         assert_eq!(FR_DE_PROFILE.media_gate, Some(MediaGate{va:0x4358BB,file_offset:0x34CBB}));
         assert_eq!(profile_from_hash(FR_DE_PROFILE.original_hash),Some(FR_DE_PROFILE));
