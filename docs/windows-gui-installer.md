@@ -39,12 +39,19 @@ or commercial DLLs are included.
 6. During extraction a percentage progress bar is displayed. An OK
    dialog reports completion or error. The installer never deletes or
    overwrites the original ISO or a pre-existing `splanet` directory.
-7. Select **Correction du blocage du fondu de palette (FadeLow)**.
+7. After extraction, select a language supported by the detected edition in
+   **Langue du jeu**. The installer writes the local `video=` path,
+   `HighQualityVideo=1` and the selected `language=` code into `splanet.ini`
+   without overwriting existing `keymap`, `gamma`, `joystick` or
+   personal `settings`. Defaults are English for US and EN/ES/IT, French
+   for FR/DE. The original game's language-resource table maps
+   English=1, French=2, German=3, Italian=4, Spanish=5.
+8. Select **Correction du blocage du fondu de palette (FadeLow)**.
    Hover the checkbox to see the detailed explanation.
-8. Click **Appliquer**. This applies the tested 4-byte timing fix
+9. Click **Appliquer**. This applies the tested 4-byte timing fix
    only to the exact retail `SPVOODOO.EXE`, with SHA-256 validation,
    an original backup, and a success/failure OK dialog.
-9. Click **Lancer**. The original game's EXE starts in its installation
+10. Click **Lancer**. The original game's EXE starts in its installation
    directory. A compatible Glide implementation (e.g. separately
    installed nGlide) must be available; this patcher does not
    bundle or install it.
@@ -55,11 +62,11 @@ disabled until the selected installation is ready.
 
 ## Patch details
 
-The only supported patch fixes the **palette fade timer starvation /
-Go mission-launch hang** on modern CPUs. It has been validated **only
-for the original US executable**; on either European edition the FadeLow
-checkbox and Apply button remain disabled until a separate patch has been
-researched and validated.
+The supported patch fixes the **palette fade timer starvation /
+Go mission-launch hang** on modern CPUs. It has been gameplay-validated
+for original **US and EN/ES/IT** executables, each with its own exact hash,
+file offset and patched hash. FadeLow remains **disabled on FR/DE**, pending
+a separate gameplay test. The new GUI workflow remains untested end-to-end.
 
 | Item | Known verified value |
 | --- | --- |
@@ -165,3 +172,9 @@ the EXE, README, GPL license and SHA256SUMS.
   validates both paths: installed `splanet` and original 3dfx ISO.
 
 Developed by legluondunet, assisted by ChatGPT (OpenAI).
+
+## Owner's EN/ES/IT validation (2026-10-30)
+
+The owner confirmed that the **EN/ES/IT four-byte FadeLow test executable works in gameplay**. Manual procedure: extract the disc, copy VOODOO game files to SPLANET excluding original `glide.dll`, then create `splanet.ini` with the installed-video path, selected language and `HighQualityVideo=1`. The provided working INI uses `language=4`, independently identified from the game executable's resource pointer table as **Italian**.
+
+This is validation of the manually prepared game and experimental patch, **not yet of the new automatic x64 GUI installer**. The owner's remaining INI values (`keymap`, `gamma`, `joystick`, `settings`, `name`) have not been proven mandatory for a fresh install. Current implementation preserves existing values, supplies only established fallback `settings`/`name` if absent, and does not synthesize custom device bindings.
