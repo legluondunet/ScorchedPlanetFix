@@ -9,8 +9,14 @@ use std::path::{Path, PathBuf};
 
 pub const ORIGINAL_SHA256: &str =
     "fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a";
+/// Previously released four-byte US FadeLow output, accepted only for safe
+/// migration when an intact original .bak is present.
 pub const FADELOW_SHA256: &str =
     "0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45";
+/// Six-byte US candidate: FadeLow plus the independently researched media
+/// probe return-value adjustment. NOT YET GAMEPLAY-VALIDATED on this install.
+pub const US_FADELOW_NOCD_SHA256: &str =
+    "4dc4de1f9034e17b266da7b64a83ba897b4dca9e8cf9a8654f5988d02d1e0613";
 pub const BACKUP_SUFFIX: &str = ".bak";
 const LEGACY_BACKUP_SUFFIX: &str = ".ScorchedPlanetFix-original.bak";
 pub const TARGET_VA: u32 = 0x0044_95CD;
@@ -19,9 +25,10 @@ pub const ORIGINAL_BYTES: [u8; 4] = [0x17, 0xB7, 0xD1, 0x38];
 pub const FADELOW_BYTES: [u8; 4] = [0xAC, 0xC5, 0x27, 0x37];
 
 /// Only exact owner-supplied and verified game binaries may be patched.
-/// FR/DE requires BOTH FadeLow and the edition-specific CD media-gate fix.
-/// Owner gameplay validation covers the combined FR/DE experimental binary,
-/// not either FR/DE modification in isolation.
+/// FR/DE's six-byte combination was confirmed in a user gameplay test.
+/// The US six-byte combination is an opt-in testing candidate on the draft PR:
+/// its expected hash was determined in earlier offline binary research but
+/// it still needs a fresh no-disc gameplay validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FadeProfile {
     pub label: &'static str,
@@ -29,8 +36,8 @@ pub struct FadeProfile {
     pub patched_hash: &'static str,
     pub target_va: u32,
     pub target_offset: usize,
-    /// Only FR/DE uses this media-gate modification; never apply it to US
-    /// or EN/ES/IT, for which an INI video path is already sufficient.
+    /// US and FR/DE each have a distinct, verified-offset media-gate site.
+    /// EN/ES/IT retains FadeLow only until no-disc testing warrants a change.
     pub media_gate: Option<MediaGate>,
 }
 
@@ -44,8 +51,9 @@ const MEDIA_GATE_ORIGINAL: [u8;2] = [0x33,0xc0];
 const MEDIA_GATE_REPLACEMENT: [u8;2] = [0xb0,0x01];
 pub const US_PROFILE: FadeProfile = FadeProfile {
     label: "US 1.08", original_hash: ORIGINAL_SHA256,
-    patched_hash: FADELOW_SHA256, target_va: TARGET_VA, target_offset: TARGET_FILE_OFFSET,
-    media_gate: None,
+    patched_hash: US_FADELOW_NOCD_SHA256,
+    target_va: TARGET_VA, target_offset: TARGET_FILE_OFFSET,
+    media_gate: Some(MediaGate {va: 0x0043_581B, file_offset: 0x34C1B}),
 };
 pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
     label: "EN/ES/IT 1.06",
@@ -65,7 +73,8 @@ pub const SUPPORTED_PROFILES: [FadeProfile; 3] = [US_PROFILE, EN_ES_IT_PROFILE, 
 
 pub fn profile_from_hash(hash: &str) -> Option<FadeProfile> {
     SUPPORTED_PROFILES.iter().copied().find(|profile|
-        profile.original_hash == hash || profile.patched_hash == hash)
+        profile.original_hash == hash || profile.patched_hash == hash
+        || (profile.original_hash == ORIGINAL_SHA256 && hash == FADELOW_SHA256))
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -220,7 +229,7 @@ fn patch_with_hashes_for(data: &[u8], source: &str, target: &str, profile: FadeP
     if let Some(gate) = profile.media_gate {
         let gate_offset = pe_site_offset(data, gate.va, gate.file_offset, 2)?;
         if data[gate_offset..gate_offset+2] != MEDIA_GATE_ORIGINAL {
-            return Err("FR/DE media gate instruction bytes differ from reference".into());
+            return Err("Media gate instruction bytes differ from reference".into());
         }
         changed[gate_offset..gate_offset+2].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
     }
@@ -382,7 +391,9 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
         Action::Status => {
             let state = match profile {
                 Some(p) if hash == p.original_hash => format!("ORIGINAL {}", p.label),
-                Some(p) if hash == p.patched_hash => format!("FADELOW {}", p.label),
+                Some(p) if hash == p.patched_hash => format!("PATCHED {}", p.label),
+                Some(p) if p.original_hash==ORIGINAL_SHA256 && hash==FADELOW_SHA256 =>
+                    "US 1.08 LEGACY FADELOW (CD check unpatched)".into(),
                 _ => "UNKNOWN/UNSUPPORTED".into(),
             };
             Ok(format!("Executable: {state}\nSHA-256: {hash}\nBackup: {} ({})",
@@ -405,16 +416,30 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
                 if backed.is_none() { return Err("Already patched but verified original backup is missing".into()); }
                 return Ok(format!("FadeLow {} already patched; verified backup exists.",p.label));
             }
-            let patch = patch_with_hashes_for(&source, p.original_hash, p.patched_hash, p)?;
+            // Upgrade an already-installed US FadeLow-only executable from
+            // previous releases without touching the preserved retail backup.
+            // The candidate is always rebuilt from that hash-verified backup,
+            // not by blindly patching a game executable of unknown origin.
+            let upgrading_us=p.original_hash==ORIGINAL_SHA256 && hash==FADELOW_SHA256;
+            let (original,patch)=if upgrading_us {
+                let original=backed.as_ref().ok_or(
+                    "Migration du correctif US impossible : fichier original .bak vérifié manquant")?;
+                let patch=patch_with_hashes_for(original,p.original_hash,p.patched_hash,p)?;
+                (original.clone(),patch)
+            }else{
+                let patch=patch_with_hashes_for(&source,p.original_hash,p.patched_hash,p)?;
+                (source.clone(),patch)
+            };
             if backed.is_none() {
-                write_new(&backup, &source, &perms, p.original_hash)?;
+                write_new(&backup, &original, &perms, p.original_hash)?;
             }
-            if sha256_hex(&read_regular(exe)?) != p.original_hash {
+            // A stale or modified running game is never silently overwritten.
+            if sha256_hex(&read_regular(exe)?) != hash {
                 return Err("EXE modified before replacement; refusing".into());
             }
-            replace_atomically(exe, &patch, &perms, p.patched_hash)?;
-            Ok(format!("FadeLow {} applied. Verified original backup: {}\nUse restore --yes to undo.",
-                p.label, backup.display()))
+            replace_atomically(exe,&patch,&perms,p.patched_hash)?;
+            Ok(format!("Correctif {} {}appliqué. Sauvegarde originale vérifiée : {}",
+                p.label,if upgrading_us {"mis à niveau et "}else{""},backup.display()))
         }
         Action::Restore => {
             if !confirmed { return Err("restore requires explicit --yes".into()); }
@@ -423,10 +448,11 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
             if hash == p.original_hash {
                 return Ok(format!("Original {} already restored. Backup preserved.",p.label));
             }
-            if hash != p.patched_hash {
+            if hash != p.patched_hash &&
+               !(p.original_hash==ORIGINAL_SHA256 && hash==FADELOW_SHA256) {
                 return Err("Unsupported installed EXE; refusing to overwrite".into());
             }
-            if sha256_hex(&read_regular(exe)?) != p.patched_hash {
+            if sha256_hex(&read_regular(exe)?) != hash {
                 return Err("EXE modified before restoration; refusing".into());
             }
             replace_atomically(exe, &original, &perms, p.original_hash)?;
