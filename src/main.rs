@@ -3,7 +3,7 @@
 //! user's own CD directory at runtime, never embedded in this executable.
 
 use eframe::egui::{self, Color32, TextureHandle};
-use scorched_planet_setup::{execute_install, plan_install, InstallOptions, InstallResult};
+use scorched_planet_setup::{audit_cd, execute_install, plan_install, InstallOptions, InstallResult};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
@@ -50,6 +50,7 @@ struct SetupApp {
     illustration: Option<TextureHandle>,
     artwork_source: String,
     artwork_status: String,
+    audit_status: String,
 }
 
 fn original_art(root: &Path, candidates: &[&str]) -> Option<PathBuf> {
@@ -116,6 +117,7 @@ impl SetupApp {
             illustration: None,
             artwork_source: String::new(),
             artwork_status: String::new(),
+            audit_status: String::new(),
         }
     }
 
@@ -294,6 +296,32 @@ impl eframe::App for SetupApp {
                     ui.radio_value(&mut self.language, Language::German, "Deutsch");
                 });
             });
+
+            ui.add_space(8.0);
+            if ui.add_enabled(
+                self.stage != Stage::Installing,
+                egui::Button::new(self.tr("Analyser le contenu du CD…", "CD-Inhalt analysieren…")),
+            ).clicked() {
+                match audit_cd(Path::new(self.source.trim())) {
+                    Ok(report) => {
+                        if let Some(file) = rfd::FileDialog::new()
+                            .set_file_name("ScorchedPlanet-CD-audit.txt")
+                            .save_file()
+                        {
+                            self.audit_status = match std::fs::write(&file, report) {
+                                Ok(()) => format!("Rapport enregistre : {}", file.display()),
+                                Err(error) => format!("Impossible d'enregistrer le rapport : {error}"),
+                            };
+                        }
+                    }
+                    Err(error) => {
+                        self.audit_status = format!("Analyse impossible : {error}");
+                    }
+                }
+            }
+            if !self.audit_status.is_empty() {
+                ui.small(&self.audit_status);
+            }
 
             ui.add_space(8.0);
             ui.small(self.tr(
