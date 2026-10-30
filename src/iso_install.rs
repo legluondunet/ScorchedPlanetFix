@@ -582,7 +582,7 @@ mod tests {
         vd.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,10240,10));
         vd.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
         root.add_child(sp);root.add_child(vd);
-        assert!(inventory(&root).unwrap_err().contains("casse différente"));
+        assert!(inventory(&root).err().expect("collision attendue").contains("casse différente"));
     }
     #[test] fn usr_edition_has_only_two_3dfx_components_and_no_legacy_drivers(){
         let mut root=TreeNode::new_directory("/".into());
