@@ -12,6 +12,8 @@ mod diagnostics_graphics;
 #[cfg(windows)]
 mod cue_image;
 #[cfg(windows)]
+mod cli;
+#[cfg(windows)]
 mod iso_install;
 #[cfg(windows)]
 mod logger;
@@ -86,7 +88,6 @@ mod app {
         logger:Logger,
         version:String,
         install:PathBuf,
-        patch_enabled:bool,
         fadelow_allowed:bool,
         edition:&'static str,
         language:u8,
@@ -110,7 +111,7 @@ mod app {
             let (tx,rx)=mpsc::channel();
             let install=root.join("splanet");
             let mut app=Self {root,logger,version,install,
-                patch_enabled:false,fadelow_allowed:false,edition:"inconnue",language:1,
+                fadelow_allowed:false,edition:"inconnue",language:1,
                 phase:Phase::Ready,status:"Initialisation…".into(),
                 progress:0.0,dialog:None,rx,tx,game_ready:false,stop_on_modal:false,detect:String::new()};
             app.scan_start();
@@ -142,7 +143,6 @@ mod app {
                 self.game_ready=true;
                 let (edition,can_patch)=installed_edition(&self.install.join("SPVOODOO.EXE"));
                 self.fadelow_allowed=can_patch;
-                self.patch_enabled=can_patch;
                 self.edition=edition;
                 let configured=read_ini_language(&self.install.join("splanet.ini"));
                 self.language=configured.filter(|id|edition_languages(edition).iter().any(|(n,_)|n==id))
@@ -151,7 +151,14 @@ mod app {
                 self.detect=if image.is_some() {
                     format!("Edition {edition} ; installation existante conservée (ISO ignorée)")
                 }else{format!("Dossier splanet détecté ; édition {edition}")};
-                self.logger.write(&format!("DETECT: {} ; FadeLow eligible={can_patch}",self.detect));
+                self.logger.write(&format!("DETECT: {} ; auto-patch eligible={can_patch}",self.detect));
+                if can_patch {
+                    self.apply_patch();
+                } else {
+                    self.game_ready=false;
+                    self.info("Exécutable non reconnu",
+                        "Cette édition ne possède aucun correctif validé. Exécution désactivée pour éviter un jeu non fonctionnel.",true);
+                }
                 return;
             }
             if let Some(iso)=image {
@@ -198,20 +205,18 @@ mod app {
                                     _=>"inconnue",
                                 };
                                 self.language=edition_default_language(self.edition);
-                                self.fadelow_allowed=matches!(report.edition,"US"|"EN/ES/IT"|"FR/DE");
-                                self.patch_enabled=self.fadelow_allowed;
+                                self.fadelow_allowed=true;
                                 self.progress=1.0;
-                                self.status="Extraction terminée".into();
-                                self.detect=format!("Installation depuis ISO : édition {} reconnue",report.edition);
+                                self.status="Installation et correctif terminés".into();
+                                self.detect=format!("Edition {} : correctif appliqué automatiquement",report.edition);
                                 self.info("Installation réussie",
-                                    format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\n{}\nDétails dans ScorchedPlanetFix.log",
-                                        report.edition,report.files,report.bytes,report.folder.display(),
-                                        if self.fadelow_allowed {"FadeLow disponible."}else{"FadeLow non validé pour cet exécutable."}),false);
+                                    format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\nSPVOODOO.EXE.bak sauvegardé avant le patch.\nCorrectif automatique appliqué.\nDétails dans ScorchedPlanetFix.log",
+                                        report.edition,report.files,report.bytes,report.folder.display()),false);
                             },
                             Err(e)=>{
                                 self.progress=0.0;
                                 self.stop_on_modal=true;
-                                self.status="Extraction impossible".into();
+                                self.status="Installation ou correctif impossible".into();
                                 self.info("Cette image du jeu n'est pas supportée",format!("{e}\nConsultez ScorchedPlanetFix.log."),true);
                             },
                         }
@@ -221,12 +226,14 @@ mod app {
                         match result{
                             Ok(text)=>{
                                 self.progress=1.0;
-                                self.status="Correctif appliqué".into();
-                                self.info("Opération réussie",format!("{text}\nConsultez ScorchedPlanetFix.log pour les détails."),false);
+                                self.game_ready=true;
+                                self.status="Correctif automatique vérifié".into();
+                                self.info("Correctif automatique",format!("{text}\nSauvegarde : SPVOODOO.EXE.bak\nConsultez ScorchedPlanetFix.log."),false);
                             },
                             Err(e)=>{
                                 self.progress=0.0;
-                                self.status="Échec de l'application".into();
+                                self.game_ready=false;
+                                self.status="Échec du correctif automatique".into();
                                 self.info("Échec de l'opération",format!("{e}\nConsultez ScorchedPlanetFix.log."),true);
                             },
                         }
@@ -256,15 +263,15 @@ mod app {
                 self.info("Correctif indisponible","Exécutable non reconnu. Correctifs validés : FadeLow US, EN/ES/IT ; FadeLow + détection CD FR/DE. Aucun octet modifié.",true);
                 return;
             }
-            if !self.patch_enabled {self.info("Aucun correctif sélectionné","Cochez au moins un correctif avant de cliquer sur Appliquer.",true);return;}
+
             self.phase=Phase::Patching;
             self.progress=0.0;
-            self.status="Vérification et application de FadeLow…".into();
+            self.status="Sauvegarde .bak et correction automatique…".into();
             let exe=self.install.join("SPVOODOO.EXE");
             let log=self.logger.clone();
             let tx=self.tx.clone();
             std::thread::spawn(move ||{
-                log.write("PATCH: FadeLow requested");
+                log.write("PATCH-AUTO: auto applying exact-edition correction");
                 let result=scorched_planet_fix::execute(Action::Apply,&exe,None,true);
                 match &result{
                     Ok(text)=>log.write(&format!("PATCH OK: {text}")),
@@ -334,7 +341,7 @@ mod app {
                 ui.add_space(18.0);
                 ui.separator();
                 ui.add_space(12.0);
-                ui.label(RichText::new("Correctifs disponibles").size(18.0).strong());
+                ui.label(RichText::new("Correctif automatique").size(18.0).strong());
                 let fr_de=self.edition.starts_with("FR/DE");
                 let patch_label=if fr_de {
                     "Correction du fondu (FadeLow) + détection CD (FR/DE)"
@@ -344,10 +351,9 @@ mod app {
                 let patch_info=if fr_de {
                     "Pour FR/DE, applique les deux modifications testées ensemble : seuil FadeLow et résultat du contrôle de présence CD. Ne remplace pas les fichiers du CD manquants."
                 } else {DESCRIPTION};
-                ui.add_enabled_ui(matches!(self.phase,Phase::Ready)&&self.fadelow_allowed,|ui|{
-                    ui.checkbox(&mut self.patch_enabled,patch_label)
-                        .on_hover_text(patch_info);
-                });
+                ui.label(patch_label).on_hover_text(patch_info);
+                ui.label(RichText::new("Appliqué après extraction, après sauvegarde de l'original en .bak.")
+                    .small().color(Color32::LIGHT_GRAY));
                 if self.game_ready && !self.fadelow_allowed {
                     ui.label(RichText::new("FadeLow non validé pour cet exécutable ; application désactivée.")
                         .small().color(Color32::GRAY));
@@ -379,10 +385,7 @@ mod app {
                 ui.add_space(16.0);
                 ui.horizontal(|ui|{
                     let available=matches!(self.phase,Phase::Ready)&&self.game_ready;
-                    if ui.add_enabled(available&&self.fadelow_allowed&&self.patch_enabled,egui::Button::new("Appliquer").min_size(egui::vec2(135.0,34.0))).clicked(){
-                        self.apply_patch();
-                    }
-                    if ui.add_enabled(available,egui::Button::new("Lancer").min_size(egui::vec2(135.0,34.0))).clicked(){
+                     if ui.add_enabled(available,egui::Button::new("Lancer").min_size(egui::vec2(135.0,34.0))).clicked(){
                         self.launch_game();
                     }
                 });
