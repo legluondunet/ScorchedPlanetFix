@@ -66,7 +66,10 @@ fn identify_edition(exe_hash: &str, geometry_hash: &str) -> Option<Edition> {
 fn err(msg: impl ToString) -> String { msg.to_string() }
 
 fn valid_name(name: &str) -> bool {
-    !name.is_empty() && !matches!(name, "." | "..")
+    // The three catalogued original editions use ASCII filenames only.
+    // Restrict input to ASCII to guarantee deterministic lowercase mapping
+    // and avoid Unicode case-fold collisions on Windows/Wine.
+    name.is_ascii() && !name.is_empty() && !matches!(name, "." | "..")
         && !name.starts_with(' ') && !name.ends_with([' ', '.'])
         && !name.contains(['/', '\\', ':', '\0'])
         && !name.chars().any(|c| c.is_control())
