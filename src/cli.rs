@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! ScorchedPlanetFix Windows --nogui mode: same edition-checked installer and patch.
+//! ScorchedPlanetFix Windows console installer, verifier and launcher.
 use crate::{iso_install,logger::Logger,verify,nglide};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path,PathBuf};
 
-const USAGE:&str="Usage:\n  ScorchedPlanetFix.exe --nogui\n  ScorchedPlanetFix.exe --nogui <image.iso>\n  ScorchedPlanetFix.exe --nogui <image.cue>\n  ScorchedPlanetFix.exe --nogui <image.cue> <track.bin>\n\nWithout an explicit image path, the current working directory is searched.\nAn existing splanet directory is never overwritten. For a new install,\nspvoodoo.exe is backed up as spvoodoo.exe.bak before patching.";
+const USAGE:&str="Usage:\n  ScorchedPlanetFix.exe\n  ScorchedPlanetFix.exe <image.iso>\n  ScorchedPlanetFix.exe <image.cue> [track.bin]\n\nWithout an explicit image path, the current working directory is searched.\nAn existing splanet directory is never overwritten. For a new install,\nspvoodoo.exe is backed up as spvoodoo.exe.bak before patching.";
 
 #[derive(Debug,PartialEq,Eq)]
 struct Arguments {
@@ -127,19 +127,21 @@ pub fn help(version:&str)->String{
     format!("ScorchedPlanetFix {version} - Windows x64 command-line tool
 Usage:
   ScorchedPlanetFix.exe
-  ScorchedPlanetFix.exe --nogui
-  ScorchedPlanetFix.exe --nogui <image.iso>
-  ScorchedPlanetFix.exe --nogui <image.cue> [track.bin]
+  ScorchedPlanetFix.exe <image.iso>
+  ScorchedPlanetFix.exe <image.cue> [track.bin]
   ScorchedPlanetFix.exe --verify
   ScorchedPlanetFix.exe --launch
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
-No arguments / --nogui:
-  Locate an ISO or CUE/BIN in the current working directory, extract
+No arguments:
+  Locate a single ISO or CUE/BIN in the current working directory, extract
   the game to splanet, back up spvoodoo.exe.bak, and apply its patch.
   Existing installations are preserved and can be patched automatically
   without overwriting game data.
+<image.iso> / <image.cue> [track.bin]:
+  Install from the specified disc image in the current working directory.
+  Refuse to overwrite an existing splanet directory.
 --verify:
   Verify game files, patch, and backup in the splanet directory NEXT
   TO ScorchedPlanetFix.exe. Does not modify any files.
@@ -174,20 +176,24 @@ pub fn dispatch(arguments:&[OsString],version:&str)->Result<(),String>{
     }
     let exe=std::env::current_exe().map_err(|e|format!("Cannot locate the executable: {e}"))?;
     let exe_root=exe.parent().ok_or("Cannot determine the patcher directory")?.to_path_buf();
-    // Existing semantics: default and --nogui install in CWD. Verification
-    // and launch always use the folder next to ScorchedPlanetFix.exe.
-    let is_install=arguments.is_empty() || first==Some("--nogui");
+    // Default and positional ISO/CUE installation operate in CWD.
+    // Verification and launch always use the folder next to the executable.
+    // Unknown switches, including removed legacy GUI switches, are rejected.
+    let is_install=arguments.is_empty() || arguments.first()
+        .is_some_and(|arg|!arg.to_string_lossy().starts_with('-'));
     let root=if is_install {
         std::env::current_dir().map_err(|e|format!("Current working directory: {e}"))?
     }else{exe_root};
     let logger=Logger::new(&root,version)?;
     logger.system_information();
-    let operation=match first{
-        None=>run(&[],&root,&logger,|msg|println!("{msg}")),
-        Some("--nogui")=>run(&arguments[1..],&root,&logger,|msg|println!("{msg}")),
-        Some("--verify") if arguments.len()==1=>verify_only(&root,&logger,|msg|println!("{msg}")),
-        Some("--launch") if arguments.len()==1=>launch_only(&root,&logger,|msg|println!("{msg}")),
-        _=>Err(format!("Unknown arguments. Use --help.\n{}",help(version))),
+    let operation=if is_install {
+        run(arguments,&root,&logger,|msg|println!("{msg}"))
+    }else{
+        match first{
+            Some("--verify") if arguments.len()==1=>verify_only(&root,&logger,|msg|println!("{msg}")),
+            Some("--launch") if arguments.len()==1=>launch_only(&root,&logger,|msg|println!("{msg}")),
+            _=>Err(format!("Unknown arguments. Use --help.\n{}",help(version))),
+        }
     };
     if let Err(ref message)=operation{logger.error(message);}
     operation
@@ -199,12 +205,20 @@ mod tests{
     fn args(s:&[&str])->Vec<OsString>{s.iter().map(OsString::from).collect()}
     #[test] fn help_lists_all_cli_options_and_version_without_gui(){
         let h=help("1.0.0-test1234");
-        for literal in ["1.0.0-test1234","--nogui","--verify","--launch",
+        for literal in ["1.0.0-test1234","--verify","--launch",
                         "--help","--version","image.iso","image.cue",
                         "glide.dll","60 Hz"]{
             assert!(h.contains(literal),"help missing {literal}");
         }
+        assert!(!h.contains("--nogui"),"obsolete GUI option must not appear in help");
         assert!(!h.contains("Launch button"));
+    }
+    #[test] fn installer_uses_no_arguments_or_positional_media(){
+        assert!(args(&[]).is_empty());
+        assert!(!args(&["game.ISO"])[0].to_string_lossy().starts_with('-'));
+        assert!(!args(&["game.CUE","game.BIN"])[0].to_string_lossy().starts_with('-'));
+        assert!(args(&["--nogui"])[0].to_string_lossy().starts_with('-'));
+        assert!(help("test").contains("ScorchedPlanetFix.exe <image.iso>"));
     }
     #[test] fn supported_command_line_forms(){
         assert_eq!(parse_args(&args(&[])).unwrap(),Arguments{image:None,bin:None});
