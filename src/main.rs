@@ -19,6 +19,7 @@ mod app {
     use super::{iso_install,logger::Logger};
     use eframe::egui::{self,Color32,RichText};
     use scorched_planet_fix::{self,Action,ORIGINAL_SHA256,FADELOW_SHA256};
+    use sha2::{Digest,Sha256};
     use std::fs;
     use std::path::{Path,PathBuf};
     use std::process::Command;
@@ -30,6 +31,22 @@ mod app {
     de Scorched Planet ignore les intervalles trop courts et le fondu \
     peut ne jamais se terminer. FadeLow réduit ce seuil, sans modifier \
     la résolution ni le fonctionnement du CD.";
+
+
+    /// Exact original executable fingerprints of editions identified from CD inventories.
+    /// Only the US binary has a validated FadeLow patch.
+    fn installed_edition(exe:&Path)->(&'static str,bool){
+        let Ok(bytes)=fs::read(exe) else {return ("inconnue",false)};
+        let hash=format!("{:x}",Sha256::digest(&bytes));
+        match hash.as_str(){
+            ORIGINAL_SHA256 | FADELOW_SHA256 => ("US 1.08",true),
+            "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f" =>
+                ("Europe EN/ES/IT 1.06",false),
+            "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72" =>
+                ("Europe FR/DE 1.06",false),
+            _ => ("inconnue",false),
+        }
+    }
 
     enum Event {
         Progress(u64,u64,String),
@@ -45,6 +62,7 @@ mod app {
         version:String,
         install:PathBuf,
         patch_enabled:bool,
+        fadelow_allowed:bool,
         phase:Phase,
         status:String,
         progress:f32,
@@ -65,7 +83,7 @@ mod app {
             let (tx,rx)=mpsc::channel();
             let install=root.join("splanet");
             let mut app=Self {root,logger,version,install,
-                patch_enabled:true,phase:Phase::Ready,status:"Initialisation…".into(),
+                patch_enabled:false,fadelow_allowed:false,phase:Phase::Ready,status:"Initialisation…".into(),
                 progress:0.0,dialog:None,rx,tx,game_ready:false,stop_on_modal:false,detect:String::new()};
             app.scan_start();
             app
@@ -94,11 +112,14 @@ mod app {
                     return;
                 }
                 self.game_ready=true;
+                let (edition,can_patch)=installed_edition(&self.install.join("SPVOODOO.EXE"));
+                self.fadelow_allowed=can_patch;
+                self.patch_enabled=can_patch;
                 self.status="Installation splanet détectée".into();
                 self.detect=if image.is_some() {
-                    "Dossier splanet et ISO présents : installation existante conservée".into()
-                }else{"Dossier splanet détecté".into()};
-                self.logger.write(&format!("DETECT: {} ; EXE found",self.detect));
+                    format!("Edition {edition} ; installation existante conservée (ISO ignorée)")
+                }else{format!("Dossier splanet détecté ; édition {edition}")};
+                self.logger.write(&format!("DETECT: {} ; FadeLow eligible={can_patch}",self.detect));
                 return;
             }
             if let Some(iso)=image {
@@ -138,12 +159,15 @@ mod app {
                         match result {
                             Ok(report)=>{
                                 self.game_ready=true;
+                                self.fadelow_allowed=report.edition=="US";
+                                self.patch_enabled=self.fadelow_allowed;
                                 self.progress=1.0;
                                 self.status="Extraction terminée".into();
-                                self.detect="Installation splanet créée depuis l'ISO".into();
+                                self.detect=format!("Installation depuis ISO : édition {} reconnue",report.edition);
                                 self.info("Installation réussie",
-                                    format!("Installation terminée : {} fichiers, {} octets.\nDossier : {}\nDétails dans ScorchedPlanetFix.log",
-                                        report.files,report.bytes,report.folder.display()),false);
+                                    format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\n{}\nDétails dans ScorchedPlanetFix.log",
+                                        report.edition,report.files,report.bytes,report.folder.display(),
+                                        if self.fadelow_allowed {"FadeLow disponible."}else{"FadeLow indisponible pour cet exécutable : correctif européen non encore validé."}),false);
                             },
                             Err(e)=>{
                                 self.progress=0.0;
@@ -173,6 +197,10 @@ mod app {
         }
         fn apply_patch(&mut self){
             if !self.game_ready {self.info("Installation introuvable","Le répertoire splanet n'est pas prêt.",true);return;}
+            if !self.fadelow_allowed {
+                self.info("FadeLow indisponible","Le correctif n'est validé que pour l'exécutable US d'origine. Aucun octet n'a été modifié.",true);
+                return;
+            }
             if !self.patch_enabled {self.info("Aucun correctif sélectionné","Cochez au moins un correctif avant de cliquer sur Appliquer.",true);return;}
             self.phase=Phase::Patching;
             self.progress=0.0;
@@ -252,10 +280,14 @@ mod app {
                 ui.separator();
                 ui.add_space(12.0);
                 ui.label(RichText::new("Correctifs disponibles").size(18.0).strong());
-                ui.add_enabled_ui(matches!(self.phase,Phase::Ready),|ui|{
+                ui.add_enabled_ui(matches!(self.phase,Phase::Ready)&&self.fadelow_allowed,|ui|{
                     ui.checkbox(&mut self.patch_enabled,"Correction du blocage du fondu de palette (FadeLow)")
                         .on_hover_text(DESCRIPTION);
                 });
+                if self.game_ready && !self.fadelow_allowed {
+                    ui.label(RichText::new("FadeLow non validé pour cet exécutable ; application désactivée.")
+                        .small().color(Color32::GRAY));
+                }
                 ui.add_space(16.0);
                 ui.label(RichText::new(self.detect.as_str()).color(Color32::GRAY));
                 ui.label(&self.status);
@@ -265,7 +297,7 @@ mod app {
                 ui.add_space(16.0);
                 ui.horizontal(|ui|{
                     let available=matches!(self.phase,Phase::Ready)&&self.game_ready;
-                    if ui.add_enabled(available,egui::Button::new("Appliquer").min_size(egui::vec2(135.0,34.0))).clicked(){
+                    if ui.add_enabled(available&&self.fadelow_allowed&&self.patch_enabled,egui::Button::new("Appliquer").min_size(egui::vec2(135.0,34.0))).clicked(){
                         self.apply_patch();
                     }
                     if ui.add_enabled(available,egui::Button::new("Lancer").min_size(egui::vec2(135.0,34.0))).clicked(){
