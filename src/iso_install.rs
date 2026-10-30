@@ -32,10 +32,50 @@ struct Inventory {
     seen_splanet: BTreeSet<String>,
     seen_voodoo: BTreeSet<String>,
     image_entries: usize, video_files: usize, skipped_legacy_drivers: usize,
+    skipped_splanetw: usize,
 }
 pub struct InstallReport {
     pub files: usize, pub bytes: u64, pub folder: PathBuf,
     pub edition: &'static str, pub patch_report: String,
+}
+
+/// Retail SHA-256 values for the obsolete software-renderer executable.
+/// Use these to safely clean previous installations without touching any
+/// unexpected or user-modified file.
+fn original_splanetw_hash(edition:&str)->Option<&'static str>{
+    match edition{
+        "US 1.08"=>Some("ffd1398ccccd615541e69c898fe0b8a43caada2326d86d4cb61036c1f934dbc7"),
+        "EN/ES/IT 1.06"=>Some("e652319f606abea5bf0824df6c0cc75cb09d7f95ba8b2ab2bb4512e99317b199"),
+        "FR/DE 1.06 (FadeLow + contrôle CD)"=>Some("c0e3d3c0dc8e87ee653f8f5ce3c2670263e907d0438d5a1d3d1021fc2e1e0b1f"),
+        _=>None,
+    }
+}
+
+/// Discard the exact unused SPLANETW.EXE from an older installation.
+/// A different file or a symlink is never deleted.
+pub fn remove_unused_splanetw(folder:&Path,edition:&str)->Result<bool,String>{
+    let expected=original_splanetw_hash(edition)
+        .ok_or_else(||format!("Edition non reconnue pour nettoyage : {edition}"))?;
+    let mut matches=Vec::new();
+    for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
+        let item=item.map_err(|e|e.to_string())?;
+        if item.file_name().to_string_lossy().eq_ignore_ascii_case("splanetw.exe"){
+            matches.push(item.path());
+        }
+    }
+    if matches.is_empty(){return Ok(false);}
+    if matches.len()!=1{return Err("Plusieurs SPLANETW.EXE : nettoyage ambigu, aucune suppression".into());}
+    let path=&matches[0];
+    let meta=fs::symlink_metadata(path).map_err(|e|e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_file(){
+        return Err(format!("SPLANETW.EXE inattendu (lien/dossier) : {}",path.display()));
+    }
+    if file_digest(path)?!=expected{
+        return Err(format!("SPLANETW.EXE différent du CD original : suppression refusée : {}",path.display()));
+    }
+    fs::remove_file(path)
+        .map_err(|e|format!("Impossible de supprimer le composant inutile {} : {e}",path.display()))?;
+    Ok(true)
 }
 
 /// Fingerprints recorded from the three owner-supplied CD file inventories.
@@ -101,6 +141,13 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
         }
         if child.is_directory {
             collect(child, &relative, voodoo, inventory)?;
+            continue;
+        }
+        // SPLANETW.EXE is the unused software-renderer executable.
+        // Do not extract or install it: only VOODOO/SPVOODOO.EXE is launched.
+        // Leave the original source ISO/CUE untouched.
+        if !voodoo && prefix.as_os_str().is_empty() && key=="splanetw.exe"{
+            inventory.skipped_splanetw+=1;
             continue;
         }
         // Older drivers in European CDs are not needed on modern Wine/Windows.
@@ -389,8 +436,9 @@ pub fn install_image(
     // signed full-disc reference manifest, they cannot prove that every
     // other original CD file matches a specific retail master image.
     log("ISO: edition-specific EXE/GEOMETRY and shared RWDLVOOD hashes verified; no independently authenticated all-files master yet");
-    log(&format!("ISO: {} install files; {} SMK videos; {} legacy 3dfx drivers skipped",
-        inventory.files.len(),inventory.video_files,inventory.skipped_legacy_drivers));
+    log(&format!("ISO: {} install files; {} SMK videos; {} legacy 3dfx drivers skipped; {} unused SPLANETW.EXE excluded",
+        inventory.files.len(),inventory.video_files,inventory.skipped_legacy_drivers,
+        inventory.skipped_splanetw));
     let parent=destination.parent().ok_or("Invalid installation parent")?;
     // Disk preflight and validation are complete before creating any working
     // directory. Temp contains only the required source trees, not the CD's
@@ -551,6 +599,18 @@ mod tests {
         }
         assert!(valid_name("SPVOODOO.EXE"));
     }
+    #[test] fn obsolete_splanetw_cleanup_rejects_custom_file_without_deleting(){
+        let folder=std::env::temp_dir().join(format!("splanetw-cleanup-{}",std::process::id()));
+        let _=fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        assert!(!remove_unused_splanetw(&folder,"US 1.08").unwrap());
+        let path=folder.join("SPLANETW.EXE");
+        fs::write(&path,b"custom executable").unwrap();
+        let error=remove_unused_splanetw(&folder,"US 1.08").unwrap_err();
+        assert!(error.contains("suppression refusée"));
+        assert_eq!(fs::read(&path).unwrap(),b"custom executable");
+        fs::remove_dir_all(&folder).unwrap();
+    }
     #[test] fn disc_data_must_include_videos_and_exact_driver(){
         let mut root=TreeNode::new_directory("/".into());
         let mut sp=TreeNode::new_directory("SPLANET".into());
@@ -558,6 +618,7 @@ mod tests {
         let mut video=TreeNode::new_directory("VIDEO".into());
         video.add_child(TreeNode::new_file_with_location("INTRO.SMK".into(),10,4096,10));
         sp.add_child(video);
+        sp.add_child(TreeNode::new_file_with_location("SPLANETW.EXE".into(),10,5000,10));
         let mut voodoo=TreeNode::new_directory("VOODOO".into());
         voodoo.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,8192,10));
         voodoo.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
@@ -569,6 +630,9 @@ mod tests {
         let checked=inventory(&root).expect("CD sans splanet.ini doit être accepté");
         assert!(!checked.files.contains_key("splanet.ini"));
         assert_eq!(checked.video_files,1);
+        assert_eq!(checked.skipped_splanetw,1);
+        assert!(!checked.files.contains_key("splanetw.exe"));
+        assert!(!checked.splanet_files.contains_key("splanetw.exe"));
         assert_eq!(checked.skipped_legacy_drivers,3);
         assert_eq!(checked.splanet_files.len(),2); // geometry + video
         assert_eq!(checked.voodoo_files.len(),2); // exe + RenderWare DLL
