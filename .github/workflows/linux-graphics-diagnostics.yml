@@ -196,6 +196,8 @@ jobs:
           bash tools/inspect-go-hotspots-linux.sh "$work/test-program" "$work/report.txt"
           test -s "$work/report.txt"
           grep -q '432b62' "$work/report.txt"
+          grep -q 'Function 0x004495c0' "$work/report.txt"
+          grep -q 'Direct call sites referring to suspected functions' "$work/report.txt"
           grep -q 'WARNING: different binary' "$work/report.txt"
           if bash tools/inspect-go-hotspots-linux.sh "$work/test-program" "$work/report.txt"; then
             echo "Should refuse to overwrite an existing report"
