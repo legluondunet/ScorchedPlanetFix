@@ -3,6 +3,7 @@
 **Play *Scorched Planet* (1996) on modern systems — from your own CD image.**
 
 [![Windows x64 CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml/badge.svg)](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml)
+[![Linux / Wine / Proton compatible](https://img.shields.io/badge/Linux%20%2F%20Wine%20%2F%20Proton-compatible-428b40?logo=linux&logoColor=white)](#linux--wine)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 ScorchedPlanetFix is a **free and open-source console installer, patcher, verifier and launcher** for Criterion's *Scorched Planet* (1996).
@@ -87,6 +88,8 @@ To update a supported existing installation, run the latest patcher **without ar
 ### Linux / Wine
 
 Use the same working directory and Wine prefix for the patcher and nGlide:
+
+**Compatibility note:** Wine 11.17 has been tested with all three CUE/BIN editions. Proton is Wine-based, but has not been independently tested with this patcher.
 
 ```bash
 wine ScorchedPlanetFix.exe
