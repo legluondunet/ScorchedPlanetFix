@@ -1,6 +1,6 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
-## EN/ES/IT — reproduced NO CD and six-byte candidate (2026-10-30)
+## EN/ES/IT — reproduced NO CD and owner-validated six-byte fix (2026-10-30)
 
 In the owner's newer **CUE/BIN** workflow, EN/ES/IT extraction and `--verify`
 both succeeded with the four-byte FadeLow-only executable, but a **CD-required**
@@ -15,7 +15,7 @@ and returns false at **VA `0x43562B`, raw `0x34A2B`**:
 `33 C0` (`xor eax,eax`). As with the previously owner-tested FR/DE fix,
 the targeted two-byte change is `B0 01` (`mov al,1`).
 
-The new EN/ES/IT candidate combines:
+The owner-validated EN/ES/IT patch combines:
 - FadeLow four-byte change at raw `0x487AD`
 - Media-check two-byte change at raw `0x34A2B`
 
@@ -28,8 +28,7 @@ SHA-256 and backup are enforced by the Rust patcher.
 The previous FadeLow-only SHA-256
 `dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc`
 is recognized **only** for migration from the verified retail `.bak`.
-The original `.bak` and saved games remain untouched. **The combined
-EN/ES/IT candidate still requires owner validation without a CD image.**
+The original `.bak` and saved games remain untouched. **The owner has validated the combined EN/ES/IT patch in a CUE/BIN no-CD gameplay test.**
 No commercial executable is committed to GitHub.
 
 
@@ -59,7 +58,7 @@ Both supplied European files are PE32 i386, ImageBase `0x00400000`, Windows GUI 
 
 ## Release gate and testing
 
-- The Windows x64 Rust CLI now supports exactly three hash-locked combinations: **US FadeLow + media gate (owner-validated after NO CD on an earlier FadeLow-only install)**, **EN/ES/IT FadeLow + CD-media gate (six-byte candidate; requires owner gameplay validation)**, and **FR/DE FadeLow + its own media gate (owner-tested)**. Each uses exact original hashes, known raw offsets, expected opcodes, known target SHA-256 and a verified original backup for safe replacement. The US and FR/DE gate offsets differ.
+- The Windows x64 Rust CLI now supports exactly three hash-locked combinations: **US FadeLow + media gate (owner-validated after NO CD on an earlier FadeLow-only install)**, **EN/ES/IT FadeLow + CD-media gate (six bytes; owner-validated)**, and **FR/DE FadeLow + its own media gate (owner-tested)**. Each uses exact original hashes, known raw offsets, expected opcodes, known target SHA-256 and a verified original backup for safe replacement. The US and FR/DE gate offsets differ.
 - Trial binaries are separate private output files, supplied only to the original owner via this conversation. **Do not add original or modified commercial EXEs to GitHub, CI, or a public release**.
 - Test using an isolated copy of each installed edition, keeping its original `SPVOODOO.EXE` untouched. Launch the alternate-name trial EXE via Lutris/Wine or Windows, repeat the previous Go/mission fade scenario and verify menu, mission transitions, playback, input and audio. Revert simply by selecting the original EXE again.
 - Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. The owner then confirmed the **combined** FR/DE six-byte test copy works. Both editions are eligible for their exact tested Rust patch/restore combinations; the new Rust CLI installer and launch commands still require separate end-to-end tests.
