@@ -164,6 +164,15 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
             return Err(format!("INI : language={lang} incompatible avec l'édition {}",profile.label));
         }
     }
+    // SPLANETW.EXE is the obsolete software-renderer executable. All new
+    // installations omit it. Warn owners of older installations to perform
+    // the safe SHA-256-gated cleanup using the normal installer command.
+    for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
+        let item=item.map_err(|e|e.to_string())?;
+        if item.file_name().to_string_lossy().eq_ignore_ascii_case("splanetw.exe"){
+            return Err("Fichier inutile splanetw.exe présent : relancer ScorchedPlanetFix.exe sans argument pour le supprimer si son empreinte correspond au CD original.".into());
+        }
+    }
     // nGlide is a runtime prerequisite: the check is read-only and never
     // downloads/installs the proprietary DLL.
     nglide::verify_local_glide(folder)?;
@@ -207,6 +216,8 @@ mod tests {
             assert!(files.iter().any(|x|x.path=="rwdlvood.dll"));
             assert!(files.iter().any(|x|x.path.starts_with("video/")));
             assert!(!files.iter().any(|x|x.path.ends_with(".sav")));
+            assert!(!files.iter().any(|x|x.path=="splanetw.exe"),
+                "obsolete software renderer must not be required for {edition}");
         }
         assert!(allowed_language("US 1.08",1));
         assert!(allowed_language("EN/ES/IT 1.06",5));
