@@ -170,8 +170,111 @@ historical `_grSstOpen@24` ABI, implementation/version metadata,
 and behavior at the interface. The CD-era DLL is optional
 for historical comparison, not needed to start.
 
-**Updated stop condition:** The exact RWDLVOOD DLL is now inspected.
-Do not generate or ask the owner to test an experimental mode
-patch until the **active nGlide `Glide.dll`** has been inspected
-and the cross-module resolution assumptions are mapped.
+**Updated milestone:** the active nGlide `Glide.dll` has now also
+been inspected, and a strictly isolated 800×600 proof of concept
+has been built. No successful gameplay or native-resolution result
+is yet claimed. See the latest findings below.
+
+## Active nGlide 2.10 received — full ABI compatibility (2026-10-30)
+
+The user supplied the **actual active** `Glide.dll` from their working
+Wine/nGlide installation. All observations below come from this file,
+not the original Glide DLL on the game CD.
+
+| Property | Verified value |
+| --- | --- |
+| SHA-256 | `3e1bcd94fc30311bebd21b916ed38d30e540a06dfd658cc8dfcdbe510a8587a4` |
+| Size | 1,536,000 bytes |
+| PE | 32-bit i386, six sections, timestamp 2019-09-14 |
+| Embedded product version | `nGlide 2.10` |
+| Reported Glide interface | `Glide(tm) Version 2.1.1` |
+| Named exports | 132 |
+| Historical Glide imports required by RWDLVOOD | **45/45 resolved by exact decorated export names** |
+
+The wrapper exports `_grSstOpen@24`, `_grLfbGetWritePtr@4`,
+`_grLfbWriteMode@4`, `_grLfbBegin@0`, `_grLfbEnd@0`,
+`_grBufferSwap@4`, and every other direct Glide import
+of the verified 1996 RenderWare driver. This is a *static ABI*
+matching check; it cannot establish all runtime behavior.
+
+### Resolution enum verified from nGlide's code
+
+The `_grSstOpen@24` exported thunk at `0x10001271` jumps to
+`0x10043640`. One active backend path invokes its mode handler
+`0x10004B60`, which has these branches:
+
+| Mode enum | Branch | Stored width × height |
+| --- | --- | --- |
+| 7 | `0x10004D04` | 640 × 480 |
+| 8 | `0x10004D22` | **800 × 600** |
+| 9 | `0x10004D3D` | 960 × 720 |
+
+A second backend-specific mode path at `0x10024EB0` also
+contains the same style of resolution selection.
+Thus the supplied nGlide itself recognizes a mode above
+the game's current 640×480 request. A successful call and
+fully correct render remain to be tested.
+
+### RenderWare fixed LFB stride is potentially compatible with 800-wide
+
+`RWDLVOOD.DLL` has a copy loop at `0x10001C94` that advances
+the destination framebuffer pointer by **0x800 = 2048 bytes
+per scanline**. The driver's graphics descriptor also sets
+`[mode+0x10] = 0x800` at `0x10001960`.
+
+At 16 bits per pixel, 800 pixels require 1600 bytes per line,
+which fits inside that 2048-byte stride. This is an encouraging
+**capacity check**, not a guarantee that the entire engine
+automatically adjusts its 2D coordinate system, LFB pointer,
+depth buffer, or clipping for larger modes.
+
+## First isolated 800×600 proof of concept (NOT YET GAME-TESTED)
+
+With both exact binaries available, a copy-only generator was
+implemented at `tools/build_native_800x600.py`. It accepts
+the validated FadeLow EXE and the exact original RenderWare
+DLL by SHA-256, checks all original operand bytes and writes
+two new PE32 outputs into a previously nonexistent directory.
+
+| File | Input SHA-256 | 800×600 POC SHA-256 |
+| --- | --- | --- |
+| `SPVOODOO.EXE` (FadeLow) | `0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45` | `67f4b9d2bb8132bd0799ff91e1c50bc130f3df75265f98de44ef91db79e5bfad` |
+| `RWDLVOOD.DLL` | `1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de` | `4dd3c3f0b4a009b428de059aa5f373db79c6da10b5dba922f64e246c060c3321` |
+
+**Exact patch inventory (file offsets, not virtual addresses):**
+
+| File | Offset | Operand change |
+| --- | --- | --- |
+| EXE | `0x33DFA`, `0x33E20`, `0x33F62` | 640 → 800 |
+| EXE | `0x33E0D`, `0x33E38`, `0x33F6C` | 480 → 600 |
+| DLL | `0x7F4` | Glide mode 7 → 8 |
+| DLL | `0x854`, `0xD49` | 480 → 600 |
+| DLL | `0x859`, `0xD3C` | 640 → 800 |
+
+Exactly **12 byte values change in the game** across six
+four-byte immediate operands; exactly **nine byte values change
+in the RenderWare DLL** across five sites. File sizes are
+unchanged. All original PE headers, sections, other bytes,
+and the previously validated FadeLow timer correction remain intact.
+**nGlide `Glide.dll` is not modified or redistributed.**
+
+A privately supplied test archive contains the two patched files
+plus French instructions and SHA-256 manifest; copyrighted
+binaries are not committed to GitHub. GitHub Actions uses
+synthetic PE fixtures instead.
+
+**Trial protocol:** copy the working `splanet` installation into
+an independent `splanet-800x600-test` folder, replace only the
+EXE and `RWDLVOOD.DLL` **inside the test copy**, retain the
+same Wine prefix and existing unmodified nGlide wrapper,
+and point Lutris to the test folder as both executable path
+and working directory. Test menu, Go, 3D, HUD, video and
+audio. Roll back by selecting the original working FadeLow EXE
+in Lutris and deleting only the test folder.
+
+**Stop:** the offline technical phase is complete for this
+first proof of concept. **No gameplay test has occurred**, so
+its ability to render 800×600 correctly is unverified. Wait
+for owner testing before expanding patch scope or attempting
+1024×768 / widescreen.
 
