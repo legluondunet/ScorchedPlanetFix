@@ -1,6 +1,9 @@
 //! Filesystem-only installer core. Does not run legacy setup executables.
 //! Commercial game assets must be supplied by the end user.
 
+pub mod cd_audit;
+pub use cd_audit::audit_cd;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
