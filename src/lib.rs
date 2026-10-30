@@ -2,7 +2,9 @@
 //! Commercial game assets must be supplied by the end user.
 
 pub mod cd_audit;
+pub mod setup_manifest;
 pub use cd_audit::audit_cd;
+pub use setup_manifest::{read_cd_languages, CdLanguages};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,7 +15,8 @@ use walkdir::WalkDir;
 pub struct InstallOptions {
     pub cd_root: PathBuf,
     pub destination: PathBuf,
-    /// Scorched Planet's original language code: French=2, German=3.
+    /// Candidate game-language codes (English=1, French=2, German=3),
+    /// pending confirmation from real game installations.
     pub language: u8,
 }
 
@@ -86,11 +89,19 @@ fn add_tree(
 }
 
 pub fn plan_install(options: &InstallOptions) -> Result<InstallPlan, String> {
-    if !matches!(options.language, 2 | 3) {
-        return Err("Langue non prise en charge (2=Francais, 3=Deutsch).".into());
+    if !matches!(options.language, 1 | 2 | 3) {
+        return Err("Langue non prise en charge (1=English, 2=Francais, 3=Deutsch).".into());
     }
     if !options.cd_root.is_dir() {
         return Err("Choisir un dossier contenant les fichiers copies du CD.".into());
+    }
+    if let Some(available) = read_cd_languages(&options.cd_root)? {
+        if !available.offers(options.language) {
+            return Err(format!(
+                "La langue selectionnee ({}) n'est pas disponible dans le SETUP.INI de ce CD.",
+                options.language
+            ));
+        }
     }
     if options.destination.exists() {
         return Err(format!(
@@ -318,6 +329,33 @@ mod tests {
         let (_dir, opts) = fixture();
         fs::create_dir_all(&opts.destination).unwrap();
         assert!(plan_install(&opts).is_err());
+    }
+
+    #[test]
+    fn english_source_accepts_english_and_rejects_french() {
+        let (_dir, mut opts) = fixture();
+        fs::write(
+            opts.cd_root.join("SETUP.INI"),
+            b"[Criterion Studios]\r\nEnglish=1\r\nFrancais=0\r\nDeutsch=0\r\nItaliano=1\r\nEspagnol=1\r\nDefaultLanguage=1\r\n",
+        ).unwrap();
+        opts.language = 1;
+        let plan = plan_install(&opts).unwrap();
+        execute_install(&opts, &plan, |_, _, _| {}).unwrap();
+        assert!(fs::read_to_string(opts.destination.join("SPLANET.INI"))
+            .unwrap()
+            .contains("language=1"));
+    }
+
+    #[test]
+    fn rejects_unavailable_language_on_english_disc() {
+        let (_dir, mut opts) = fixture();
+        fs::write(
+            opts.cd_root.join("SETUP.INI"),
+            b"[Criterion Studios]\r\nEnglish=1\r\nFrancais=0\r\nDeutsch=0\r\nItaliano=1\r\nEspagnol=1\r\nDefaultLanguage=1\r\n",
+        ).unwrap();
+        opts.language = 2;
+        let error = plan_install(&opts).unwrap_err();
+        assert!(error.contains("n'est pas disponible"));
     }
 
     #[test]
