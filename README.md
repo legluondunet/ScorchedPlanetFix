@@ -30,3 +30,14 @@ See [installer design and remaining validation](docs/installer.md).
 Development takes place in **draft pull requests**; nothing is merged before build and on-machine validation. New source is intended to be licensed GPL-3.0-or-later after the repository license is finalized.
 
 *legluondunet assisted by ChatGPT (OpenAI)*
+
+### Original CD inspection
+
+The setup screen includes **Analyser le contenu du CD…**, which saves
+`ScorchedPlanet-CD-audit.txt`. This read-only report lists source file names and
+sizes and small textual `SETUP.INI` files. It helps reconstruct the original
+InstallShield file map and investigate language-specific resources without modifying
+the source CD. See [installer audit instructions](docs/installer.md).
+
+The audit does **not** yet prove complete installation or English language support
+for a particular original disc.
