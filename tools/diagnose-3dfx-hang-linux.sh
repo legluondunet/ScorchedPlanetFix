@@ -309,14 +309,32 @@ if ((with_gdb)); then
     done
     if [[ -f "$out/gdb-sample-1.txt" ]]; then
       {
-        printf '\n=== GDB : thread principal Linux PID %s ===\n' "$pid"
+        printf '\n=== GDB : thread principal Linux TID %s ===\n' "$pid"
         for sample in 1 2; do
-          [[ -f "$out/gdb-sample-$sample.txt" ]] || continue
-          printf '\nGDB capture %s :\n' "$sample"
-          grep -E -m 30 '(^\*|LWP |^\$[0-9]+ = |Thread [0-9]+|ptrace:|Operation not permitted|Could not attach)' \
-            "$out/gdb-sample-$sample.txt" || true
+          file="$out/gdb-sample-$sample.txt"
+          [[ -f "$file" ]] || continue
+          printf '\n=== GDB capture %s : PC, instructions et pile du TID %s ===\n' "$sample" "$pid"
+          # GDB emits one "Thread N (... (LWP PID)):" header per thread
+          # for each "thread apply all" command. Extract only the main
+          # Linux thread and the first 20 following lines per section.
+          # Do not flood the single log with every Wine helper thread.
+          awk -v tid="$pid" '
+            /^Thread [0-9]+ / {
+              active = (index($0, "LWP " tid ")") > 0)
+              if (active) { section++; lines=0; print "\n" $0 }
+              next
+            }
+            active && lines < 20 {
+              print
+              lines++
+            }
+          ' "$file"
+          if ! grep -q "LWP $pid)" "$file"; then
+            printf 'Aucune section LWP %s identifiable; voir %s\n' "$pid" "$file"
+            grep -E -m 6 'ptrace:|Operation not permitted|Could not attach|warning:' "$file" || true
+          fi
         done
-        printf 'Backtraces complets : voir le dossier detaille.\n'
+        printf '\nPiles de tous les threads : dans gdb-sample-1.txt et gdb-sample-2.txt.\n'
       } >> "$log_file"
     fi
   fi
