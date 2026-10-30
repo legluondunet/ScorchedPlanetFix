@@ -3,7 +3,8 @@
 //!
 //! Preflight: parse image, reject unsafe/ambiguous paths, require exact known
 //! 3dfx exe+driver hashes, required game resources and at least one SMK video (INI generated if absent).
-//! Extract: flatten SPLANET then VOODOO (VOODOO wins), verify every extracted
+//! Extract: flatten SPLANET then VOODOO (VOODOO wins), excluding three
+//! obsolete 3dfx hardware drivers, verify every extracted
 //! file's SHA256 against bytes read from ISO, update video= to local install.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::ORIGINAL_SHA256;
@@ -21,7 +22,7 @@ const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 #[derive(Clone)]
 struct Asset { node: TreeNode, relative: PathBuf, size: u64, from_voodoo: bool }
 #[derive(Default)]
-struct Inventory { files: BTreeMap<String, Asset>, image_entries: usize, video_files: usize }
+struct Inventory { files: BTreeMap<String, Asset>, image_entries: usize, video_files: usize, skipped_legacy_drivers: usize }
 pub struct InstallReport { pub files: usize, pub bytes: u64, pub folder: PathBuf, pub edition: &'static str }
 
 /// Fingerprints recorded from the three owner-supplied CD file inventories.
@@ -71,6 +72,15 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
         }
         if !valid_name(&child.name) {
             return Err(err("ISO non prise en charge (nom de fichier dangereux)"));
+        }
+        // These three original 3dfx hardware drivers are obsolete on modern
+        // Windows and can shadow a user-provided compatible Glide wrapper.
+        // Skip *only* these top-level VOODOO driver files; preserve source ISO.
+        if voodoo && prefix.as_os_str().is_empty()
+            && !child.is_directory && matches!(child.name.to_ascii_lowercase().as_str(),
+                "glide.dll" | "fxmemmap.vxd" | "sst1init.dll") {
+            inventory.skipped_legacy_drivers += 1;
+            continue;
         }
         let relative = prefix.join(&child.name);
         if child.is_directory {
@@ -304,7 +314,8 @@ pub fn install_iso(
     // signed full-disc reference manifest, they cannot prove that every
     // other original CD file matches a specific retail master image.
     log("ISO: edition-specific EXE/GEOMETRY and shared RWDLVOOD hashes verified; no independently authenticated all-files master yet");
-    log(&format!("ISO: {} install files; {} SMK videos", inventory.files.len(),inventory.video_files));
+    log(&format!("ISO: {} install files; {} SMK videos; {} legacy 3dfx drivers skipped",
+        inventory.files.len(),inventory.video_files,inventory.skipped_legacy_drivers));
     let parent=destination.parent().ok_or("Invalid installation parent")?;
     let staging=parent.join(format!(".splanet-setup-{}",std::process::id()));
     fs::create_dir(&staging).map_err(|e|format!("Can't stage installation: {e}"))?;
@@ -392,11 +403,18 @@ mod tests {
         let mut voodoo=TreeNode::new_directory("VOODOO".into());
         voodoo.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,8192,10));
         voodoo.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
+        voodoo.add_child(TreeNode::new_file_with_location("GLIDE.DLL".into(),10,14336,10));
+        voodoo.add_child(TreeNode::new_file_with_location("SST1INIT.DLL".into(),10,16384,10));
+        voodoo.add_child(TreeNode::new_file_with_location("FXMEMMAP.VXD".into(),10,18432,10));
         root.add_child(sp);
         root.add_child(voodoo);
         let checked=inventory(&root).expect("CD sans splanet.ini doit être accepté");
         assert!(!checked.files.contains_key("splanet.ini"));
         assert_eq!(checked.video_files,1);
+        assert_eq!(checked.skipped_legacy_drivers,3);
+        for legacy in ["glide.dll","fxmemmap.vxd","sst1init.dll"] {
+            assert!(!checked.files.contains_key(legacy));
+        }
     }
     #[test] fn creates_missing_ini_with_local_video_and_defaults(){
         let dir=std::env::temp_dir().join(format!("scorched-new-ini-test-{}",std::process::id()));
