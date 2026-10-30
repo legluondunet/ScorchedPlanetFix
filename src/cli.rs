@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! ScorchedPlanetFix Windows --nogui mode: same edition-checked installer and patch.
-use crate::{iso_install,logger::Logger,verify};
+use crate::{iso_install,logger::Logger,verify,nglide};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -63,6 +63,10 @@ pub fn run(arguments:&[OsString],root:&Path,
         let edition=verify::profile_for_patched_exe(&exe)?;
         let language=verify::preferred_language(&install,edition.label);
         iso_install::update_ini(&install.join("splanet.ini"),language)?;
+        let installed=nglide::copy_installed_glide(root,&install,|message|logger.write(message))?;
+        if !installed {
+            emit(logger,&mut sink,&format!("AVERTISSEMENT : nGlide manquant. Installation nécessaire depuis {}",nglide::OFFICIAL_URL));
+        }
         emit(logger,&mut sink,&outcome);
         emit(logger,&mut sink,&format!("Configuration portable : video= video, language={language}"));
         emit(logger,&mut sink,&format!("Terminé. Original conservé : {}.bak",exe.display()));
@@ -114,6 +118,76 @@ pub fn launch_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<
     }
     emit(logger,&mut sink,"Le jeu s'est terminé normalement.");
     Ok(())
+}
+
+pub fn help(version:&str)->String{
+    format!("ScorchedPlanetFix {version} — outil Windows x64 en ligne de commande
+Usage :
+  ScorchedPlanetFix.exe
+  ScorchedPlanetFix.exe --nogui
+  ScorchedPlanetFix.exe --nogui <image.iso>
+  ScorchedPlanetFix.exe --nogui <image.cue> [piste.bin]
+  ScorchedPlanetFix.exe --verify
+  ScorchedPlanetFix.exe --launch
+  ScorchedPlanetFix.exe --help
+  ScorchedPlanetFix.exe --version
+
+Sans argument / --nogui :
+  Recherche un ISO ou CUE/BIN dans le répertoire courant, extrait le jeu
+  dans splanet, sauvegarde spvoodoo.exe.bak et applique son correctif.
+  Une installation existante est conservée ; l'exécutable peut être
+  automatiquement corrigé, sans écraser les données du jeu.
+--verify :
+  Vérifie les fichiers du jeu, le patch et la sauvegarde dans splanet
+  À CÔTÉ de ScorchedPlanetFix.exe. N'effectue aucune réparation.
+--launch :
+  Vérifie d'abord toute l'installation, puis lance le jeu ; attend sa sortie.
+--help :
+  Affiche les commandes, les chemins et cette version.
+--version :
+  Affiche uniquement la version.
+
+nGlide (propriétaire, téléchargement et installation séparés) :
+  {nglide_url}
+  Une copie locale 32 bits glide.dll est nécessaire dans splanet.
+  Lors du lancement, les variables nGlide sont limitées au processus
+  du jeu : Vulkan si disponible, résolution bureau, aspect corrigé,
+  60 Hz, VSync activée, gamma 1.0, logo 3dfx désactivé.
+
+Toutes les erreurs sont signalées et inscrites dans ScorchedPlanetFix.log.
+Aucun fichier original du CD ou du jeu n'est redistribué.",
+    nglide_url=nglide::OFFICIAL_URL)
+}
+/// Exactly one standalone console entrypoint; no GUI is linked.
+pub fn dispatch(arguments:&[OsString],version:&str)->Result<(),String>{
+    let first=arguments.first().and_then(|v|v.to_str());
+    if arguments.len()==1 && matches!(first,Some("--help")|Some("-h")) {
+        println!("{}",help(version));
+        return Ok(());
+    }
+    if arguments.len()==1 && first==Some("--version") {
+        println!("ScorchedPlanetFix {version}");
+        return Ok(());
+    }
+    let exe=std::env::current_exe().map_err(|e|format!("Exécutable introuvable : {e}"))?;
+    let exe_root=exe.parent().ok_or("Dossier du patcher absent")?.to_path_buf();
+    // Existing semantics: default and --nogui install in CWD. Verification
+    // and launch always use the folder next to ScorchedPlanetFix.exe.
+    let is_install=arguments.is_empty() || first==Some("--nogui");
+    let root=if is_install {
+        std::env::current_dir().map_err(|e|format!("Répertoire courant : {e}"))?
+    }else{exe_root};
+    let logger=Logger::new(&root,version)?;
+    logger.system_information();
+    let operation=match first{
+        None=>run(&[],&root,&logger,|msg|println!("{msg}")),
+        Some("--nogui")=>run(&arguments[1..],&root,&logger,|msg|println!("{msg}")),
+        Some("--verify") if arguments.len()==1=>verify_only(&root,&logger,|msg|println!("{msg}")),
+        Some("--launch") if arguments.len()==1=>launch_only(&root,&logger,|msg|println!("{msg}")),
+        _=>Err(format!("Arguments inconnus. Utilisez --help.\n{}",help(version))),
+    };
+    if let Err(ref message)=operation{logger.error(message);}
+    operation
 }
 
 #[cfg(test)]
