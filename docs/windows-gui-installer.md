@@ -30,7 +30,9 @@ or commercial DLLs are included.
    its installed `SPVOODOO.EXE` (or reports an error if missing).
 5. If `splanet` does not exist, and exactly one ISO is present, the
    patcher parses it, validates the supported 3dfx edition, merges the
-   original `SPLANET/` then `VOODOO/` trees into a temporary directory,
+   original `SPLANET/` files and `VOODOO/` game components into a temporary
+directory, excluding the obsolete CD `glide.dll`, `sst1init.dll`, and
+`fxmemmap.vxd` hardware drivers,
    checks all installed file transfers, generates `splanet.ini` if absent
    (or preserves its settings if present), writes the local `video=`
    path and finally atomically names the new
@@ -91,8 +93,9 @@ The preflight checks:
   generated when absent;
 - **exact SHA-256** of original `SPVOODOO.EXE` and `RWDLVOOD.DLL`
   against verified retail reference binaries;
-- streamed extraction of the selected complete `SPLANET` and `VOODOO`
-  trees, with individual SHA-256 comparison between bytes read from the
+- streamed extraction of all selected `SPLANET` files and `VOODOO`
+  game components (omitting only the three obsolete original Glide drivers),
+  with individual SHA-256 comparison between bytes read from the
   ISO and bytes written to disk.
 
 The installer recognizes three **owner-inventoried 3dfx CD editions** using
