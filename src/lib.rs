@@ -18,7 +18,9 @@ pub const ORIGINAL_BYTES: [u8; 4] = [0x17, 0xB7, 0xD1, 0x38];
 pub const FADELOW_BYTES: [u8; 4] = [0xAC, 0xC5, 0x27, 0x37];
 
 /// Only exact owner-supplied and verified game binaries may be patched.
-/// US and EN/ES/IT have owner gameplay validation; FR/DE is still experimental.
+/// FR/DE requires BOTH FadeLow and the edition-specific CD media-gate fix.
+/// Owner gameplay validation covers the combined FR/DE experimental binary,
+/// not either FR/DE modification in isolation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FadeProfile {
     pub label: &'static str,
@@ -26,18 +28,39 @@ pub struct FadeProfile {
     pub patched_hash: &'static str,
     pub target_va: u32,
     pub target_offset: usize,
+    /// Only FR/DE uses this media-gate modification; never apply it to US
+    /// or EN/ES/IT, for which an INI video path is already sufficient.
+    pub media_gate: Option<MediaGate>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaGate {
+    pub va: u32,
+    pub file_offset: usize,
+}
+
+const MEDIA_GATE_ORIGINAL: [u8;2] = [0x33,0xc0];
+const MEDIA_GATE_REPLACEMENT: [u8;2] = [0xb0,0x01];
 pub const US_PROFILE: FadeProfile = FadeProfile {
     label: "US 1.08", original_hash: ORIGINAL_SHA256,
     patched_hash: FADELOW_SHA256, target_va: TARGET_VA, target_offset: TARGET_FILE_OFFSET,
+    media_gate: None,
 };
 pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
     label: "EN/ES/IT 1.06",
     original_hash: "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f",
     patched_hash: "dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc",
     target_va: 0x0044_93AD, target_offset: 0x487AD,
+    media_gate: None,
 };
-pub const SUPPORTED_PROFILES: [FadeProfile; 2] = [US_PROFILE, EN_ES_IT_PROFILE];
+pub const FR_DE_PROFILE: FadeProfile = FadeProfile {
+    label: "FR/DE 1.06 (FadeLow + contrôle CD)",
+    original_hash: "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72",
+    patched_hash: "426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c",
+    target_va: 0x0044_966D, target_offset: 0x48A6D,
+    media_gate: Some(MediaGate {va: 0x0043_58BB, file_offset: 0x34CBB}),
+};
+pub const SUPPORTED_PROFILES: [FadeProfile; 3] = [US_PROFILE, EN_ES_IT_PROFILE, FR_DE_PROFILE];
 
 pub fn profile_from_hash(hash: &str) -> Option<FadeProfile> {
     SUPPORTED_PROFILES.iter().copied().find(|profile|
@@ -129,6 +152,10 @@ pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
     pe_target_offset_for(data, US_PROFILE)
 }
 fn pe_target_offset_for(data: &[u8], profile: FadeProfile) -> Result<usize> {
+    pe_site_offset(data, profile.target_va, profile.target_offset, 4)
+}
+/// Map an instruction's virtual address to a *verified* raw file offset.
+fn pe_site_offset(data: &[u8], target_va: u32, expected_offset: usize, width: u32) -> Result<usize> {
     if data.len() < 0x100 || data.get(..2) != Some(b"MZ") {
         return Err("Not a DOS/PE executable (MZ missing)".into());
     }
@@ -148,8 +175,8 @@ fn pe_target_offset_for(data: &[u8], profile: FadeProfile) -> Result<usize> {
     if image_base != 0x0040_0000 {
         return Err(format!("Unexpected image base 0x{image_base:x}"));
     }
-    let rva = profile.target_va.checked_sub(image_base)
-        .ok_or("Fade VA precedes PE image base")?;
+    let rva = target_va.checked_sub(image_base)
+        .ok_or("Patch VA precedes PE image base")?;
     for index in 0..n {
         let p = sections + index * 40;
         if data.get(p..p + 5) != Some(&b".text"[..]) {
@@ -161,20 +188,20 @@ fn pe_target_offset_for(data: &[u8], profile: FadeProfile) -> Result<usize> {
         let raw_ptr = u32_at(data, p + 20)?;
         let size = virtual_size.min(raw_size);
         if rva >= section_rva
-            && rva.checked_add(4).is_some_and(|end_rva| {
+            && rva.checked_add(width).is_some_and(|end_rva| {
                 section_rva.checked_add(size).is_some_and(|end_sec| end_rva <= end_sec)
             })
         {
             let offset = (raw_ptr as usize) + (rva - section_rva) as usize;
-            if data.get(offset..offset + 4).is_some() {
-                if offset != profile.target_offset {
+            if data.get(offset..offset + width as usize).is_some() {
+                if offset != expected_offset {
                     return Err("Target file offset differs from verified retail EXE".into());
                 }
                 return Ok(offset);
             }
         }
     }
-    Err("Fade threshold VA not backed by PE .text bytes".into())
+    Err("Patch VA not backed by PE .text bytes".into())
 }
 
 /// Only patches data matching both the exact source SHA and opcode literal.
@@ -189,6 +216,13 @@ fn patch_with_hashes_for(data: &[u8], source: &str, target: &str, profile: FadeP
     }
     let mut changed = data.to_vec();
     changed[offset..offset + 4].copy_from_slice(&FADELOW_BYTES);
+    if let Some(gate) = profile.media_gate {
+        let gate_offset = pe_site_offset(data, gate.va, gate.file_offset, 2)?;
+        if data[gate_offset..gate_offset+2] != MEDIA_GATE_ORIGINAL {
+            return Err("FR/DE media gate instruction bytes differ from reference".into());
+        }
+        changed[gate_offset..gate_offset+2].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+    }
     if changed.len() != data.len() || sha256_hex(&changed) != target {
         return Err("Patched file SHA-256 mismatch".into());
     }
@@ -395,12 +429,38 @@ mod tests {
         patch_with_hashes_for(data, &sha256_hex(data), &sha256_hex(&expected), US_PROFILE).unwrap()
     }
 
+    #[test] fn fr_de_profile_requires_combined_fix() {
+        assert_eq!(FR_DE_PROFILE.media_gate, Some(MediaGate{va:0x4358BB,file_offset:0x34CBB}));
+        assert_eq!(profile_from_hash(FR_DE_PROFILE.original_hash),Some(FR_DE_PROFILE));
+        assert_eq!(profile_from_hash(FR_DE_PROFILE.patched_hash),Some(FR_DE_PROFILE));
+        // The earlier FR/DE FadeLow-only candidate is NOT eligible.
+        assert!(profile_from_hash("5373c7b24389556b7466932695e7e2d1076531105f9bb879749e783a64898d90").is_none());
+    }
+    #[test] fn fr_de_synthetic_six_byte_patch_and_gate_rejection() {
+        let mut raw=synthetic_pe();
+        // Synthetic fixture maps section virtual 0x1000 to raw offset 0x400.
+        // Extend its original .text window to cover both mapped patch sites.
+        // Original verified file offsets map VA -> file offset by (VA - 0xC00).
+        raw[FR_DE_PROFILE.target_offset..FR_DE_PROFILE.target_offset+4].copy_from_slice(&ORIGINAL_BYTES);
+        raw[0x34CBB..0x34CBD].copy_from_slice(&MEDIA_GATE_ORIGINAL);
+        let mut wanted=raw.clone();
+        wanted[FR_DE_PROFILE.target_offset..FR_DE_PROFILE.target_offset+4].copy_from_slice(&FADELOW_BYTES);
+        wanted[0x34CBB..0x34CBD].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+        let result=patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE)
+            .expect("six-byte FR/DE synthetic patch");
+        assert_eq!(result,wanted);
+        let changes:Vec<_>=raw.iter().zip(&result).enumerate()
+            .filter(|(_, (before,after))|before!=after).map(|(i,_)|i).collect();
+        assert_eq!(changes,vec![0x34CBB,0x34CBC,0x48A6D,0x48A6E,0x48A6F,0x48A70]);
+        raw[0x34CBB]=0x90;
+        assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE).is_err());
+    }
     #[test] fn only_validated_profiles_are_eligible() {
         assert_eq!(profile_from_hash(ORIGINAL_SHA256),Some(US_PROFILE));
         assert_eq!(profile_from_hash(FADELOW_SHA256),Some(US_PROFILE));
         assert_eq!(profile_from_hash(EN_ES_IT_PROFILE.original_hash),Some(EN_ES_IT_PROFILE));
         assert_eq!(profile_from_hash(EN_ES_IT_PROFILE.patched_hash),Some(EN_ES_IT_PROFILE));
-        assert!(profile_from_hash("eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72").is_none());
+        assert_eq!(profile_from_hash(FR_DE_PROFILE.original_hash), Some(FR_DE_PROFILE));
     }
     #[test] fn european_pe_offset_is_edition_specific() {
         let mut data=synthetic_pe();
