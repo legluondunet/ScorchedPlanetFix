@@ -3,14 +3,13 @@ name = "scorched-planet-fix"
 version = "1.0.0"
 edition = "2021"
 rust-version = "1.95"
-description = "Windows GUI patcher and ISO installer for Scorched Planet (1996)"
+description = "Windows x64 command-line CD installer, verifier and game launcher for Scorched Planet (1996)"
 license = "GPL-3.0-or-later"
 authors = ["legluondunet assisted by ChatGPT (OpenAI)"]
 publish = false
 build = "build.rs"
 
 [dependencies]
-eframe = { version = "=0.36.2", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 isomage = "=2.1.0"
 sha2 = "0.10"
 
