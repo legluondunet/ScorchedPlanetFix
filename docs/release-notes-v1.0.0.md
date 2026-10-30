@@ -29,11 +29,11 @@ The game and installer have **not** been exhaustively tested on every mission, W
 3. Install [nGlide](https://www.zeus-software.com/downloads/nglide) separately or provide your own compatible 32-bit `glide.dll` next to `ScorchedPlanetFix.exe`.
 4. Open a console in that directory and run:
 
-   ````powershell
+   ```powershell
    .\ScorchedPlanetFix.exe
    .\ScorchedPlanetFix.exe --verify
    .\ScorchedPlanetFix.exe --launch
-   ````
+   ```
 
 Read the [README](../README.md) for explicit image paths, Wine instructions and troubleshooting.
 
