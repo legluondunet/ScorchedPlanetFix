@@ -21,7 +21,7 @@ To avoid triggering it, **arm the monitor before starting the game**.
 Open a terminal **in the installed game's directory** and run:
 
 ```bash
-WINEPREFIX="/mnt/LUTRIS/Games/scorched-planet/" \
+WINEPREFIX="/path/to/your/wine-prefix" \
   bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5 --game-dir . --gdb
 ```
 
