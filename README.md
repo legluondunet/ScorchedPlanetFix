@@ -10,17 +10,17 @@ ScorchedPlanetFix runs as a **console executable, without a GUI**, on Windows 64
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe --nogui
-.\ScorchedPlanetFix.exe --nogui "D:\CD\Scorched Planet.iso"
-.\ScorchedPlanetFix.exe --nogui "D:\CD\Scorched Planet.cue"
-.\ScorchedPlanetFix.exe --nogui "D:\CD\Scorched Planet.cue" "D:\CD\Scorched Planet.bin"
+.\ScorchedPlanetFix.exe
+.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.iso"
+.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue"
+.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue" "D:\CD\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --launch
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
 
-**No arguments** means install/patch in the **current working directory**. `--nogui` remains an alias for backwards compatibility, since the program is now always console-only. With no explicit ISO/CUE, find a single supported `.iso` or `.cue` in the working directory. A CUE references the associated BIN, or the BIN may be supplied as the second operand. Do not overwrite an existing `splanet` directory; if already installed, verify/patch its recognized original EXE and normalize its INI.
+**No arguments** means install/patch in the **current working directory**. Alternatively, pass an ISO/CUE path directly as the first positional argument (and an optional BIN path as the second). With no explicit ISO/CUE, find a single supported `.iso` or `.cue` in the working directory. A CUE references the associated BIN, or the BIN may be supplied as the second operand. Do not overwrite an existing `splanet` directory; if already installed, verify/patch its recognized original EXE and normalize its INI.
 
 **`--verify`** always inspects `splanet` **beside ScorchedPlanetFix.exe** (not necessarily your shell's working directory), checks the edition-specific patched executable, the original `.bak`, the portable INI and each immutable game asset against the owner's SHA-256 inventory; save games (`*.sav`) and custom settings are mutable and excluded from hash enforcement. It also checks for a **local 32-bit `splanet/glide.dll`**.
 
