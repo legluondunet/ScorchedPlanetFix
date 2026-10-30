@@ -6,7 +6,6 @@ This is a **console-only** program. It has no graphical user interface. The 32-b
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.iso"
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue"
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
