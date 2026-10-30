@@ -220,7 +220,12 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     if images.len()>1 {return Err("Plusieurs ISO trouvées : laisser une seule image du jeu".into());}
     Ok(images.pop())
 }
-fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
+/// Keep all existing user settings unmodified except video, selected language
+/// and HighQualityVideo; add conservative defaults when no INI exists.
+pub fn update_ini(ini:&Path,video:&Path,language:u8)->Result<(),String>{
+    if !(1..=5).contains(&language) {
+        return Err(format!("Code de langue invalide: {language}"));
+    }
     // Preserve all legacy non-UTF8 bytes in original INI lines; replace
     // video= as ASCII, add missing 3dfx defaults from the user's Lutris
     // installation script without overwriting existing user settings.
@@ -229,9 +234,12 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
         Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Vec::new(),
         Err(e)=>return Err(format!("Lecture splanet.ini : {e}")),
     };
-    let names: [&[u8];4]=[b"video=",b"HighQualityVideo=",b"settings=",b"name="];
-    let values: [Vec<u8>;4]=[
+    // Numeric language indices come from the original game's PE32 resource
+    // pointer table: 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
+    let names: [&[u8];5]=[b"video=",b"language=",b"HighQualityVideo=",b"settings=",b"name="];
+    let values: [Vec<u8>;5]=[
         format!("video={}",video.display()).into_bytes(),
+        format!("language={language}").into_bytes(),
         b"HighQualityVideo=1".to_vec(),
         b"settings=1 0 1 1 5 95 127 0 0 5 320".to_vec(),
         b"name=Player".to_vec(),
@@ -239,7 +247,7 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
     let mut out:Vec<Vec<u8>>=Vec::new();
     let mut in_scorch=false;
     let mut section_found=false;
-    let mut seen=[false;4];
+    let mut seen=[false;5];
     let chunks:Vec<&[u8]>=original.split(|b|*b==b'\n').collect();
     for (index,line) in chunks.iter().enumerate() {
         if index+1==chunks.len() && line.is_empty() {continue;}
@@ -247,7 +255,7 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
         let trimmed=line.trim_ascii();
         if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
             if in_scorch {
-                for i in 0..4 {
+                for i in 0..5 {
                     if !seen[i] {out.push(values[i].clone());seen[i]=true;}
                 }
             }
@@ -256,10 +264,10 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
         }
         if in_scorch {
             let mut handled=false;
-            for i in 0..4 {
+            for i in 0..5 {
                 if trimmed.len()>=names[i].len() &&
                    trimmed[..names[i].len()].eq_ignore_ascii_case(names[i]) {
-                    if i==0 {
+                    if i<=2 {
                         out.push(values[0].clone());
                     }else{
                         out.push(line.to_vec());
@@ -278,7 +286,7 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
         in_scorch=true;
     }
     if in_scorch {
-        for i in 0..4 {if !seen[i]{out.push(values[i].clone());}}
+        for i in 0..5 {if !seen[i]{out.push(values[i].clone());}}
     }
     let mut bytes=Vec::new();
     for line in out {
@@ -367,7 +375,12 @@ pub fn install_iso(
         } else {
             log("INI: preserving original settings; updating local video path");
         }
-        update_ini(&ini,&destination.join("video"))?;
+        let default_language=match edition.label {
+            "FR/DE" => 2, // French (German=3)
+            _ => 1, // English (Italian=4, Spanish=5 for EN/ES/IT)
+        };
+        update_ini(&ini,&destination.join("video"),default_language)?;
+        log(&format!("INI: default language={} for edition {}",default_language,edition.label));
         log(&format!("INI: written and verified: {}",file_digest(&ini)?));
         // User-specific resources and wrappers are NOT embedded or downloaded.
         if destination.exists(){return Err("splanet créé entre-temps : opération annulée".into());}
@@ -421,11 +434,12 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let ini=dir.join("splanet.ini");
         assert!(!ini.exists());
-        update_ini(&ini,Path::new(r"C:\splanet\video")).unwrap();
+        update_ini(&ini,Path::new(r"C:\splanet\video"),1).unwrap();
         let result=fs::read_to_string(&ini).unwrap();
         assert!(result.contains("[scorch]"));
         assert!(result.contains(r"video=C:\splanet\video"));
         assert!(result.contains("HighQualityVideo=1"));
+        assert!(result.contains("language=1"));
         assert!(result.contains("settings=1 0 1 1 5 95 127 0 0 5 320"));
         assert!(result.contains("name=Player"));
         fs::remove_dir_all(&dir).unwrap();
@@ -437,12 +451,28 @@ mod tests {
         assert!(identify_edition(EDITIONS[0].exe_sha256,EDITIONS[1].geometry_sha256).is_none());
         assert!(identify_edition("unknown",EDITIONS[0].geometry_sha256).is_none());
     }
+    #[test] fn language_change_preserves_user_input_gamma_and_settings(){
+        let dir=std::env::temp_dir().join(format!("scorched-ini-preserve-{}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ini=dir.join("splanet.ini");
+        fs::write(&ini,b"[scorch]\r\nvideo= c:\\old\\video\r\nlanguage= 4\r\nkeymap= 0 29 37\r\ngamma= 1.000000\r\njoystick= 0 0 0.000000\r\nHighQualityVideo= 0\r\nsettings= 1 0 1 1\r\nname= Testeur\r\n").unwrap();
+        update_ini(&ini,Path::new(r"C:\new\video"),5).unwrap();
+        let out=fs::read_to_string(&ini).unwrap();
+        assert!(out.contains("language=5"));
+        assert!(out.contains("HighQualityVideo=1"));
+        assert!(out.contains(r"video=C:\new\video"));
+        for v in ["keymap= 0 29 37","gamma= 1.000000","joystick= 0 0 0.000000","settings= 1 0 1 1","name= Testeur"]{
+            assert!(out.contains(v),"missing {v}");
+        }
+        assert!(!out.contains("language= 4"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
     #[test] fn ini_video_path_is_local(){
         let dir=std::env::temp_dir().join(format!("scorched-ini-test-{}",std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let ini=dir.join("splanet.ini");
         fs::write(&ini,b"[scorch]\r\nHighQualityVideo=1\r\nvideo=c:\\splanetcd\\splanet\\video\r\n").unwrap();
-        update_ini(&ini,Path::new(r"C:\splanet\video")).unwrap();
+        update_ini(&ini,Path::new(r"C:\splanet\video"),4).unwrap();
         let result=fs::read_to_string(&ini).unwrap();
         assert!(result.contains(r"video=C:\splanet\video"));
         assert!(!result.contains("splanetcd"));
