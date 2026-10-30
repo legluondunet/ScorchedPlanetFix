@@ -10,7 +10,7 @@
 //! the final INI, then atomically publish the complete installation.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
-use crate::cue_image;
+use crate::{cue_image,nglide};
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -495,6 +495,13 @@ pub fn install_image(
         update_ini(&ini,default_language)?;
         log(&format!("INI: edition={} language={} sha256={}",
             edition.label,default_language,file_digest(&ini)?));
+        // nGlide is third-party freeware, not licensed for redistribution
+        // within our GPL archive. If user has it installed already, copy their
+        // own glide.dll into the game. Never download or bundle it.
+        let has_glide=nglide::copy_installed_glide(parent,&staging,|line|log(line))?;
+        if !has_glide {
+            log(&format!("INSTALL WARNING: game cannot yet be launched without locally installed nGlide ({})",nglide::OFFICIAL_URL));
+        }
         // Publish only after every validation, copy, backup, patch and INI
         // step has succeeded. Never expose a half-installed destination.
         if destination.exists() || destination.is_symlink() {
