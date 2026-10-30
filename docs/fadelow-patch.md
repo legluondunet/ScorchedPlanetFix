@@ -113,3 +113,25 @@ the game directory. The copy-only method is preferred for first trials.
 
 See [the static timing analysis](go-fade-timer-static-analysis.md) for the
 underlying code analysis and remaining uncertainties.
+
+## Playing without the original CD-files directory (verified Wine install)
+
+The project owner tested the validated `SPVOODOO-FadeLow.EXE`
+**without** the separate experimental CD patch and with the local
+`splanetcd` CD-files directory renamed/disabled. The game launched
+and entered gameplay after changing the video path in `splanet.ini`:
+
+```ini
+video=c:\splanet\video
+```
+
+This replaces the older `video=c:\splanetcd\splanet\video`
+configuration and requires the relevant video assets to be present
+in the newly selected directory. **Do not apply a NoCD binary patch
+to this installation:** it was unnecessary for the tested startup
+and gameplay entry. Other cinematics, tracks and missions still
+need their resource paths and contents checked individually.
+
+Analysis and A/B test record: `docs/cd-media-check.md` in the
+separate `research/cd-media-check` branch / PR #3.
+
