@@ -8,4 +8,10 @@ The first component is a Windows installer written in Rust, intended to read fil
 
 ## Graphics compatibility research
 
-The 3dfx/RenderWare investigation provides **Linux/Wine/nGlide Bash** and Windows PowerShell diagnostic tools to capture process and thread state while `SPVOODOO.EXE` is frozen at the transition from menu to a mission. They do not patch game files. Linux users should start with `tools/diagnose-3dfx-hang-linux.sh`. See [the graphics diagnostic guide](docs/graphics-diagnostics.md).
+The 3dfx/RenderWare investigation provides **Linux/Wine/nGlide Bash** and Windows PowerShell diagnostic tools to capture process and thread state while `SPVOODOO.EXE` is frozen at the transition from menu to a mission. The diagnostic scripts do not alter game files. Linux users can start with `tools/diagnose-3dfx-hang-linux.sh`. See [the graphics diagnostic guide](docs/graphics-diagnostics.md).
+
+## FadeLow — user-tested 3dfx timing fix
+
+The original game's 3dfx executable can freeze after selecting **Go** on fast CPUs. The user successfully tested **FadeLow** under Linux/Wine/nGlide. The version-locked Python patcher `tools/scorchedplanetfix_patch.py` reproduces the validated 4-byte timing adjustment **only** for the exact SHA-256 of the supported retail `SPVOODOO.EXE`.
+
+The recommended `copy` mode keeps the original untouched. Optional `apply --yes` makes a verified backup, and `restore --yes` reverses the change. See [FadeLow installation and rollback instructions](docs/fadelow-patch.md). No modified copyrighted executable is distributed, and this development PR is not merged.
