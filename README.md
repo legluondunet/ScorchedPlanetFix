@@ -38,8 +38,9 @@ For this approach, free space for the temporary data-track ISO is required.
 **After the game files are copied,** the patcher first saves the
 unmodified `spvoodoo.exe` as `spvoodoo.exe.bak`, applies the exact
 edition-specific correction, verifies the output SHA-256, and **only then**
-generates `splanet.ini` with the local video path, the edition's default
-language and `HighQualityVideo=1`. Existing personal controller, gamma
+generates `splanet.ini` with the **portable, game-working relative setting
+`[scorch]` / `video= video`**, the edition's default language and
+`HighQualityVideo=1`. No absolute video path is stored. Existing personal controller, gamma
 and other settings are preserved. The final directory `splanet` is
 published only when every step succeeds. Both the installation workspace
 and temporary CD extraction are then deleted. On error no incomplete
@@ -97,18 +98,21 @@ this project includes the validated FadeLow fix for US and EN/ES/IT,
 plus an FR/DE-only media-detection change alongside FadeLow.
 No generalized NoCD or high-resolution patch is included.
 
-## Command line (--nogui)
+## Command line (--nogui, --verify, --launch)
 
-Exactly the same installation and edition-specific patch engine is available
-without opening a window. **It works in the current working directory**, not
-necessarily the folder containing ScorchedPlanetFix.exe. Only these forms
-are supported:
+The same executable supports **three** non-graphical actions.
+`--nogui` installs/patches using the **current working directory**.
+`--verify` and `--launch` use the **splanet folder alongside
+ScorchedPlanetFix.exe**, regardless of your shell's current directory.
+These forms are supported:
 
 ```powershell
 .\ScorchedPlanetFix.exe --nogui
 .\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.iso
 .\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.cue
 .\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.cue .\ScorchedPlanet.bin
+.\ScorchedPlanetFix.exe --verify
+.\ScorchedPlanetFix.exe --launch
 ```
 
 Without arguments after `--nogui`, find exactly one ISO or CUE in the
@@ -119,9 +123,31 @@ and no image is specified, the CLI only verifies and automatically patches
 the existing exact-edition executable; with an explicit image, it refuses
 to overwrite `splanet`. The normalized original `spvoodoo.exe` is stored in
 `splanet/spvoodoo.exe.bak` before any patch. Existing installations
-with uppercase filenames are resolved case-insensitively. The program never starts
-the game in `--nogui` mode. For detailed diagnostics, see
-`ScorchedPlanetFix.log` in the current directory.
+with uppercase filenames are resolved case-insensitively. The program never
+starts the game in `--nogui` mode.
+
+`--verify` performs a **read-only** audit: the exact patched executable
+for the detected edition, the matching original `.bak`, every immutable
+game data file against the owner-supplied original-CD SHA-256 inventories,
+and the `splanet.ini` video/language configuration. Player save slots
+(`*.sav`) are deliberately exempt from hash comparison because the game
+may update them, as is the mutable INI.
+
+`--launch` performs that **same complete verification before every
+launch**, refuses to start if any check fails, then starts `spvoodoo.exe`
+with its working directory set to `splanet` and reports unexpected
+nonzero game exit codes. The graphical **Lancer** button uses the same
+verification, in a worker thread so the window remains responsive.
+No game modification is attempted by `--verify` or `--launch`:
+run `--nogui` to install/patch or repair an obsolete INI first.
+
+All errors, including failed verifications, missing files, invalid options,
+launch failures and abnormal game exits, are presented to the user and
+written to `ScorchedPlanetFix.log` (beside the patcher for GUI,
+`--verify` and `--launch`; in the working directory for `--nogui`).
+If the chosen directory itself cannot be written, the program makes a
+best-effort attempt to write a fallback log elsewhere. No software
+can guarantee a log when all storage destinations are inaccessible.
 
 The game's owner confirmed that its CD editions under study **have no
 audio CD tracks**. Only the data track is required for extraction;
