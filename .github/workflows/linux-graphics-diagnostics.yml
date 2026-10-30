@@ -61,3 +61,19 @@ jobs:
             echo "Mismatched prefix was unexpectedly accepted"
             exit 1
           fi
+      - name: Test explicit sudo GDB control flow using mocked tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/scorchedplanet-gdb-mock-test"
+          mkdir -p "$work/bin"
+          printf '%s\n' '#!/usr/bin/env bash' 'if [[ "$1" == "-v" ]]; then exit 0; fi' 'if [[ "$1" == "-n" ]]; then shift; exec "$@"; fi' 'exit 1' > "$work/bin/sudo"
+          printf '%s\n' '#!/usr/bin/env bash' 'echo "Thread 1 (LWP 12345) #0 0x12345678 in test()"' > "$work/bin/gdb"
+          chmod +x "$work/bin/sudo" "$work/bin/gdb"
+          sleep 25 &
+          target=$!
+          trap 'kill "$target" 2>/dev/null || true' EXIT
+          PATH="$work/bin:$PATH" bash tools/diagnose-3dfx-hang-linux.sh --pid "$target" --interval 1 --gdb-sudo --output "$work/report"
+          test -s "$work/report/gdb-sample-1.txt"
+          test -s "$work/report/gdb-sample-2.txt"
+          grep -q 'GDB_SUDO=1' "$work/report/summary.txt"
