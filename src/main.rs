@@ -3,7 +3,7 @@
 //! user's own CD directory at runtime, never embedded in this executable.
 
 use eframe::egui::{self, Color32, TextureHandle};
-use scorched_planet_setup::{audit_cd, execute_install, plan_install, InstallOptions, InstallResult};
+use scorched_planet_setup::{audit_cd, execute_install, plan_install, read_cd_languages, CdLanguages, InstallOptions, InstallResult};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
@@ -11,14 +11,24 @@ use walkdir::WalkDir;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Language {
+    English,
     French,
     German,
 }
 impl Language {
     fn code(self) -> u8 {
         match self {
+            Self::English => 1,
             Self::French => 2,
             Self::German => 3,
+        }
+    }
+    fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::English),
+            2 => Some(Self::French),
+            3 => Some(Self::German),
+            _ => None,
         }
     }
 }
@@ -51,6 +61,9 @@ struct SetupApp {
     artwork_source: String,
     artwork_status: String,
     audit_status: String,
+    cd_language_source: String,
+    cd_languages: Option<CdLanguages>,
+    cd_language_note: String,
 }
 
 fn original_art(root: &Path, candidates: &[&str]) -> Option<PathBuf> {
@@ -118,13 +131,50 @@ impl SetupApp {
             artwork_source: String::new(),
             artwork_status: String::new(),
             audit_status: String::new(),
+            cd_language_source: String::new(),
+            cd_languages: None,
+            cd_language_note: String::new(),
         }
     }
 
     fn tr(&self, fr: &'static str, de: &'static str) -> &'static str {
         match self.language {
-            Language::French => fr,
+            Language::English | Language::French => fr,
             Language::German => de,
+        }
+    }
+
+    /// Refresh once when the source path changes; the original SETUP.INI
+    /// controls which game languages are available on that edition of the CD.
+    fn refresh_cd_languages(&mut self) {
+        if self.source == self.cd_language_source {
+            return;
+        }
+        self.cd_language_source.clone_from(&self.source);
+        self.cd_languages = None;
+        match read_cd_languages(Path::new(self.source.trim())) {
+            Ok(Some(available)) => {
+                if !available.offers(self.language.code()) {
+                    if let Some(code) = available.preferred_supported_code() {
+                        if let Some(language) = Language::from_code(code) {
+                            self.language = language;
+                        }
+                    }
+                }
+                self.cd_language_note = format!(
+                    "Langues annoncees sur ce CD : anglais={}, francais={}, allemand={}, italien={}, espagnol={}.",
+                    available.english, available.french, available.german,
+                    available.italian, available.spanish,
+                );
+                self.cd_languages = Some(available);
+            }
+            Ok(None) => {
+                self.cd_language_note =
+                    "SETUP.INI introuvable : disponibilite des langues non verifiee.".into();
+            }
+            Err(error) => {
+                self.cd_language_note = format!("SETUP.INI : {error}");
+            }
         }
     }
 
@@ -224,6 +274,7 @@ impl eframe::App for SetupApp {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         self.refresh_artwork(&ctx);
+        self.refresh_cd_languages();
 
         egui::CentralPanel::default().show(root_ui, |ui| {
             ui.add_space(10.0);
@@ -291,12 +342,25 @@ impl eframe::App for SetupApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(self.tr("Langue du jeu :", "Spielsprache:"));
+                let can_english = self.cd_languages.as_ref().is_none_or(|languages| languages.english);
+                let can_french = self.cd_languages.as_ref().is_none_or(|languages| languages.french);
+                let can_german = self.cd_languages.as_ref().is_none_or(|languages| languages.german);
                 ui.add_enabled_ui(self.stage != Stage::Installing, |ui| {
-                    ui.radio_value(&mut self.language, Language::French, "Français");
-                    ui.radio_value(&mut self.language, Language::German, "Deutsch");
+                    ui.add_enabled_ui(can_english, |ui| {
+                        ui.radio_value(&mut self.language, Language::English, "English");
+                    });
+                    ui.add_enabled_ui(can_french, |ui| {
+                        ui.radio_value(&mut self.language, Language::French, "Français");
+                    });
+                    ui.add_enabled_ui(can_german, |ui| {
+                        ui.radio_value(&mut self.language, Language::German, "Deutsch");
+                    });
                 });
             });
 
+            if !self.cd_language_note.is_empty() {
+                ui.small(&self.cd_language_note);
+            }
             ui.add_space(8.0);
             if ui.add_enabled(
                 self.stage != Stage::Installing,
