@@ -19,6 +19,10 @@ jobs:
         run: python3 -m py_compile tools/inspect_native_resolution.py
       - name: Run synthetic PE signature and offset tests
         run: python3 tools/inspect_native_resolution.py --self-test
+      - name: Test copy-only 800x600 builder using synthetic PE files
+        run: |
+          python3 -m py_compile tools/build_native_800x600.py
+          python3 tools/build_native_800x600.py --self-test
       - name: Verify unknown EXE is refused without creating output
         shell: bash
         run: |
