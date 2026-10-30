@@ -60,7 +60,11 @@ pub fn run(arguments:&[OsString],root:&Path,
         let exe=scorched_planet_fix::find_installed_exe(&install)?;
         emit(logger,&mut sink,"Installation existante détectée. Vérification du correctif automatique…");
         let outcome=scorched_planet_fix::execute(Action::Apply,&exe,None,true)?;
+        let edition=verify::profile_for_patched_exe(&exe)?;
+        let language=verify::preferred_language(&install,edition.label);
+        iso_install::update_ini(&install.join("splanet.ini"),language)?;
         emit(logger,&mut sink,&outcome);
+        emit(logger,&mut sink,&format!("Configuration portable : video= video, language={language}"));
         emit(logger,&mut sink,&format!("Terminé. Original conservé : {}.bak",exe.display()));
         return Ok(());
     }
