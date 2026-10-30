@@ -29,3 +29,20 @@ jobs:
           test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/snapshot-1-thread-ticks.tsv"
           test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/snapshot-2-thread-ticks.tsv"
           test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/thread-cpu-delta.tsv"
+      - name: Test wait mode and current-directory log
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/scorchedplanet-wait-test"
+          mkdir -p "$work"
+          cp /bin/sleep "$work/spvoodoo.exe"
+          script="$GITHUB_WORKSPACE/tools/diagnose-3dfx-hang-linux.sh"
+          ( sleep 2; "$work/spvoodoo.exe" 20 ) &
+          launcher=$!
+          trap 'kill "$launcher" 2>/dev/null || true; pkill -f "$work/spvoodoo.exe" || true' EXIT
+          (
+            cd "$work"
+            bash "$script" --wait --delay 1 --interval 1
+          )
+          compgen -G "$work/ScorchedPlanetFix-3dfx-*.log" > /dev/null
+          ls -l "$work"/ScorchedPlanetFix-3dfx-*.log
