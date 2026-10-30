@@ -1,0 +1,17 @@
+[package]
+name = "scorched-planet-fix"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.76"
+description = "Safe version-locked FadeLow compatibility patcher for Scorched Planet (1996)"
+license = "GPL-3.0-or-later"
+authors = ["legluondunet assisted by ChatGPT (OpenAI)"]
+publish = false
+
+[dependencies]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
