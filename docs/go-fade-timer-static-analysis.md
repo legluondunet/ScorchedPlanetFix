@@ -271,3 +271,37 @@ Separately, the read-only live-value test of timer delta
 other causes when the user is ready for in-game diagnostics.
 No live-memory capture is performed by the offline tools.
 
+## Prepared first user test: low-threshold executable copy (not run)
+
+The exact retail original was independently re-checked offline, including
+PE image mapping, 7 timing/fade signatures, all 12 byte-level backward
+loops and the floating point gate. A `low` test copy was produced from
+the user-supplied original and diffed against it:
+
+| Item | Value |
+| --- | --- |
+| Original SHA-256 | `fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a` |
+| Low test SHA-256 | `0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45` |
+| Changed file offsets | `0x489CD-0x489D0`, inclusive; four bytes only |
+| Old float32 bytes | `17 B7 D1 38` (0.0001) |
+| New float32 bytes | `AC C5 27 37` (approximately 0.00001) |
+| PE type | `pei-i386`, same 836,608-byte size and entry point |
+
+The user received a private zip with `SPVOODOO-FadeLow.EXE` and
+`README-FadeLow-FR.txt`. **No copyrighted modified binary is stored in**
+**the public GitHub repository.**
+
+Safe initial trial: put the alternate-name executable alongside the
+original in the game directory, keep the same Lutris Wine runner and
+prefix, temporarily point Lutris to `SPVOODOO-FadeLow.EXE`,
+click Go, record gameplay transition, audio, fade, and CPU behavior,
+then restore Lutris executable path. This never overwrites
+`SPVOODOO.EXE`. If this game requires its original EXE filename
+and fails to launch, **do not rename/overwrite the original**;
+instead conduct a later trial on an isolated installation copy.
+
+**Stopping point:** the next useful step requires the user to execute
+the test copy in the real Wine/nGlide environment. Offline validation
+cannot establish that the Go freeze is fixed, and no claim of
+in-game success has been made.
+
