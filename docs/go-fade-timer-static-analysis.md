@@ -97,8 +97,8 @@ the active value during the actual 3dfx freeze.
 
 Of the **178** previous `perf` user-mode CPU samples, exactly
 **26 instruction pointers** fell within the mapped original EXE's
-`.text` address range. Of those 26, **23** are in timer
-`0x432B00`, **2** in `0x436100`, and **1** on the
+`.text` address range. Of those 26, **20** are in timer
+`0x432B00`, **5** in `0x436100`, and **1** on the
 loop branch `0x427D38`. The other two `[JIT]`-labeled
 IP samples are outside the original EXE image and should not
 be automatically attributed to the retail game's code.
