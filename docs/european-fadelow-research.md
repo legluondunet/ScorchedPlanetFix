@@ -1,5 +1,38 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
+## EN/ES/IT — reproduced NO CD and six-byte candidate (2026-10-30)
+
+In the owner's newer **CUE/BIN** workflow, EN/ES/IT extraction and `--verify`
+both succeeded with the four-byte FadeLow-only executable, but a **CD-required**
+message appeared in gameplay. This supersedes the earlier assumption that the
+video INI setting alone made EN/ES/IT reliably CD-free in all environments.
+
+We compared the original owner-supplied EN/ES/IT PE32
+(SHA-256 `9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f`,
+835,584 bytes) directly with the same drive/media-probe routine in FR/DE.
+The EN/ES/IT routine begins at VA `0x435570`, checks drive/file access,
+and returns false at **VA `0x43562B`, raw `0x34A2B`**:
+`33 C0` (`xor eax,eax`). As with the previously owner-tested FR/DE fix,
+the targeted two-byte change is `B0 01` (`mov al,1`).
+
+The new EN/ES/IT candidate combines:
+- FadeLow four-byte change at raw `0x487AD`
+- Media-check two-byte change at raw `0x34A2B`
+
+The resulting file retains its exact original size, changes **only six bytes**,
+and has independently calculated target SHA-256
+`66c705a77d290d4bed6abdb4b8b065337aaeb50f9e4480090bbe2dfd5006d35c`.
+The exact original hash, PE32 address mapping, original opcode bytes, target
+SHA-256 and backup are enforced by the Rust patcher.
+
+The previous FadeLow-only SHA-256
+`dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc`
+is recognized **only** for migration from the verified retail `.bak`.
+The original `.bak` and saved games remain untouched. **The combined
+EN/ES/IT candidate still requires owner validation without a CD image.**
+No commercial executable is committed to GitHub.
+
+
 Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE: FadeLow-only test displayed “PAS DE CD”; the owner subsequently reported “validé!” for the combined FadeLow + two-byte CD-media diagnostic copy (2026-10-30). This validates the combination in the user's game test, not the FR/DE FadeLow-only candidate.** This report does not imply all missions, cinematics, or both wrappers have been tested.
 
 This analysis used the two owner-supplied original executables, without modifying them, and compares the palette-fade mechanism with the previously validated US FadeLow 4-byte patch. No original or patched commercial executable is stored in this repository.
@@ -26,7 +59,7 @@ Both supplied European files are PE32 i386, ImageBase `0x00400000`, Windows GUI 
 
 ## Release gate and testing
 
-- The Windows x64 Rust CLI now supports exactly three hash-locked combinations: **US FadeLow + media gate (owner-validated after NO CD on an earlier FadeLow-only install)**, **EN/ES/IT FadeLow only**, and **FR/DE FadeLow + its own media gate (owner-tested)**. Each uses exact original hashes, known raw offsets, expected opcodes, known target SHA-256 and a verified original backup for safe replacement. The US and FR/DE gate offsets differ.
+- The Windows x64 Rust CLI now supports exactly three hash-locked combinations: **US FadeLow + media gate (owner-validated after NO CD on an earlier FadeLow-only install)**, **EN/ES/IT FadeLow + CD-media gate (six-byte candidate; requires owner gameplay validation)**, and **FR/DE FadeLow + its own media gate (owner-tested)**. Each uses exact original hashes, known raw offsets, expected opcodes, known target SHA-256 and a verified original backup for safe replacement. The US and FR/DE gate offsets differ.
 - Trial binaries are separate private output files, supplied only to the original owner via this conversation. **Do not add original or modified commercial EXEs to GitHub, CI, or a public release**.
 - Test using an isolated copy of each installed edition, keeping its original `SPVOODOO.EXE` untouched. Launch the alternate-name trial EXE via Lutris/Wine or Windows, repeat the previous Go/mission fade scenario and verify menu, mission transitions, playback, input and audio. Revert simply by selecting the original EXE again.
 - Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. The owner then confirmed the **combined** FR/DE six-byte test copy works. Both editions are eligible for their exact tested Rust patch/restore combinations; the new Rust CLI installer and launch commands still require separate end-to-end tests.
@@ -122,5 +155,5 @@ cinematics, video and audio playback has not been documented.
 The combined six-byte candidate (and only that candidate) was promoted
 to the Rust edition-specific profile with exact SHA-256 checks, backup
 and restore. The CLI installer remains awaiting independent testing
-with a real FR/DE ISO. There is **no general-purpose NoCD patch**
+with a real FR/DE ISO. There is **no unverified general-purpose NoCD patch**
 for US, EN/ES/IT, or unknown versions.
