@@ -17,16 +17,19 @@ mod cli;
 mod iso_install;
 #[cfg(windows)]
 mod logger;
+#[cfg(windows)]
+mod verify;
+#[cfg(windows)]
+mod verify_manifest;
 
 #[cfg(windows)]
 mod app {
-    use super::{iso_install,logger::Logger};
+    use super::{iso_install,logger::Logger,verify};
     use eframe::egui::{self,Color32,RichText};
     use scorched_planet_fix::{self,Action,ORIGINAL_SHA256,FADELOW_SHA256};
     use sha2::{Digest,Sha256};
     use std::fs;
     use std::path::{Path,PathBuf};
-    use std::process::Command;
     use std::sync::mpsc::{self,Receiver,Sender};
     use std::time::Duration;
 
@@ -79,9 +82,11 @@ mod app {
         Progress(u64,u64,String),
         Installed(Result<iso_install::InstallReport,String>),
         Patched(Result<String,String>),
+        LaunchStarted(Result<u32,String>),
+        LaunchFinished(Result<(),String>),
     }
     struct Modal { title:String, text:String, error:bool }
-    enum Phase { Ready, Installing, Patching }
+    enum Phase { Ready, Installing, Patching, Verifying }
 
     pub struct ScorchedApp {
         root:PathBuf,
@@ -98,6 +103,7 @@ mod app {
         rx:Receiver<Event>,
         tx:Sender<Event>,
         game_ready:bool,
+        game_running:bool,
         stop_on_modal:bool,
         detect: String,
     }
@@ -113,7 +119,7 @@ mod app {
             let mut app=Self {root,logger,version,install,
                 fadelow_allowed:false,edition:"inconnue",language:1,
                 phase:Phase::Ready,status:"Initialisation…".into(),
-                progress:0.0,dialog:None,rx,tx,game_ready:false,stop_on_modal:false,detect:String::new()};
+                progress:0.0,dialog:None,rx,tx,game_ready:false,game_running:false,stop_on_modal:false,detect:String::new()};
             app.scan_start();
             app
         }
@@ -223,6 +229,35 @@ mod app {
                             },
                         }
                     },
+                    Event::LaunchStarted(result)=>{
+                        self.phase=Phase::Ready;
+                        match result{
+                            Ok(pid)=>{
+                                self.game_running=true;
+                                self.status=format!("Jeu lancé (PID {pid})");
+                                self.logger.write(&format!("LAUNCH OK: process ID {pid}"));
+                            },
+                            Err(e)=>{
+                                self.game_running=false;
+                                self.status="Lancement refusé : vérification échouée".into();
+                                self.info("Impossible de lancer le jeu",
+                                    format!("{e}\nConsultez ScorchedPlanetFix.log."),true);
+                            }
+                        }
+                    },
+                    Event::LaunchFinished(result)=>{
+                        self.game_running=false;
+                        match result{
+                            Ok(())=>{
+                                self.status="Jeu terminé normalement".into();
+                                self.logger.write("LAUNCH: game process exited successfully");
+                            },
+                            Err(e)=>{
+                                self.status="Erreur pendant l'exécution du jeu".into();
+                                self.info("Erreur du jeu",format!("{e}\nVoir ScorchedPlanetFix.log."),true);
+                            }
+                        }
+                    },
                     Event::Patched(result)=>{
                         self.phase=Phase::Ready;
                         match result{
@@ -249,8 +284,7 @@ mod app {
                 return;
             }
             let ini=self.install.join("splanet.ini");
-            let video=self.install.join("video");
-            match iso_install::update_ini(&ini,&video,selection){
+            match iso_install::update_ini(&ini,selection){
                 Ok(())=>{
                     self.language=selection;
                     self.logger.write(&format!("INI: selected language={selection} for {}",self.edition));
@@ -286,24 +320,38 @@ mod app {
             });
         }
         fn launch_game(&mut self){
-            if !self.game_ready {
-                self.info("Impossible de lancer","Le jeu n'est pas installé.",true);return;
+            if !self.game_ready || self.game_running || !matches!(self.phase,Phase::Ready) {
+                self.info("Impossible de lancer","Installation non prête ou jeu déjà en cours.",true);
+                return;
             }
-            let game=match scorched_planet_fix::find_installed_exe(&self.install){
-                Ok(path)=>path,
-                Err(e)=>{self.info("Impossible de lancer",e,true);return;}
-            };
-            self.logger.write("LAUNCH: launching user's SPVOODOO.EXE, working directory splanet");
-            match Command::new(&game).current_dir(&self.install).spawn(){
-                Ok(child)=>{
-                    self.status="Jeu lancé".into();
-                    self.logger.write(&format!("LAUNCH OK: process ID {}",child.id()));
-                },
-                Err(e)=>{
-                    self.info("Impossible de lancer",
-                        format!("Démarrage du jeu échoué : {e}\nVérifiez que Glide (nGlide ou compatible) est disponible."),true);
-                },
-            }
+            self.phase=Phase::Verifying;
+            self.status="Vérification complète des fichiers avant lancement…".into();
+            self.progress=0.0;
+            let install=self.install.clone();
+            let log=self.logger.clone();
+            let tx=self.tx.clone();
+            std::thread::spawn(move||{
+                log.write("LAUNCH: full verification started; no game launch unless all checks pass");
+                match verify::launch_verified(&install,|line|log.write(line)){
+                    Ok(mut child)=>{
+                        let pid=child.id();
+                        log.write(&format!("LAUNCH OK: PID {pid}; waiting for process exit"));
+                        let _=tx.send(Event::LaunchStarted(Ok(pid)));
+                        let result=child.wait().map_err(|e|format!("Surveillance du processus de jeu : {e}"))
+                            .and_then(|status|{
+                                if status.success(){Ok(())}
+                                else{Err(format!("Le jeu s'est terminé avec le code {}",status.code()
+                                    .map(|x|x.to_string()).unwrap_or_else(||"inconnu".into())))}
+                            });
+                        if let Err(ref e)=result{log.error(&format!("LAUNCH PROCESS: {e}"));}
+                        let _=tx.send(Event::LaunchFinished(result));
+                    },
+                    Err(e)=>{
+                        log.error(&format!("LAUNCH BLOCKED: {e}"));
+                        let _=tx.send(Event::LaunchStarted(Err(e)));
+                    }
+                }
+            });
         }
         fn show_dialog(&mut self,root:&egui::Ui){
             if let Some(dialog)=&self.dialog {
@@ -378,7 +426,7 @@ mod app {
                             });
                     });
                     if selected!=self.language {self.select_language(selected);}
-                    ui.label(RichText::new("Vidéos locales ; HighQualityVideo=1. Autres réglages conservés.")
+                    ui.label(RichText::new("Vidéos relatives : video= video ; vérification avant lancement.")
                         .small().color(Color32::GRAY));
                 }
                 ui.add_space(10.0);
@@ -389,7 +437,7 @@ mod app {
                 }
                 ui.add_space(16.0);
                 ui.horizontal(|ui|{
-                    let available=matches!(self.phase,Phase::Ready)&&self.game_ready;
+                    let available=matches!(self.phase,Phase::Ready)&&self.game_ready&&!self.game_running;
                      if ui.add_enabled(available,egui::Button::new("Lancer").min_size(egui::vec2(135.0,34.0))).clicked(){
                         self.launch_game();
                     }
