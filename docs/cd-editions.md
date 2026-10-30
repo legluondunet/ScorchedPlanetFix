@@ -12,7 +12,7 @@ In all three editions, `VOODOO/RWDLVOOD.DLL` is **identical** (SHA-256 `1bd95e0d
 
 **Important:** the numeric 1.06/1.08 values above are derived from `autorun.inf` `InstallKey`; they are not independently verified game-executable version resources. The FR/DE inventory additionally declares `FrenchInstall=1`.
 
-European editions include three legacy driver files in the `VOODOO` tree (`glide.dll`, `fxmemmap.vxd`, `sst1init.dll`); the US inventory's `VOODOO` tree does not. Presence in the original CD must not be interpreted as compatibility with current Windows or Wine. The installation policy still needs real end-to-end tests with an external suitable Glide implementation.
+European editions include three legacy driver files in the `VOODOO` tree (`glide.dll`, `fxmemmap.vxd`, `sst1init.dll`); the US inventory's `VOODOO` tree does not. Presence in the original CD must not be interpreted as compatibility with current Windows or Wine. The modern installer deliberately omits these three driver files while preserving the source ISO and all actual game resources. The installation policy still needs real end-to-end tests with an external suitable Glide implementation.
 
 ## Integration and validation boundary
 
