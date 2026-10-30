@@ -1,4 +1,4 @@
-name: ScorchedPlanetFix Windows 1.0 GUI
+name: ScorchedPlanetFix Windows 1.0 CLI
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   windows:
-    name: Windows GUI build and tests
+    name: Windows CLI build and tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +26,9 @@ jobs:
         run: rustup target add x86_64-pc-windows-msvc
       - name: Test all targets (includes ISO and FadeLow tests)
         run: cargo test --target x86_64-pc-windows-msvc --all-targets
-      - name: Compile release GUI (Windows x64 only)
+      - name: Compile release console (Windows x64 only)
         run: cargo build --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
-      - name: Verify program is Windows subsystem GUI and CRT static
+      - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
         run: |
           $exe = "target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe"
@@ -41,19 +41,19 @@ jobs:
           $magic = [BitConverter]::ToUInt16($bytes, $optional)
           if ($magic -ne 0x20b) { throw "Expected PE32+ optional header (0x20b), received $magic" }
           $subsystem = [BitConverter]::ToUInt16($bytes, $optional + 68)
-          if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), received $subsystem" }
-          Write-Host "Windows x64 GUI verified; size=$($bytes.Length)"
+          if ($subsystem -ne 3) { throw "Expected Windows console subsystem (3), received $subsystem" }
+          Write-Host "Windows x64 console verified; size=$($bytes.Length)"
       - name: Package executable, GPL license, README and checksums
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe dist/ScorchedPlanetFix.exe
           Copy-Item LICENSE dist/LICENSE.txt
-          Copy-Item docs/windows-gui-installer.md dist/README.md
+          Copy-Item README.md dist/README.md
           $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
           Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
-      - name: Upload Windows executable (development build)
+      - name: Upload Windows CLI executable (development build)
         uses: actions/upload-artifact@v4
         with:
           name: ScorchedPlanetFix-v1.0.0-Windows-x64
