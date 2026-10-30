@@ -20,9 +20,14 @@ fn validate_glide_dll(path:&Path)->Result<(),String>{
     let count=f.read(&mut header).map_err(|e|e.to_string())?;
     if count<256 || &header[..2]!=b"MZ" {return Err(format!("glide.dll is not a PE binary: {}",path.display()));}
     let pos=u32::from_le_bytes(header[0x3c..0x40].try_into().unwrap()) as usize;
-    if pos.checked_add(6).is_none_or(|p|p>count) ||
+    // A generic x86 EXE renamed to glide.dll is not a Glide wrapper.
+    // Require the PE32 optional header and the IMAGE_FILE_DLL flag as well
+    // as the x86 machine type, without needing to execute third-party code.
+    if pos.checked_add(26).is_none_or(|p|p>count) ||
        &header[pos..pos+4]!=b"PE\0\0" ||
-       u16::from_le_bytes(header[pos+4..pos+6].try_into().unwrap())!=0x14c {
+       u16::from_le_bytes(header[pos+4..pos+6].try_into().unwrap())!=0x14c ||
+       u16::from_le_bytes(header[pos+22..pos+24].try_into().unwrap())&0x2000==0 ||
+       u16::from_le_bytes(header[pos+24..pos+26].try_into().unwrap())!=0x10b {
         return Err(format!("glide.dll must be a 32-bit Windows x86 DLL: {}",path.display()));
     }
     // Explicitly reject the exact original 1996 Glide hardware driver
@@ -60,16 +65,25 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
         return Ok(true);
     }
     let Some(source)=find_source(root) else {
-        log(&format!("NGLIDE WARNING: no locally installed Glide 2.11 wrapper found. Install nGlide yourself from {OFFICIAL_URL} or place your own glide.dll beside ScorchedPlanetFix.exe; --verify/--launch will refuse until game/splanet/glide.dll exists."));
+        log(&format!("NGLIDE WARNING: no locally installed 32-bit nGlide wrapper found. Install nGlide yourself from {OFFICIAL_URL} or place your own glide.dll beside ScorchedPlanetFix.exe; --verify/--launch will refuse until game/splanet/glide.dll exists."));
         return Ok(false);
     };
     let mut src=fs::File::open(&source).map_err(|e|e.to_string())?;
     let mut dest=OpenOptions::new().write(true).create_new(true).open(&output)
         .map_err(|e|format!("Unable to copy the user-provided Glide DLL: {e}"))?;
-    std::io::copy(&mut src,&mut dest).map_err(|e|e.to_string())?;
-    dest.flush().map_err(|e|e.to_string())?;
-    dest.sync_all().map_err(|e|e.to_string())?;
-    validate_glide_dll(&output)?;
+    // We alone created this destination. On any I/O or validation error,
+    // remove the incomplete DLL so a later retry can install a good copy.
+    let result=(||{
+        std::io::copy(&mut src,&mut dest).map_err(|e|e.to_string())?;
+        dest.flush().map_err(|e|e.to_string())?;
+        dest.sync_all().map_err(|e|e.to_string())?;
+        drop(dest);
+        validate_glide_dll(&output)
+    })();
+    if let Err(e)=result{
+        let _=fs::remove_file(&output);
+        return Err(e);
+    }
     log(&format!("NGLIDE: user-installed 32-bit glide.dll copied into game directory from {}",source.display()));
     Ok(true)
 }
