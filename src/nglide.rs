@@ -7,6 +7,7 @@ use std::fs::{self,OpenOptions};
 use std::io::{Read,Write};
 use std::path::{Path,PathBuf};
 use std::process::Command;
+use sha2::{Digest,Sha256};
 
 pub const OFFICIAL_URL:&str="https://www.zeus-software.com/downloads/nglide";
 fn validate_glide_dll(path:&Path)->Result<(),String>{
@@ -23,6 +24,13 @@ fn validate_glide_dll(path:&Path)->Result<(),String>{
        &header[pos..pos+4]!=b"PE\0\0" ||
        u16::from_le_bytes(header[pos+4..pos+6].try_into().unwrap())!=0x14c {
         return Err(format!("glide.dll doit être une DLL Windows x86 (32 bits) : {}",path.display()));
+    }
+    // Explicitly reject the exact original 1996 Glide hardware driver
+    // found on BOTH European CDs. It is not Zeus Software's modern nGlide.
+    const ORIGINAL_CD_GLIDE:&str="3e81d822a0185766089948114853ce4dfc4fb5ab76f2fdca5f81ce441f29986e";
+    let bytes=fs::read(path).map_err(|e|e.to_string())?;
+    if format!("{:x}",Sha256::digest(&bytes))==ORIGINAL_CD_GLIDE{
+        return Err("glide.dll est le pilote matériel 3dfx original du CD, et non nGlide. Installer nGlide 2.10 depuis Zeus Software.".into());
     }
     Ok(())
 }
