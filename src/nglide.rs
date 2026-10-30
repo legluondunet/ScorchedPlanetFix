@@ -11,26 +11,26 @@ use sha2::{Digest,Sha256};
 
 pub const OFFICIAL_URL:&str="https://www.zeus-software.com/downloads/nglide";
 fn validate_glide_dll(path:&Path)->Result<(),String>{
-    let m=fs::symlink_metadata(path).map_err(|e|format!("nGlide glide.dll absent : {} ({e})",path.display()))?;
+    let m=fs::symlink_metadata(path).map_err(|e|format!("Missing nGlide glide.dll: {} ({e})",path.display()))?;
     if !m.is_file()||m.file_type().is_symlink()||m.len()<1024||m.len()>16*1024*1024 {
-        return Err(format!("glide.dll non régulier ou taille incorrecte : {}",path.display()));
+        return Err(format!("glide.dll is not a regular file or has an invalid size: {}",path.display()));
     }
     let mut f=fs::File::open(path).map_err(|e|e.to_string())?;
     let mut header=[0u8;4096];
     let count=f.read(&mut header).map_err(|e|e.to_string())?;
-    if count<256 || &header[..2]!=b"MZ" {return Err(format!("glide.dll n'est pas un exécutable PE : {}",path.display()));}
+    if count<256 || &header[..2]!=b"MZ" {return Err(format!("glide.dll is not a PE binary: {}",path.display()));}
     let pos=u32::from_le_bytes(header[0x3c..0x40].try_into().unwrap()) as usize;
     if pos.checked_add(6).is_none_or(|p|p>count) ||
        &header[pos..pos+4]!=b"PE\0\0" ||
        u16::from_le_bytes(header[pos+4..pos+6].try_into().unwrap())!=0x14c {
-        return Err(format!("glide.dll doit être une DLL Windows x86 (32 bits) : {}",path.display()));
+        return Err(format!("glide.dll must be a 32-bit Windows x86 DLL: {}",path.display()));
     }
     // Explicitly reject the exact original 1996 Glide hardware driver
     // found on BOTH European CDs. It is not Zeus Software's modern nGlide.
     const ORIGINAL_CD_GLIDE:&str="3e81d822a0185766089948114853ce4dfc4fb5ab76f2fdca5f81ce441f29986e";
     let bytes=fs::read(path).map_err(|e|e.to_string())?;
     if format!("{:x}",Sha256::digest(&bytes))==ORIGINAL_CD_GLIDE{
-        return Err("glide.dll est le pilote matériel 3dfx original du CD, et non nGlide. Installer nGlide 2.10 depuis Zeus Software.".into());
+        return Err("glide.dll is the original CD's obsolete 3dfx hardware driver, not nGlide. Install nGlide 2.10 from Zeus Software.".into());
     }
     Ok(())
 }
@@ -65,7 +65,7 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
     };
     let mut src=fs::File::open(&source).map_err(|e|e.to_string())?;
     let mut dest=OpenOptions::new().write(true).create_new(true).open(&output)
-        .map_err(|e|format!("Copie du Glide du propriétaire impossible : {e}"))?;
+        .map_err(|e|format!("Unable to copy the user-provided Glide DLL: {e}"))?;
     std::io::copy(&mut src,&mut dest).map_err(|e|e.to_string())?;
     dest.flush().map_err(|e|e.to_string())?;
     dest.sync_all().map_err(|e|e.to_string())?;
@@ -75,7 +75,7 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
 }
 pub fn verify_local_glide(game:&Path)->Result<(),String>{
     validate_glide_dll(&game.join("glide.dll")).map_err(|e|
-        format!("{e}. nGlide est requis dans le dossier splanet. Télécharger et installer séparément : {OFFICIAL_URL}. Le logiciel libre ScorchedPlanetFix ne distribue aucune DLL nGlide."))
+        format!("{e}. nGlide is required in the splanet directory. Download and install it separately: {OFFICIAL_URL}. ScorchedPlanetFix does not redistribute the proprietary nGlide DLL."))
 }
 #[cfg(windows)]
 fn has_vulkan_loader()->bool{
