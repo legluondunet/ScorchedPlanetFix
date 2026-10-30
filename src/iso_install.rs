@@ -22,7 +22,33 @@ const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 struct Asset { node: TreeNode, relative: PathBuf, size: u64, from_voodoo: bool }
 #[derive(Default)]
 struct Inventory { files: BTreeMap<String, Asset>, image_entries: usize, video_files: usize }
-pub struct InstallReport { pub files: usize, pub bytes: u64, pub folder: PathBuf }
+pub struct InstallReport { pub files: usize, pub bytes: u64, pub folder: PathBuf, pub edition: &'static str }
+
+/// Fingerprints recorded from the three owner-supplied CD file inventories.
+/// This is not a third-party authenticated retail-master database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Edition {
+    label: &'static str,
+    installer_key: &'static str,
+    exe_sha256: &'static str,
+    geometry_sha256: &'static str,
+}
+const EDITIONS: [Edition; 3] = [
+    Edition { label: "US", installer_key: "1.08",
+        exe_sha256: ORIGINAL_SHA256,
+        geometry_sha256: "85e153739a5c43e514e2a8146d0cdfccb2c998d73e1494cfd45e1aa05f11531e" },
+    Edition { label: "EN/ES/IT", installer_key: "1.06",
+        exe_sha256: "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f",
+        geometry_sha256: "29b3d8f87eed27ca933b81231b84f7e406506b498e5fc74bfee52f5b1004fb1b" },
+    Edition { label: "FR/DE", installer_key: "1.06",
+        exe_sha256: "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72",
+        geometry_sha256: "a2dc1882d66f0d7607a955c8bf9ad28282c3d1d08ca0675a90ca93ecd20f6c69" },
+];
+
+fn identify_edition(exe_hash: &str, geometry_hash: &str) -> Option<Edition> {
+    EDITIONS.iter().copied().find(|edition|
+        edition.exe_sha256 == exe_hash && edition.geometry_sha256 == geometry_hash)
+}
 fn err(msg: impl ToString) -> String { msg.to_string() }
 
 fn valid_name(name: &str) -> bool {
@@ -159,17 +185,15 @@ fn validate_bounds(iso_len: u64, root: &TreeNode) -> Result<(),String> {
     }
     let mut count=0; walk(root,iso_len,&mut count)
 }
-fn mandatory_file_hashes(iso: &mut File, files: &Inventory) -> Result<(),String>{
-    for (name,expected) in [
-        ("spvoodoo.exe", ORIGINAL_SHA256),
-        ("rwdlvood.dll", DRIVER_SHA256),
-    ] {
-        let actual=node_digest(iso,&files.files[name].node)?;
-        if actual!=expected {
-            return Err(format!("Image du jeu non supportée : variante ou fichier altéré ({name}, SHA-256 {actual})"));
-        }
+fn mandatory_file_hashes(iso: &mut File, files: &Inventory) -> Result<Edition,String>{
+    let driver = node_digest(iso, &files.files["rwdlvood.dll"].node)?;
+    if driver != DRIVER_SHA256 {
+        return Err(format!("Image du jeu non supportée : RWDLVOOD.DLL non reconnu (SHA-256 {driver})"));
     }
-    Ok(())
+    let executable = node_digest(iso, &files.files["spvoodoo.exe"].node)?;
+    let geometry = node_digest(iso, &files.files["geometry.rwb"].node)?;
+    identify_edition(&executable, &geometry).ok_or_else(|| format!(
+        "Edition 3dfx inconnue ou fichiers incompatibles : SPVOODOO.EXE={executable}, GEOMETRY.RWB={geometry}"))
 }
 pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     let mut images = Vec::new();
@@ -273,11 +297,13 @@ pub fn install_iso(
         .map_err(|e|format!("Image du jeu non supportée : {e}"))?;
     validate_bounds(iso_len,&root)?;
     let inventory=inventory(&root)?;
-    mandatory_file_hashes(&mut iso,&inventory)?;
-    // Signature checks prove the supported 3dfx binary edition. Without a
+    let edition=mandatory_file_hashes(&mut iso,&inventory)?;
+    log(&format!("EDITION: {} (installer key {}), exact EXE + GEOMETRY + RWDLVOOD validated",
+        edition.label,edition.installer_key));
+    // Signature checks identify one of the three recorded 3dfx editions. Without a
     // signed full-disc reference manifest, they cannot prove that every
     // other original CD file matches a specific retail master image.
-    log("ISO: required original EXE and RWDLVOOD hashes verified; no trusted all-files master manifest yet");
+    log("ISO: edition-specific EXE/GEOMETRY and shared RWDLVOOD hashes verified; no independently authenticated all-files master yet");
     log(&format!("ISO: {} install files; {} SMK videos", inventory.files.len(),inventory.video_files));
     let parent=destination.parent().ok_or("Invalid installation parent")?;
     let staging=parent.join(format!(".splanet-setup-{}",std::process::id()));
@@ -339,7 +365,7 @@ pub fn install_iso(
         let file_count=inventory.files.len()+usize::from(generated_ini);
         log(&format!("INSTALL-OK: {} files ({} from CD, {} generated), {} extracted bytes",
             file_count,inventory.files.len(),usize::from(generated_ini),total));
-        Ok(InstallReport{files:file_count,bytes:total,folder:destination.to_owned()})
+        Ok(InstallReport{files:file_count,bytes:total,folder:destination.to_owned(),edition:edition.label})
     })();
     if install_result.is_err(){
         let _=fs::remove_dir_all(&staging);
@@ -385,6 +411,13 @@ mod tests {
         assert!(result.contains("settings=1 0 1 1 5 95 127 0 0 5 320"));
         assert!(result.contains("name=Player"));
         fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test] fn edition_matching_is_exact_and_never_mix_and_matches(){
+        for edition in EDITIONS {
+            assert_eq!(identify_edition(edition.exe_sha256,edition.geometry_sha256),Some(edition));
+        }
+        assert!(identify_edition(EDITIONS[0].exe_sha256,EDITIONS[1].geometry_sha256).is_none());
+        assert!(identify_edition("unknown",EDITIONS[0].geometry_sha256).is_none());
     }
     #[test] fn ini_video_path_is_local(){
         let dir=std::env::temp_dir().join(format!("scorched-ini-test-{}",std::process::id()));
