@@ -33,18 +33,15 @@ mod app {
     la résolution ni le fonctionnement du CD.";
 
 
-    /// Exact game executable hashes. EU FR/DE remains intentionally unpatched.
+    /// Exact game executable hashes. FR/DE is eligible only for the combined
+    /// FadeLow plus media-gate profile, never the earlier FadeLow-only trial.
     fn installed_edition(exe:&Path)->(&'static str,bool){
         let Ok(bytes)=fs::read(exe) else {return ("inconnue",false)};
         let hash=format!("{:x}",Sha256::digest(&bytes));
         if let Some(profile)=scorched_planet_fix::profile_from_hash(&hash) {
             return (profile.label,true);
         }
-        match hash.as_str(){
-            "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72" =>
-                ("FR/DE 1.06",false),
-            _ => ("inconnue",false),
-        }
+        ("inconnue",false)
     }
 
     const EN_LANGUAGES:&[(u8,&str)]=&[(1,"English"),(4,"Italiano"),(5,"Español")];
@@ -199,7 +196,7 @@ mod app {
                                     _=>"inconnue",
                                 };
                                 self.language=edition_default_language(self.edition);
-                                self.fadelow_allowed=matches!(report.edition,"US"|"EN/ES/IT");
+                                self.fadelow_allowed=matches!(report.edition,"US"|"EN/ES/IT"|"FR/DE");
                                 self.patch_enabled=self.fadelow_allowed;
                                 self.progress=1.0;
                                 self.status="Extraction terminée".into();
@@ -254,7 +251,7 @@ mod app {
         fn apply_patch(&mut self){
             if !self.game_ready {self.info("Installation introuvable","Le répertoire splanet n'est pas prêt.",true);return;}
             if !self.fadelow_allowed {
-                self.info("FadeLow indisponible","Le correctif n'est validé que pour les exécutables US et EN/ES/IT d'origine. Aucun octet n'a été modifié.",true);
+                self.info("Correctif indisponible","Exécutable non reconnu. Correctifs validés : FadeLow US, EN/ES/IT ; FadeLow + détection CD FR/DE. Aucun octet modifié.",true);
                 return;
             }
             if !self.patch_enabled {self.info("Aucun correctif sélectionné","Cochez au moins un correctif avant de cliquer sur Appliquer.",true);return;}
@@ -336,9 +333,18 @@ mod app {
                 ui.separator();
                 ui.add_space(12.0);
                 ui.label(RichText::new("Correctifs disponibles").size(18.0).strong());
+                let fr_de=self.edition.starts_with("FR/DE");
+                let patch_label=if fr_de {
+                    "Correction du fondu (FadeLow) + détection CD (FR/DE)"
+                } else {
+                    "Correction du blocage du fondu de palette (FadeLow)"
+                };
+                let patch_info=if fr_de {
+                    "Pour FR/DE, applique les deux modifications testées ensemble : seuil FadeLow et résultat du contrôle de présence CD. Ne remplace pas les fichiers du CD manquants."
+                } else {DESCRIPTION};
                 ui.add_enabled_ui(matches!(self.phase,Phase::Ready)&&self.fadelow_allowed,|ui|{
-                    ui.checkbox(&mut self.patch_enabled,"Correction du blocage du fondu de palette (FadeLow)")
-                        .on_hover_text(DESCRIPTION);
+                    ui.checkbox(&mut self.patch_enabled,patch_label)
+                        .on_hover_text(patch_info);
                 });
                 if self.game_ready && !self.fadelow_allowed {
                     ui.label(RichText::new("FadeLow non validé pour cet exécutable ; application désactivée.")
