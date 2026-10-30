@@ -132,3 +132,48 @@ jobs:
           grep -q 'PERF_SUDO=1' "$work/report/summary.txt"
           grep -q '0x00401234' "$work"/game/ScorchedPlanetFix-3dfx-*.log
           grep -q '2 0x00401234' "$work"/game/ScorchedPlanetFix-3dfx-*.log
+      - name: Test perf runs before a game process exits
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/scorchedplanet-perf-exit-test"
+          mkdir -p "$work/bin" "$work/game"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            'if [[ "$1" == "-v" ]]; then exit 0; fi' \
+            'if [[ "$1" == "-n" ]]; then shift; exec "$@"; fi' \
+            'exit 1' > "$work/bin/sudo"
+          cat > "$work/bin/perf" <<'PERF_MOCK'
+          #!/usr/bin/env bash
+          command="$1"; shift
+          case "$command" in
+            record)
+              output=""
+              target=""
+              while (($#)); do
+                if [[ "$1" == "-o" ]]; then shift; output="$1"; fi
+                if [[ "$1" == "-t" ]]; then shift; target="$1"; fi
+                shift
+              done
+              [[ -n "$output" && -n "$target" ]] || exit 1
+              printf 'mock perf data collected before game exits' > "$output"
+              kill "$target" || true
+              sleep 2
+              ;;
+            report) echo "75.00% SPVOODOO.EXE 0x00401BAD" ;;
+            script) printf '%s\n' '0x00401BAD [unknown] (SPVOODOO.EXE)' ;;
+            *) exit 1 ;;
+          esac
+          PERF_MOCK
+          chmod +x "$work/bin/sudo" "$work/bin/perf"
+          sleep 30 &
+          target=$!
+          trap 'kill "$target" 2>/dev/null || true' EXIT
+          (
+            cd "$work/game"
+            PATH="$work/bin:$PATH" bash "$GITHUB_WORKSPACE/tools/diagnose-3dfx-hang-linux.sh" \
+              --pid "$target" --interval 1 --perf-sudo --output "$work/report"
+          )
+          test -s "$work/report/perf-report.txt"
+          test -s "$work/report/perf-samples.txt"
+          grep -q "Jeu termine avant snapshot-2" "$work/report/summary.txt"
+          grep -q '0x00401BAD' "$work"/game/ScorchedPlanetFix-3dfx-*.log
