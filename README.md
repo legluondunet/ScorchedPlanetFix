@@ -1,64 +1,136 @@
 # ScorchedPlanetFix
 
-**Windows x64 command-line installer, verifier, patcher and launcher for Scorched Planet (1996).**
+**Play *Scorched Planet* (1996) on modern systems — from your own CD image.**
 
-Version: **1.0.0 + build commit**. Author: legluondunet, assisted by ChatGPT (OpenAI). License: **GPL-3.0-or-later**.
+[![Windows x64 CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml/badge.svg)](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml)
+[![Linux Wine / Proton compatible](https://img.shields.io/badge/Linux%20Wine%20%2F%20Proton-compatible-428b40?logo=linux&logoColor=white)](#linux--wine)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-ScorchedPlanetFix runs as a **console executable, without a GUI**, on Windows 64-bit and in a compatible 64-bit Wine environment on Linux. The original game remains a **32-bit** program. No commercial game assets, disc images, drivers, proprietary Glide DLLs or nGlide installers are distributed.
+ScorchedPlanetFix is a **free and open-source console installer, patcher, verifier and launcher** for Criterion's *Scorched Planet* (1996).
 
-## Commands
+It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow** and **No-CD** fixes, and launches the game using your separately installed **nGlide** wrapper. No original game files or proprietary drivers are distributed.
+
+- **Windows x64** program; the original game remains **32-bit**
+- Also runs under **Wine on Linux**
+- **No GUI; no CD mounted at play time** for the tested editions
+- SHA-256 checks and an original-executable backup safeguard the patches
+
+> [!IMPORTANT]
+> You need your **own copy of Scorched Planet** and **nGlide**. This project does not include the game, disc images or any nGlide binaries. Native Windows gameplay has not yet been independently validated.
+
+## Supported CD editions
+
+| Edition | Available languages | FadeLow | No-CD | CUE/BIN |
+| --- | --- | :---: | :---: | :---: |
+| US (InstallKey 1.08) | English | ✅ | ✅ | ✅ |
+| Europe (InstallKey 1.06) | English, Spanish, Italian | ✅ | ✅ | ✅ |
+| Europe (InstallKey 1.06) | French, German | ✅ | ✅ | ✅ |
+
+Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checks reflect owner-reported gameplay validation under Wine, not every mission or hardware configuration.
+
+## Quick start
+
+### 1. Get ScorchedPlanetFix
+
+Until the first GitHub Release is published, obtain the Windows x64 ZIP from the [GitHub Actions build artifacts](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml). Select a successful workflow run and download its artifact.
+
+> GitHub Releases are **not yet published**. Workflow artifacts expire and are not permanent downloads.
+
+### 2. Provide the disc image and nGlide
+
+1. Place `ScorchedPlanetFix.exe` in a folder with **one** supported disc image: an ISO, or a CUE and its BIN.
+2. [Install nGlide from Zeus Software](https://www.zeus-software.com/downloads/nglide) in the same Windows/Wine environment, **or** place your own 32-bit nGlide `glide.dll` next to the patcher.
+3. Open a terminal in that folder.
+
+Example:
+
+```text
+ScorchedPlanetFix/
+├── ScorchedPlanetFix.exe
+├── Scorched Planet.cue
+├── Scorched Planet.bin
+└── glide.dll                  # Only if supplied manually
+```
+
+If both ISO and CUE media are present, choose the image explicitly on the command line.
+
+### 3. Install
+
+In a Windows PowerShell terminal:
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.iso"
-.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue"
-.\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue" "D:\CD\Scorched Planet.bin"
-.\ScorchedPlanetFix.exe --verify
-.\ScorchedPlanetFix.exe --launch
-.\ScorchedPlanetFix.exe --help
-.\ScorchedPlanetFix.exe --version
 ```
 
-**No arguments** means install/patch in the **current working directory**. Alternatively, pass an ISO/CUE path directly as the first positional argument (and an optional BIN path as the second). With no explicit ISO/CUE, find a single supported `.iso` or `.cue` in the working directory. A CUE references the associated BIN, or the BIN may be supplied as the second operand. Do not overwrite an existing `splanet` directory; if already installed, verify/patch its recognized original EXE and normalize its INI.
+Or specify your own disc image:
 
-**`--verify`** always inspects `splanet` **beside ScorchedPlanetFix.exe** (not necessarily your shell's working directory), checks the edition-specific patched executable, the original `.bak`, the portable INI and each immutable game asset against the owner's SHA-256 inventory; save games (`*.sav`) and custom settings are mutable and excluded from hash enforcement. It also checks for a **local 32-bit `splanet/glide.dll`**.
+```powershell
+.\ScorchedPlanetFix.exe "Scorched Planet.iso"
+.\ScorchedPlanetFix.exe "Scorched Planet.cue"
+.\ScorchedPlanetFix.exe "Scorched Planet.cue" "Scorched Planet.bin"
+```
 
-**`--launch`** verifies **before each launch**, and only then starts `spvoodoo.exe` in the `splanet` working directory. It waits for the game to exit and reports failures. **`--help`** shows commands, paths, nGlide notes and the version, without requiring an installation; `--version` prints the version only.
+The installer creates `splanet/`, copies game files, preserves the original `spvoodoo.exe.bak`, patches the detected edition and creates a portable `splanet.ini`. Existing game installations and save files are not overwritten.
 
-All errors are shown in the terminal and logged to `ScorchedPlanetFix.log`. Startup errors attempt a fallback log if the primary location is inaccessible.
+### 4. Verify and launch
 
-## ISO and CUE/BIN installation
+```powershell
+.\ScorchedPlanetFix.exe --verify
+.\ScorchedPlanetFix.exe --launch
+```
 
-Supports three exact owner-inventoried CD editions: **US**, **Europe EN/ES/IT**, and **Europe FR/DE**, identified from SHA-256 hashes of the original `VOODOO/SPVOODOO.EXE`, `VOODOO/RWDLVOOD.DLL` and `SPLANET/GEOMETRY.RWB`. No proprietary assets are bundled or downloaded.
+- **`--verify`** checks the patched EXE, original backup, immutable game assets, INI and local nGlide DLL.
+- **`--launch`** performs the same verification before launching the game and monitors its exit.
+- **`ScorchedPlanetFix.log`** contains diagnostic messages next to the patcher.
 
-The program reads ISO9660/Joliet (and supported UDF images), and supported CUE first-track data formats `MODE1/2048`, `MODE1/2352` and XA Form 1 `MODE2/2352`. CUE/BIN is converted to a temporary data-only ISO, then passed through the same parser. The owner confirms **these Scorched Planet CD editions contain no CD audio tracks**.
+To update a supported existing installation, run the latest patcher **without arguments** from the directory containing `splanet/`. Migration from older FadeLow-only patches requires an intact, checksum-verified original `.bak` and keeps your saves.
 
-The installer extracts only original `SPLANET/` and `VOODOO/` into separate temporary trees, copies all `SPLANET/` files into a staged `splanet` directory, and only `spvoodoo.exe` and `rwdlvood.dll` from `VOODOO/`. It excludes obsolete `glide.dll`, `sst1init.dll` and `fxmemmap.vxd` from the game disc and skips the unused software-renderer executable `SPLANET/SPLANETW.EXE` entirely. When updating an existing installation, it removes that obsolete executable only if its SHA-256 matches the original CD edition; unknown or altered files are never deleted. `--verify` refuses an installation still containing `splanetw.exe` until safely cleaned with the no-argument installer. File and directory names are normalized to lowercase with collision rejection and SHA-256 checks.
+### Linux / Wine
 
-Before modifying the original executable, it saves `splanet/spvoodoo.exe.bak`, then automatically applies the exact edition-specific correction: **US FadeLow + CD-media check fix (6 bytes; user-validated on Wine)**, **EN/ES/IT FadeLow + CD-media check fix (6 bytes; owner-validated on Wine)**, or **FR/DE FadeLow + its user-validated CD-media gate (6 bytes)**. The owner has confirmed that all three editions' combined patches work in their respective CUE/BIN no-CD gameplay tests under Wine, and their expected patched SHA-256 values were independently checked. Broader multi-mission and Windows-native testing remains desirable. Existing US and EN/ES/IT FadeLow-only installs are safely upgraded from their verified original `.bak` by rerunning the installer with no arguments. It subsequently generates `splanet.ini` with `[scorch]` and **`video= video`** (the owner's validated portable value), appropriate default `language=`, and `HighQualityVideo=1`. On failure the staged installation is discarded; original disc images and pre-existing installations are not overwritten.
+Use the same working directory and Wine prefix for the patcher and nGlide:
 
-## nGlide — separate proprietary dependency
+**Compatibility note:** Wine 11.17 has been tested with all three CUE/BIN editions. Proton is Wine-based, but has not been independently tested with this patcher.
 
-nGlide is **freeware, not GPL/open source**, owned by Zeus Software. Its distribution permission for third-party bundles is not established. **It is NOT included or downloaded** by ScorchedPlanetFix.
+```bash
+wine ScorchedPlanetFix.exe
+wine ScorchedPlanetFix.exe --verify
+wine ScorchedPlanetFix.exe --launch
+```
 
-**Official download:** https://www.zeus-software.com/downloads/nglide
+There is no graphical interface. Use `--help` to see all commands.
 
-Download and install nGlide yourself in Windows/the same Wine prefix. ScorchedPlanetFix can copy the **locally installed 32-bit `glide.dll`** from Windows `SysWOW64` (or a copy you have personally supplied next to ScorchedPlanetFix.exe) into `splanet`, without modifying the source. It checks that the DLL has a valid 32-bit Windows PE header, though this alone does not establish publisher authenticity. If the DLL is not available, installation may finish but verification and launch will report exactly what is missing.
+## What does it fix?
 
-For the game process **only**, nGlide receives the following documented environment variables (overriding its registry configuration, which is left untouched):
+**FadeLow** removes excessively long fade transitions on modern systems. The edition-specific **No-CD** fix avoids the original game's media-check failure when running from an installed copy. For each supported executable, ScorchedPlanetFix changes exactly **six bytes**: four for FadeLow and two for the CD check.
 
-| Setting | Value |
-| --- | --- |
-| Backend | Vulkan when the Vulkan loader is available (`NGLIDE_BACKEND=2`), otherwise automatic (`0`) |
-| Resolution | Desktop (`NGLIDE_RESOLUTION=1`) |
-| Aspect ratio | Aspect correction (`NGLIDE_ASPECT=1`) |
-| Refresh | 60 Hz (`NGLIDE_REFRESH=2`) |
-| Vertical sync | On (`NGLIDE_VSYNC=1`) |
-| Gamma | 1.0 (`NGLIDE_GAMMA=5`) |
-| 3dfx splash | Off (`NGLIDE_SPLASH=0`) |
+The installer also:
 
-These settings are documented by [Zeus Software](https://www.zeus-software.com/forum/viewtopic.php?p=4254). They avoid interfering with nGlide settings for other games. Vulkan-loader detection does **not guarantee** the GPU driver is fully Vulkan-compatible; if Vulkan fails, troubleshooting may require choosing another backend in nGlide's own configurator.
+- Reads supported ISO and CUE/BIN layouts; keeps your original image untouched
+- Copies the needed videos and language files and normalizes names
+- Omits the unused `splanetw.exe` software-renderer executable and obsolete 3dfx drivers
+- Uses the portable `video= video` INI setting for local video playback
+- Excludes save slots and mutable settings from immutable-file hash enforcement
+- Sets nGlide options only for the launched game, never through global registry changes
 
-## Development and validation
+## nGlide (required, separate download)
 
-Read [CD edition profiles](docs/cd-editions.md) and [CLI install/verify notes](docs/windows-cli-installer.md). No PR is merged without the owner's approval. Tests in GitHub Actions validate Windows x64 compilation and executable type; real-media installation and runtime tests on Windows and Wine are also required before a stable release.
+**[Official nGlide download — Zeus Software](https://www.zeus-software.com/downloads/nglide)**
+
+nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and `--launch`.
+
+The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and splash screen off. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+
+## Documentation
+
+- [Supported editions and original media fingerprints](docs/cd-editions.md)
+- [Installation, verification and safe upgrades](docs/windows-cli-installer.md)
+- [FadeLow and CD-check reverse-engineering research](docs/european-fadelow-research.md)
+- [Draft v1.0.0 release notes](docs/release-notes-v1.0.0.md)
+
+## License & credits
+
+**GPL-3.0-or-later** — see [LICENSE](LICENSE).
+
+Created by **legluondunet**, assisted by **ChatGPT (OpenAI)**.
+
+*Scorched Planet* and its original content remain the property of their respective rights holders. Independent community compatibility project, unaffiliated with the original game publisher/developer or Zeus Software.

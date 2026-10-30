@@ -1,0 +1,48 @@
+name: "Feature request"
+description: "Suggest an improvement or new capability for ScorchedPlanetFix."
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your suggestion! Please check
+        [existing issues](https://github.com/legluondunet/ScorchedPlanetFix/issues)
+        and the [current features](https://github.com/legluondunet/ScorchedPlanetFix#what-does-it-fix)
+        before opening a request.
+
+        Suggestions are welcome, but implementation is **not guaranteed**
+        and depends on the technical limitations and original game editions.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "I have searched existing requests and understand that implementation is not guaranteed."
+          required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Describe the feature
+      description: "What change or new behavior would you like?"
+      placeholder: "I would like ScorchedPlanetFix to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why would this be useful?
+      description: "Describe the player problem it would solve, or give an example use case."
+      placeholder: "Currently ...; this would allow ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or implementation ideas (optional)
+      description: "Existing workarounds, references, screenshots, or technical suggestions."
+    validations:
+      required: false

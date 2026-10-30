@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Installation and troubleshooting"
+    url: "https://github.com/legluondunet/ScorchedPlanetFix/blob/main/docs/windows-cli-installer.md"
+    about: "Check the installation and verification guide before opening a bug report."
