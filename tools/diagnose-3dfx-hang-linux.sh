@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Read-only diagnostic for Scorched Planet 3dfx running under Linux/Wine.
+set -Eeuo pipefail
+export LC_ALL=C
+
+usage() {
+  cat <<'EOF'
+Usage: diagnose-3dfx-hang-linux.sh [--pid LINUX_PID] [--game-dir PATH]
+          [--interval SECONDS] [--delay SECONDS] [--output NEW_DIR] [--gdb]
+
+Launch SPVOODOO.EXE in Wine first. Run this tool during the menu freeze.
+No WINEPREFIX argument is required: it inspects the running Linux process.
+--pid: specify Linux PID if spvoodoo.exe is not detected automatically
+--game-dir: optionally hash the game's original EXE and local Glide DLLs
+--interval: seconds between snapshots (default 5, range 1-60)
+--delay: seconds before first snapshot (default 0, range 0-600)
+--output: a NEW, non-existing directory for reports
+--gdb: optionally attach native GDB to capture thread backtraces; this
+       pauses the target temporarily and might fail due to ptrace policy
+EOF
+}
+
+die() { printf 'Erreur : %s\n' "$*" >&2; exit 1; }
+log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$out/summary.txt"; }
+
+pid=""
+game_dir=""
+interval=5
+delay=0
+out=""
+with_gdb=0
+
+while (($# > 0)); do
+  case "$1" in
+    --pid|--game-dir|--interval|--delay|--output)
+      opt="$1"; shift
+      (($# > 0)) || die "Argument manquant pour $opt"
+      case "$opt" in
+        --pid) pid="$1" ;;
+        --game-dir) game_dir="$1" ;;
+        --interval) interval="$1" ;;
+        --delay) delay="$1" ;;
+        --output) out="$1" ;;
+      esac
+      ;;
+    --gdb) with_gdb=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; die "Option inconnue : $1" ;;
+  esac
+  shift
+done
+
+[[ "$interval" =~ ^[0-9]+$ ]] && ((interval >= 1 && interval <= 60)) ||
+  die "L'intervalle doit etre compris entre 1 et 60 secondes."
+[[ "$delay" =~ ^[0-9]+$ ]] && ((delay <= 600)) ||
+  die "Le delai doit etre compris entre 0 et 600 secondes."
+
+if [[ -z "$pid" ]]; then
+  mapfile -t candidates < <(ps -eo pid=,comm= | awk 'tolower($2) == "spvoodoo.exe" {print $1}')
+  case "${#candidates[@]}" in
+    0) die "Jeu non detecte. Lance SPVOODOO.EXE, ou precise --pid (ps -eo pid,comm,args | grep -i '[s]pvoodoo')." ;;
+    1) pid="${candidates[0]}" ;;
+    *) printf 'PIDs possibles : %s\n' "${candidates[*]}" >&2
+       die "Plusieurs instances, precise --pid." ;;
+  esac
+fi
+
+[[ "$pid" =~ ^[0-9]+$ ]] || die "PID Linux invalide : $pid"
+[[ -d "/proc/$pid/task" ]] || die "Processus $pid introuvable"
+kill -0 "$pid" 2>/dev/null || die "Pas d'acces au processus $pid"
+
+if [[ -n "$game_dir" ]]; then
+  [[ -d "$game_dir" ]] || die "Dossier du jeu introuvable : $game_dir"
+  game_dir="$(realpath -- "$game_dir")"
+fi
+
+if [[ -z "$out" ]]; then
+  state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+  mkdir -p -- "$state_home/ScorchedPlanetFix/diagnostics"
+  out="$state_home/ScorchedPlanetFix/diagnostics/$(date +%Y%m%d-%H%M%S)-pid$pid-$$"
+fi
+[[ ! -e "$out" ]] || die "Le dossier existe deja : $out"
+mkdir -p -- "$out"
+out="$(realpath -- "$out")"
+log "Diagnostic Scorched Planet / Wine / nGlide"
+log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb"
+log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
+log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
+log "CLK_TCK=$(getconf CLK_TCK 2>/dev/null || printf '?')"
+if command -v wine >/dev/null 2>&1; then log "Wine=$(wine --version 2>/dev/null || printf '?')"; fi
+
+ps -p "$pid" -o pid=,ppid=,comm=,args= > "$out/process.txt" || true
+if [[ -n "$game_dir" ]]; then
+  find "$game_dir" -maxdepth 1 -type f \( \
+    -iname 'SPVOODOO.EXE' -o -iname 'RWDLVOOD.DLL' -o \
+    -iname 'GLIDE.DLL' -o -iname 'GLIDE2X.DLL' -o \
+    -iname 'DDRAW.DLL' -o -iname 'WINMM.DLL' \) -print0 |
+    while IFS= read -r -d '' file; do sha256sum -- "$file" || true; done \
+    > "$out/game-file-hashes.txt"
+fi
+
+snapshot() {
+  local name="$1" stat_file stat_line remainder tid ticks wchan
+  local -a fields
+  [[ -d "/proc/$pid/task" ]] || { log "Jeu termine avant $name"; return 1; }
+  log "Capture $name"
+  ps -L -p "$pid" -o pid,tid,stat,psr,pcpu,time,wchan:30,comm \
+    > "$out/$name-threads-ps.txt" || true
+  ps -p "$pid" -o pid,ppid,stat,pcpu,rss,vsz,etime,comm \
+    > "$out/$name-process-ps.txt" || true
+  {
+    printf 'TID\tCPU_TICKS\tSTATE\tWCHAN\n'
+    for stat_file in /proc/"$pid"/task/*/stat; do
+      [[ -r "$stat_file" ]] || continue
+      tid="$(basename "$(dirname "$stat_file")")"
+      IFS= read -r stat_line < "$stat_file" || continue
+      remainder="${stat_line##*) }"
+      read -r -a fields <<< "$remainder"
+      (("${#fields[@]}" >= 13)) || continue
+      ticks=$(( fields[11] + fields[12] ))
+      wchan="$(cat "/proc/$pid/task/$tid/wchan" 2>/dev/null || printf '?')"
+      printf '%s\t%s\t%s\t%s\n' "$tid" "$ticks" "${fields[0]}" "$wchan"
+    done
+  } > "$out/$name-thread-ticks.tsv"
+  if [[ -r "/proc/$pid/maps" ]]; then
+    awk '$6 ~ /^\// {
+      p=tolower($6)
+      if (p ~ /(rwdlvood|spvoodoo|glide|nglide|ddraw|opengl|vulkan|d3d|dxvk|wine)/) print $6
+    }' "/proc/$pid/maps" | sort -u > "$out/$name-graphics-modules.txt"
+  else
+    log "Impossible de lire /proc/$pid/maps (permissions)."
+  fi
+}
+
+if ((delay > 0)); then
+  log "La premiere capture commence dans $delay secondes : lance une mission."
+  sleep "$delay"
+else
+  log "Capture immediate : le jeu devrait deja etre fige."
+fi
+snapshot snapshot-1 || exit 1
+sleep "$interval"
+snapshot snapshot-2 || exit 0
+
+{
+  printf 'TID\tCPU_DELTA_TICKS\n'
+  awk -F '\t' '
+    NR==FNR { if (NR>1 && $1 ~ /^[0-9]+$/) before[$1]=$2; next }
+    FNR>1 && $1 ~ /^[0-9]+$/ {
+      if ($1 in before) printf "%s\t%d\n", $1, $2-before[$1]
+      else printf "%s\tnew-thread\n", $1
+    }' "$out/snapshot-1-thread-ticks.tsv" "$out/snapshot-2-thread-ticks.tsv" |
+    sort -k2,2nr
+} > "$out/thread-cpu-delta.tsv"
+
+if ((with_gdb)); then
+  if ! command -v gdb >/dev/null 2>&1; then
+    log "GDB absent : capture des piles non effectuee."
+  else
+    log "GDB : attachement temporaire, peut suspendre le jeu."
+    if gdb -q -nx -batch -p "$pid" \
+      -ex 'set pagination off' -ex 'info threads' \
+      -ex 'thread apply all bt 15' -ex 'detach' \
+      > "$out/gdb-backtraces.txt" 2>&1; then
+      log "Piles GDB capturees."
+    else
+      log "Echec GDB : lire gdb-backtraces.txt (ptrace peut etre limite)."
+    fi
+  fi
+fi
+log "Rapport cree : $out"
+log "Partager les fichiers texte / TSV apres verification des chemins personnels."
