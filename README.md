@@ -10,7 +10,7 @@ The GUI displays original InstallShield artwork (BMP) **when those files are acc
 
 It copies game files and 3dfx edition assets, preserves subdirectories, writes local paths in `SPLANET.INI`, and provides a progress indicator. It **does not execute** the Windows 95 installer, write registry data, or launch DirectX 1996 setup.
 
-**Known limitations:** `COMPRESS.BIN` is not unpacked yet; runtime CD checks and nGlide/dgVoodoo/RenderWare crashes are not resolved. Do not treat this as a tested or playable release.
+**Known limitations:** the original InstallShield file map and any required resource extraction have not yet been verified against the owner's CD. `COMPRESS.BIN` is **not a prerequisite** (its presence on this edition is unconfirmed). Runtime CD checks and nGlide/dgVoodoo/RenderWare crashes remain unresolved. Do not treat this as a tested or playable release.
 
 ### Build for Windows 11
 
