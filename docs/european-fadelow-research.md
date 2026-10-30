@@ -1,6 +1,6 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
-Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE failed the owner's gameplay test (reported 2026-10-30), with the exact failure symptom still unspecified.** This report does not imply all missions, cinematics, or both wrappers have been tested.
+Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE FadeLow test did not reach gameplay: the menu displays “PAS DE CD” (owner screenshot, 2026-10-30). This is a media-detection obstacle; the FadeLow threshold itself is neither validated nor disproven for FR/DE.** This report does not imply all missions, cinematics, or both wrappers have been tested.
 
 This analysis used the two owner-supplied original executables, without modifying them, and compares the palette-fade mechanism with the previously validated US FadeLow 4-byte patch. No original or patched commercial executable is stored in this repository.
 
@@ -63,3 +63,60 @@ Reinspection of the locally supplied original and generated candidate confirms:
 - FR/DE CD resources include `SPLANET/FRENCH.REZ` and `SPLANET/GERMAN.REZ`, while EN/ES/IT includes `ENGLISH.REZ`, `ITALIAN.REZ`, `SPANISH.REZ`. The corresponding `language` configuration must select only files present in the edition.
 
 **Disposition:** maintain the FR/DE safety gate; do not ship or enable the FR/DE patch. Determine whether the *unmodified* original FR/DE EXE runs in the same test installation, then record the failure stage and any error text before proposing a new binary change. Neither the cause nor a fix is established yet.
+
+## FR/DE “PAS DE CD” reproduction and read-only media-gate investigation (2026-10-30)
+
+The owner provided a screenshot at the game's main menu showing **“PAS DE CD”**, as well as
+the original FR/DE `spvoodoo(2).exe`, the corresponding four-byte FadeLow copy,
+`rwdlvood(2).dll`, and an INI. Binary SHA-256 verification matches our original
+edition inventory, prior FadeLow candidate and shared RenderWare DLL:
+
+- Original: `eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72`.
+- FadeLow: `5373c7b24389556b7466932695e7e2d1076531105f9bb879749e783a64898d90`.
+- DLL: `1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de`.
+- The INI uses `video= c:\\DE-FR\\splanet\\video`, `language=3` (German),
+  `HighQualityVideo=1`; other settings match the user's working EN/ES/IT INI.
+  Filesystem presence at that path has not been independently verified.
+
+Read-only disassembly of original FR/DE:
+- `0x435800`: enumerate drive letters, call imported `GetDiskFreeSpaceA`,
+  construct `%ssplanet\\geometry.rwb`, attempt a read open and then a
+  write open. The routine returns true if the read works and the write fails.
+- Failure path `0x4358BB`: `33 C0` (`xor eax,eax`) returns 0.
+- Success path `0x4358C7`: `B8 01 00 00 00` (`mov eax,1`).
+- The three observed direct call sites `0x42E70C`, `0x42E75A`, `0x42E7E4`
+  store the returned value into global `0x52B284`; menu logic uses this flag.
+- The same underlying drive-probe logic exists in EN/ES/IT at `0x435570`,
+  but FR/DE and EN/ES/IT do not necessarily take the same menu paths.
+- The screenshot is strong evidence of a missing-media state, not proof that
+  the FR/DE FadeLow patch corrupts the executable or breaks fading.
+
+A **private, copy-only**, opt-in combined FadeLow + experimental CD-gate
+candidate was prepared for the owner as a controlled diagnostic, NOT for
+the GitHub repository or a public release. It changes exactly two more bytes
+in addition to the verified FadeLow four-byte patch:
+
+| Site | Original | Experimental | Byte offset |
+| --- | --- | --- | --- |
+| FadeLow | `17 B7 D1 38` | `AC C5 27 37` | `0x48A6D` (4 bytes) |
+| Failed-media-search result | `33 C0` | `B0 01` | `0x34CBB` (2 bytes) |
+
+Resulting experimental EXE SHA-256:
+`426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c`;
+PE size remains 836608 bytes. `mov al,1` guarantees only a nonzero low
+byte; it does not guarantee EAX equals exactly one. The global is observed
+to be consumed as a Boolean in known uses; unknown consumers and effects
+have not been exhaustively audited.
+
+**This is a hypothesis test, NOT a validated CD-free solution.** It cannot
+supply any missing data files and must not be integrated into the installer.
+A non-binary control is to mount the original CD ISO as a read-only CD-ROM
+drive in Wine's *Drives* settings, ensuring `splanet/geometry.rwb` exists
+under that mapped drive letter. Compare the original unpatched executable
+and FadeLow copy in the same installation and INI, then the experimental
+combined copy only if desired.
+
+Owner test requests: whether “PAS DE CD” disappears, whether the Go
+button becomes accessible, whether FadeLow transitions complete, and
+whether video/audio/mission files all load. Until those results, no
+production CD-gate bypass or FR/DE FadeLow support is enabled.
