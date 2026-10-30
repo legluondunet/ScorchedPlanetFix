@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! ScorchedPlanetFix Windows --nogui mode: same edition-checked installer and patch.
-use crate::{iso_install,logger::Logger};
+use crate::{iso_install,logger::Logger,verify};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -87,6 +87,28 @@ pub fn run(arguments:&[OsString],root:&Path,
     emit(logger,&mut sink,"Sauvegarde : splanet/spvoodoo.exe.bak");
     emit(logger,&mut sink,&format!("Correctif automatique : {}",report.patch_report));
     emit(logger,&mut sink,"Installation et correctif terminés. Le jeu n'a pas été lancé.");
+    Ok(())
+}
+
+/// --verify: strict read-only verification of splanet beside the patcher.
+pub fn verify_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
+    let report=verify::verify_install(&root.join("splanet"),|msg|logger.write(msg))?;
+    emit(logger,&mut sink,&format!("Vérification OK : {} — {} fichiers vérifiés ({} octets), sauvegarde .bak conforme.",
+        report.edition,report.checked_files,report.checked_bytes));
+    Ok(())
+}
+/// --launch: verify the installation before spawning the game, then monitor
+/// the game process exit code. Never launch an unverified executable.
+pub fn launch_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
+    emit(logger,&mut sink,"Vérification intégrale de splanet avant lancement…");
+    let mut child=verify::launch_verified(&root.join("splanet"),|msg|logger.write(msg))?;
+    emit(logger,&mut sink,&format!("Jeu lancé, PID {} (vérification réussie).",child.id()));
+    let status=child.wait().map_err(|e|format!("Surveillance du processus : {e}"))?;
+    if !status.success(){
+        return Err(format!("Le jeu a quitté avec le code {}",status.code()
+            .map(|v|v.to_string()).unwrap_or_else(||"inconnu".into())));
+    }
+    emit(logger,&mut sink,"Le jeu s'est terminé normalement.");
     Ok(())
 }
 
