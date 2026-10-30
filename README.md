@@ -4,7 +4,7 @@ Open-source compatibility tools for **Scorched Planet (Criterion Studios, 1996)*
 
 ## Scorched Planet Setup 0.1 — development preview
 
-A native Rust/Windows installer that reads the **files copied from the original CD into a folder**. The user selects a source folder containing `SPLANET` and `VOODOO`, an empty destination, and French or German.
+A native Rust/Windows installer that reads the **files copied from the original CD into a folder**. The user selects a source folder containing `SPLANET` and `VOODOO`, an empty destination, and a game language (English, French, or German) when supported by that CD's original `SETUP.INI`.
 
 The GUI displays original InstallShield artwork (BMP) **when those files are accessible** from the user's source folder; some editions pack artwork inside InstallShield archives, not yet extracted.
 
@@ -41,3 +41,5 @@ the source CD. See [installer audit instructions](docs/installer.md).
 
 The audit does **not** yet prove complete installation or English language support
 for a particular original disc.
+
+**Language note:** the supplied English-edition `SETUP.INI` (v1.06) advertises English, Italian and Spanish, not French or German. Original setup language availability is parsed when available; candidate `SPLANET.INI` language code mapping still needs real-game verification. The Rust UI currently defaults to French text when English game language is chosen.
