@@ -199,7 +199,9 @@ if ((with_gdb)); then
         -ex 'set pagination off' \
         -ex 'set print thread-events off' \
         -ex 'info threads' \
+        -ex 'info proc mappings' \
         -ex 'thread apply all p/x $pc' \
+        -ex 'thread apply all x/6i $pc' \
         -ex 'thread apply all bt 12' \
         -ex 'detach' \
         > "$out/gdb-sample-$sample.txt" 2>&1; then
