@@ -1,4 +1,4 @@
-# ScorchedPlanetFix 1.0.0 — Windows GUI + ISO installer
+# ScorchedPlanetFix 1.0.0 — Windows GUI + ISO/CUE-BIN installer
 
 **Status: development build for owner validation; not yet a stable release.**
 
@@ -22,14 +22,17 @@ or commercial DLLs are included.
 
 1. Place `ScorchedPlanetFix.exe` in a writable folder.
 2. In the **same folder**, place **either**
-   - a single ISO image of the **supported original Windows 3dfx** game, **or**
+   - a single `.iso` image of the **supported original Windows 3dfx** game, **or**
+   - a single `.cue` file with its referenced `.bin` track file(s)
+     (keep the file names and relative directories from the CUE intact), **or**
    - an existing directory named `splanet` containing a complete installation.
 3. Launch the patcher. The working directory of the executable is detected
    using its own full path, not the shell's current directory.
 4. If `splanet` exists, it is **never overwritten**. The patcher uses
    its installed `SPVOODOO.EXE` (or reports an error if missing).
-5. If `splanet` does not exist, and exactly one ISO is present, the
-   patcher parses it, validates the supported 3dfx edition, merges the
+5. If `splanet` does not exist and exactly one image (`.iso` or `.cue`)
+   is present, the patcher parses it, validates the supported 3dfx
+   edition, merges the
    original `SPLANET/` files and `VOODOO/` game components into a temporary
    directory, excluding obsolete `glide.dll`, `sst1init.dll`, and
    `fxmemmap.vxd` CD drivers; checks all installed file transfers, generates `splanet.ini` if absent
@@ -95,10 +98,17 @@ verified backup and makes no change.
 
 The code uses the read-only, pure-Rust `isomage` parser to access
 ISO9660/Joliet or UDF filesystem entries without mounting the image.
+For CUE/BIN, it first parses the CUE and copies **only the first data
+track's 2048-byte user data**, sector by sector, into a temporary ISO
+used by that same parser. The temporary ISO is deleted after installation
+or on error; the source BIN and CUE remain untouched.
 
 The preflight checks:
 
 - structurally valid filesystem entry extents inside the image;
+- for CUE/BIN: safe relative BIN paths with no traversal or symlinks,
+  ordered tracks, first-track data format, valid sector headers and
+  an ISO9660 `CD001` primary volume descriptor at data sector 16;
 - bounded entry count and bounded file sizes;
 - safe, unambiguous Windows file and directory names;
 - presence of `SPLANET/` and `VOODOO/`;
@@ -179,7 +189,8 @@ the EXE, README, GPL license and SHA256SUMS.
 - Rust CD installer research in PR #1 remains separate; this new GUI
   includes only the original 3dfx copy layout and strict validation.
 - Do not merge this PR or publish a stable release until the owner
-  validates both paths: installed `splanet` and original 3dfx ISO.
+  validates an existing `splanet` directory and original 3dfx
+  `.iso` and `.cue/.bin` images.
 
 Developed by legluondunet, assisted by ChatGPT (OpenAI).
 
@@ -188,3 +199,33 @@ Developed by legluondunet, assisted by ChatGPT (OpenAI).
 The owner confirmed that the **EN/ES/IT four-byte FadeLow test executable works in gameplay**. Manual procedure: extract the disc, copy VOODOO game files to SPLANET excluding original `glide.dll`, then create `splanet.ini` with the installed-video path, selected language and `HighQualityVideo=1`. The provided working INI uses `language=4`, independently identified from the game executable's resource pointer table as **Italian**.
 
 This is validation of the manually prepared game and experimental patch, **not yet of the new automatic x64 GUI installer**. The owner's remaining INI values (`keymap`, `gamma`, `joystick`, `settings`, `name`) have not been proven mandatory for a fresh install. Current implementation preserves existing values, supplies only established fallback `settings`/`name` if absent, and does not synthesize custom device bindings.
+
+## CUE/BIN support and limits
+
+`ScorchedPlanetFix.exe` and a single `disc.cue` with its referenced
+`disc.bin` file(s) must be accessible together in the working directory.
+`FILE` declarations may use relative subdirectories; absolute, parent
+traversal and symlink paths are rejected. A bare `.bin` without its
+associated `.cue` cannot describe sector sizes and track boundaries
+reliably and is **not** auto-detected as a complete image.
+
+Supported first data tracks: `MODE1/2048`, raw `MODE1/2352` and raw
+`MODE2/2352` **Form 1 only**. The parser supports later audio
+tracks (including multi-BIN track references) by excluding them from
+the data conversion, but does **not** reproduce CDDA audio tracks.
+Subsequent data tracks, unknown sector modes, malformed or ambiguous
+CUE sheets, Form 2 sectors and absent source BIN files fail with a
+specific error, without making partial `splanet` installations.
+
+The temporary ISO, stored next to ScorchedPlanetFix in a hidden
+`.scorchedplanetfix-cue-*.iso` file, requires enough free space for
+the 2048-byte-per-sector data track. Its source CUE/BIN is never
+modified or overwritten. Temporary files are removed after the
+installer returns normally, whether extraction succeeded or failed.
+If the application is forcibly killed mid-conversion, a leftover
+hidden temporary ISO may require manual deletion.
+
+**No conversion or mounting step is required from the user for these
+supported data tracks.** Do not claim all original mixed-mode CD music
+is preserved, and do not claim end-to-end testing with the owner's
+particular CUE/BIN dumps before those tests are performed.
