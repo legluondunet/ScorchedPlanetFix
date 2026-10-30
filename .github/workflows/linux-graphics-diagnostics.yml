@@ -46,3 +46,18 @@ jobs:
           )
           compgen -G "$work/ScorchedPlanetFix-3dfx-*.log" > /dev/null
           ls -l "$work"/ScorchedPlanetFix-3dfx-*.log
+      - name: Test WINEPREFIX matching and reject known mismatches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/scorchedplanet-prefix-test"
+          mkdir -p "$work/prefix-one" "$work/prefix-two"
+          WINEPREFIX="$work/prefix-one" sleep 30 &
+          target=$!
+          trap 'kill "$target" 2>/dev/null || true' EXIT
+          WINEPREFIX="$work/prefix-one/" bash tools/diagnose-3dfx-hang-linux.sh --pid "$target" --interval 1 --output "$work/report-ok"
+          test -s "$work/report-ok/summary.txt"
+          if WINEPREFIX="$work/prefix-two" bash tools/diagnose-3dfx-hang-linux.sh --pid "$target" --interval 1 --output "$work/report-wrong"; then
+            echo "Mismatched prefix was unexpectedly accepted"
+            exit 1
+          fi
