@@ -32,14 +32,18 @@ For this approach, free space for the temporary data-track ISO is required.
 The patcher creates `splanet.ini` if absent (or updates an existing copy)
 to use local videos, enable high-quality video and select a language available
 on the detected edition. It preserves existing personal controller, gamma and
-other settings. It never overwrites an existing game directory.
+other settings. **The original SPVOODOO.EXE is first saved as
+SPVOODOO.EXE.bak, then automatically patched before the new splanet folder is
+finalized.** An extraction or patch failure leaves no half-installed splanet.
+An existing install is never overwritten; the existing original game
+executable is automatically backed up and patched when the GUI starts.
 
-The graphical UI displays `1.0.0-<commit>`, a checkbox for
-**Correction du blocage du fondu de palette (FadeLow)** with
-an explanatory tooltip, **Appliquer** and **Lancer** buttons,
-a percentage extraction bar and OK result dialogs.
-FR/DE displays a specifically labeled combined **FadeLow + détection CD**
-checkbox; US and EN/ES/IT use FadeLow only.
+The graphical UI displays `1.0.0-<commit>`, the **mandatory automatic
+edition-specific patch**, a **Lancer** button, a language selector,
+an extraction progress bar and OK result dialogs.
+FR/DE automatically receives **FadeLow + détection CD** together;
+US and EN/ES/IT receive FadeLow only. There is no opt-out or
+manual “Appliquer” action.
 A `ScorchedPlanetFix.log` file next to the program provides
 Windows/Wine hardware diagnostics and operation details.
 
@@ -82,5 +86,37 @@ or complete end-to-end testing of the new GUI installer is made.
 The game still needs a separately supplied Glide wrapper such as nGlide;
 this project includes the validated FadeLow fix for US and EN/ES/IT,
 plus an FR/DE-only media-detection change alongside FadeLow.
-No generalized NoCD or high-resolution patch is included. Developed by legluondunet with ChatGPT (OpenAI).
+No generalized NoCD or high-resolution patch is included.
+
+## Command line (--nogui)
+
+Exactly the same installation and edition-specific patch engine is available
+without opening a window. **It works in the current working directory**, not
+necessarily the folder containing ScorchedPlanetFix.exe. Only these forms
+are supported:
+
+```powershell
+.\ScorchedPlanetFix.exe --nogui
+.\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.iso
+.\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.cue
+.\ScorchedPlanetFix.exe --nogui .\ScorchedPlanet.cue .\ScorchedPlanet.bin
+```
+
+Without arguments after `--nogui`, find exactly one ISO or CUE in the
+current directory; CUE automatically locates its referenced BIN file.
+Explicit paths can point elsewhere, but the output remains
+`./splanet/` in the current working directory. If it already exists
+and no image is specified, the CLI only verifies and automatically patches
+the existing exact-edition executable; with an explicit image, it refuses
+to overwrite `splanet`. The original `SPVOODOO.EXE` is stored in
+`splanet/SPVOODOO.EXE.bak` before any patch. The program never starts
+the game in `--nogui` mode. For detailed diagnostics, see
+`ScorchedPlanetFix.log` in the current directory.
+
+The game's owner confirmed that its CD editions under study **have no
+audio CD tracks**. Only the data track is required for extraction;
+CUE code also safely ignores any optional later audio tracks but does
+not emulate CD audio.
+
+Developed by legluondunet with ChatGPT (OpenAI).
 No merging without explicit owner approval.
