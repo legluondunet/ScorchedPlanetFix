@@ -502,41 +502,65 @@ fn cli_console_write(message:&str,error:bool){
     }
 }
 #[cfg(windows)]
+fn run_console_command(arguments:&[std::ffi::OsString])->Result<(),String>{
+    let command=arguments.first().ok_or("Commande absente")?;
+    let exec=std::env::current_exe()
+        .map_err(|e|format!("Chemin ScorchedPlanetFix.exe inaccessible : {e}"))?;
+    let exe_root=exec.parent().ok_or("Dossier ScorchedPlanetFix introuvable")?;
+    // --nogui preserves the established current-directory install behavior.
+    // --verify and --launch always use splanet BESIDE THE PATCHER.
+    let root=if command=="--nogui" {
+        std::env::current_dir().map_err(|e|format!("Répertoire courant : {e}"))?
+    }else{exe_root.to_path_buf()};
+    let version=format!("1.0.0-{}",env!("SCORCHED_COMMIT"));
+    let logger=logger::Logger::new(&root,&version)?;
+    logger.system_information();
+    let outcome=match command.to_str(){
+        Some("--nogui")=>cli::run(&arguments[1..],&root,&logger,
+            |line|cli_console_write(line,false)),
+        Some("--verify") if arguments.len()==1=>cli::verify_only(&root,&logger,
+            |line|cli_console_write(line,false)),
+        Some("--launch") if arguments.len()==1=>cli::launch_only(&root,&logger,
+            |line|cli_console_write(line,false)),
+        _=>Err("Commande inconnue ou arguments superflus. Options :
+  --nogui [image.iso | image.cue [image.bin]]
+  --verify
+  --launch
+--verify et --launch utilisent uniquement splanet à côté de ScorchedPlanetFix.exe.".into()),
+    };
+    if let Err(ref message)=outcome{
+        logger.error(&format!("CLI {}: {message}",command.to_string_lossy()));
+    }
+    outcome
+}
+#[cfg(windows)]
+fn show_error_dialog(message:&str){
+    use std::ffi::c_void;
+    #[link(name="user32")]
+    extern "system"{
+        fn MessageBoxW(hwnd:*mut c_void,text:*const u16,caption:*const u16,flags:u32)->i32;
+    }
+    let msg:Vec<u16>=message.encode_utf16().chain(std::iter::once(0)).collect();
+    let cap:Vec<u16>="ScorchedPlanetFix — erreur".encode_utf16()
+        .chain(std::iter::once(0)).collect();
+    unsafe{MessageBoxW(std::ptr::null_mut(),msg.as_ptr(),cap.as_ptr(),0x10);}
+}
+#[cfg(windows)]
 fn main(){
     let args:Vec<std::ffi::OsString>=std::env::args_os().skip(1).collect();
-    if !args.is_empty(){
-        if args[0]=="--nogui"{
-            let result=(||{
-                let current=std::env::current_dir()
-                    .map_err(|e|format!("Répertoire courant inaccessible : {e}"))?;
-                let version=format!("1.0.0-{}",env!("SCORCHED_COMMIT"));
-                let logger=logger::Logger::new(&current,&version)?;
-                logger.system_information();
-                cli::run(&args[1..],&current,&logger,|line|cli_console_write(line,false))
-                    .map_err(|e|{
-                        logger.write(&format!("CLI ERROR: {e}"));
-                        e
-                    })
-            })();
-            if let Err(message)=result{
-                cli_console_write(&format!("ScorchedPlanetFix : erreur : {message}"),true);
-                std::process::exit(1);
-            }
-            return;
+    if args.is_empty(){
+        if let Err(e)=app::start(){
+            let dir=std::env::current_exe().ok().and_then(|p|p.parent().map(|x|x.to_path_buf()));
+            logger::Logger::emergency_error(dir.as_deref(),&e);
+            show_error_dialog(&format!("{e}\nConsultez ScorchedPlanetFix.log."));
+            std::process::exit(1);
         }
-        cli_console_write("Argument inconnu. Utilisez --nogui [image.iso | image.cue [image.bin]]",true);
-        std::process::exit(2);
+        return;
     }
-    if let Err(e)=app::start(){
-        // The GUI cannot be started (or its log could not be opened).
-        use std::ffi::c_void;
-        #[link(name="user32")]
-        extern "system"{
-            fn MessageBoxW(hwnd:*mut c_void,text:*const u16,caption:*const u16,flags:u32)->i32;
-        }
-        let msg:Vec<u16>=e.encode_utf16().chain(std::iter::once(0)).collect();
-        let cap:Vec<u16>="ScorchedPlanetFix — erreur".encode_utf16()
-            .chain(std::iter::once(0)).collect();
-        unsafe{MessageBoxW(std::ptr::null_mut(),msg.as_ptr(),cap.as_ptr(),0x10);}
+    if let Err(message)=run_console_command(&args){
+        let dir=std::env::current_exe().ok().and_then(|p|p.parent().map(|x|x.to_path_buf()));
+        logger::Logger::emergency_error(dir.as_deref(),&message);
+        cli_console_write(&format!("ScorchedPlanetFix : erreur : {message}"),true);
+        std::process::exit(1);
     }
 }
