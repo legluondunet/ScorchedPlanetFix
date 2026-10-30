@@ -63,6 +63,9 @@ pub fn run(arguments:&[OsString],root:&Path,
         let edition=verify::profile_for_patched_exe(&exe)?;
         let language=verify::preferred_language(&install,edition.label);
         iso_install::update_ini(&install.join("splanet.ini"),language)?;
+        if iso_install::remove_unused_splanetw(&install,edition.label)? {
+            emit(logger,&mut sink,"Ancien splanetw.exe inutile supprimé (empreinte du CD vérifiée).");
+        }
         let installed=nglide::copy_installed_glide(root,&install,|message|logger.write(message))?;
         if !installed {
             emit(logger,&mut sink,&format!("AVERTISSEMENT : nGlide manquant. Installation nécessaire depuis {}",nglide::OFFICIAL_URL));
