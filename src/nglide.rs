@@ -132,6 +132,30 @@ mod tests{
         assert!(verify_local_glide(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
+    #[test] fn require_real_pe32_dll_header(){
+        let dir=std::env::temp_dir().join(format!("nglide-dll-header-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        let path=dir.join("glide.dll");
+        let mut bytes=vec![0u8;2048];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        let pe=0x80;
+        bytes[pe..pe+4].copy_from_slice(b"PE\0\0");
+        bytes[pe+4..pe+6].copy_from_slice(&0x14cu16.to_le_bytes());
+        bytes[pe+22..pe+24].copy_from_slice(&0x2000u16.to_le_bytes());
+        bytes[pe+24..pe+26].copy_from_slice(&0x10bu16.to_le_bytes());
+        fs::write(&path,&bytes).unwrap();
+        assert!(validate_glide_dll(&path).is_ok());
+        bytes[pe+22..pe+24].copy_from_slice(&0u16.to_le_bytes());
+        fs::write(&path,&bytes).unwrap();
+        assert!(validate_glide_dll(&path).is_err(),"renamed EXE must not pass as DLL");
+        bytes[pe+22..pe+24].copy_from_slice(&0x2000u16.to_le_bytes());
+        bytes[pe+24..pe+26].copy_from_slice(&0x20bu16.to_le_bytes());
+        fs::write(&path,&bytes).unwrap();
+        assert!(validate_glide_dll(&path).is_err(),"PE32+ must be rejected");
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test] fn reject_invalid_or_64_bit_glide(){
         let dir=std::env::temp_dir().join(format!("nglide-pe-test-{}",std::process::id()));
         let _=fs::remove_dir_all(&dir);
