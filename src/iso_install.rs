@@ -590,7 +590,7 @@ mod tests {
         fs::write(dir.join(".scorchedplanetfix-cue-99-0.iso"),b"temporary").unwrap();
         assert_eq!(find_image_and_install(&dir).unwrap(),Some(dir.join("DISC.CuE")));
         fs::write(dir.join("other.ISO"),b"iso").unwrap();
-        assert!(find_image_and_install(&dir).unwrap_err().contains("Plusieurs"));
+        assert!(find_image_and_install(&dir).unwrap_err().contains("Multiple ISO/CUE images"));
         fs::remove_dir_all(dir).unwrap();
     }
     #[test] fn reject_filename_traversal_and_reserved(){
