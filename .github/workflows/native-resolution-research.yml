@@ -1,0 +1,30 @@
+name: Native resolution research (read-only)
+
+on:
+  push:
+    branches: [research/native-high-resolution]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-resolution-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Python syntax
+        run: python3 -m py_compile tools/inspect_native_resolution.py
+      - name: Run synthetic PE signature and offset tests
+        run: python3 tools/inspect_native_resolution.py --self-test
+      - name: Verify unknown EXE is refused without creating output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'MZbogus' > "$RUNNER_TEMP/not-the-game.exe"
+          if python3 tools/inspect_native_resolution.py "$RUNNER_TEMP/not-the-game.exe"; then
+            echo "Unexpectedly accepted unknown EXE" >&2
+            exit 1
+          fi
