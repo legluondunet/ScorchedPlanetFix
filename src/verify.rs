@@ -104,6 +104,14 @@ fn allowed_language(label:&str,lang:u8)->bool{
         _=>false
     }
 }
+/// Return only exact, already patched profiles, for safe legacy INI migration.
+pub fn profile_for_patched_exe(exe:&Path)->Result<scorched_planet_fix::FadeProfile,String>{
+    let (_,hash)=hash_file(exe)?;
+    let profile=profile_from_hash(&hash)
+        .ok_or_else(||format!("Exécutable inconnu (SHA-256 {hash})"))?;
+    if hash!=profile.patched_hash {return Err("Le fichier du jeu n'est pas encore corrigé".into());}
+    Ok(profile)
+}
 /// Used only by installation/repair workflows, never by read-only
 /// verification. Preserve a preselected valid edition language when
 /// migrating older absolute-video INI files to video= video.
