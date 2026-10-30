@@ -157,6 +157,45 @@ then map its PC to the actual executable or module before changing any
 original binary. If GDB could not attach, inspect CPU and wait-channel
 snapshots first and consider running the process under a debugger from launch.
 
+### Second real capture: ptrace denied (2026-10-30, 10:05)
+
+The user-supplied log records `CLK_TCK=100` and main Linux TID
+`389977` accruing **515 CPU ticks in roughly five seconds**. The
+Wine prefix was confirmed by the diagnostic tool. It also confirms
+`ptrace: Operation not permitted` when regular GDB tried to attach
+to the process. No instruction pointer was obtained.
+
+Unlike the previous capture, the process was identified as
+`/usr/lib/wine/x86_64-unix/wine-preloader`; i386 Wine modules came
+from `/usr/lib/wine`, while certain GE-Proton font/theme resources
+were also mapped. A mapped resource path alone does not establish
+which Wine runner actually launched the game.
+
+The first GDB capture failed, and the script did not attempt the second.
+The earlier implementation did not log whether the process had exited;
+this is not evidence that GDB killed the game.
+
+The script now includes an **explicit opt-in** `--gdb-sudo` mode:
+before entering fullscreen, it asks for sudo authentication, then later
+runs the two GDB captures using `sudo -n gdb`. This requires a trusted
+local debugger and local sudo privileges. It does **not** change
+`/proc/sys/kernel/yama/ptrace_scope` or write any system settings.
+
+```bash
+cd /path/to/installed/scorched-planet
+WINEPREFIX="/path/to/your/wine-prefix" \
+  bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5 \
+  --game-dir . --gdb-sudo
+```
+
+Alternatively first inspect the read-only policy from a terminal:
+`cat /proc/sys/kernel/yama/ptrace_scope`. Yama scope 1 restricts
+unrelated process attachment by default; other policy and privilege
+conditions can also produce EPERM. If sudo is not desired, preserve
+existing system policy and postpone instruction sampling until a
+debugger can launch the Wine process as its child while retaining the
+normal Lutris runtime environment.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
