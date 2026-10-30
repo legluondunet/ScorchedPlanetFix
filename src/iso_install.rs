@@ -7,7 +7,7 @@
 //! obsolete 3dfx hardware drivers, verify every extracted
 //! file's SHA256 against bytes read from ISO, update video= to local install.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
-use scorched_planet_fix::ORIGINAL_SHA256;
+use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
 use crate::cue_image;
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
@@ -24,7 +24,10 @@ const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 struct Asset { node: TreeNode, relative: PathBuf, size: u64, from_voodoo: bool }
 #[derive(Default)]
 struct Inventory { files: BTreeMap<String, Asset>, image_entries: usize, video_files: usize, skipped_legacy_drivers: usize }
-pub struct InstallReport { pub files: usize, pub bytes: u64, pub folder: PathBuf, pub edition: &'static str }
+pub struct InstallReport {
+    pub files: usize, pub bytes: u64, pub folder: PathBuf,
+    pub edition: &'static str, pub patch_report: String,
+}
 
 /// Fingerprints recorded from the three owner-supplied CD file inventories.
 /// This is not a third-party authenticated retail-master database.
@@ -307,6 +310,13 @@ pub fn update_ini(ini:&Path,video:&Path,language:u8)->Result<(),String>{
 
 pub fn install_iso(
     image:&Path, destination:&Path,
+    report:impl FnMut(u64,u64,&str),
+    log:impl FnMut(&str),
+) -> Result<InstallReport,String> {
+    install_image(image,None,destination,report,log)
+}
+pub fn install_image(
+    image:&Path, bin_override:Option<&Path>, destination:&Path,
     mut report:impl FnMut(u64,u64,&str),
     mut log:impl FnMut(&str),
 ) -> Result<InstallReport,String> {
@@ -318,10 +328,16 @@ pub fn install_iso(
     let temporary=if image.extension().is_some_and(|e|e.eq_ignore_ascii_case("cue")){
         let parent=destination.parent().ok_or("Dossier de destination invalide")?;
         report(0,100,"Analyse et conversion de l'image CUE/BIN…");
-        Some(cue_image::normalize_cue(image,parent,
+        Some(cue_image::normalize_cue_with_bin(image,bin_override,parent,
             |done,total,label|report(done.saturating_mul(9)/total,100,label),
             |message|log(message))?)
-    } else {None};
+    } else {
+        if bin_override.is_some() {return Err("Un BIN explicite nécessite un fichier CUE".into());}
+        if !image.extension().is_some_and(|e|e.eq_ignore_ascii_case("iso")){
+            return Err("Image non reconnue : préciser un fichier ISO ou CUE".into());
+        }
+        None
+    };
     let source=temporary.as_ref().map(|x|x.path.as_path()).unwrap_or(image);
     let mut iso=File::open(source).map_err(|e|format!("Image du jeu illisible : {e}"))?;
     let iso_len=iso.metadata().map_err(|e|e.to_string())?.len();
@@ -401,14 +417,30 @@ pub fn install_iso(
         update_ini(&ini,&destination.join("video"),default_language)?;
         log(&format!("INI: default language={} for edition {}",default_language,edition.label));
         log(&format!("INI: written and verified: {}",file_digest(&ini)?));
+        // The patch is required for every supported edition. Apply it *while
+        // still in staging* so a failure removes the whole incomplete install.
+        // This creates SPVOODOO.EXE.bak with a verified unmodified original
+        // before replacing the game EXE. No partially patched install is exposed.
+        report(99,100,"Sauvegarde .bak et application automatique du correctif…");
+        let game_exe=staging.join("SPVOODOO.EXE");
+        log("PATCH-AUTO: backing up original SPVOODOO.EXE.bak then patching edition");
+        let patch_report=scorched_planet_fix::execute(Action::Apply,&game_exe,None,true)
+            .map_err(|e|format!("Correctif automatique impossible : {e}"))?;
+        log(&format!("PATCH-AUTO OK: {patch_report}"));
+        if !staging.join("SPVOODOO.EXE.bak").is_file() {
+            return Err("Correctif automatique : sauvegarde .bak absente".into());
+        }
         // User-specific resources and wrappers are NOT embedded or downloaded.
         if destination.exists(){return Err("splanet créé entre-temps : opération annulée".into());}
         fs::rename(&staging,destination).map_err(|e|format!("Finalisation de l'installation : {e}"))?;
         report(100,100,"Installation terminée");
-        let file_count=inventory.files.len()+usize::from(generated_ini);
+        let file_count=inventory.files.len()+usize::from(generated_ini)+1; // SPVOODOO.EXE.bak
         log(&format!("INSTALL-OK: {} files ({} from CD, {} generated), {} extracted bytes",
             file_count,inventory.files.len(),usize::from(generated_ini),total));
-        Ok(InstallReport{files:file_count,bytes:total,folder:destination.to_owned(),edition:edition.label})
+        Ok(InstallReport{
+            files:file_count,bytes:total,folder:destination.to_owned(),
+            edition:edition.label,patch_report,
+        })
     })();
     if install_result.is_err(){
         let _=fs::remove_dir_all(&staging);
