@@ -106,6 +106,47 @@ None of this establishes that the freeze is caused by CPU speed, a busy
 loop, a critical-section deadlock, or an invalid Glide call. We need
 runtime evidence before making a binary patch.
 
+### Evidence from first real Wine/nGlide test (2026-10-30)
+
+The user confirmed a 5-second snapshot interval with `CLK_TCK=100`.
+The Linux thread whose TID equals the process PID accrued **513 CPU ticks**
+(approximately 5.13 seconds of CPU time), while nearly all other threads
+accrued zero ticks. This is consistent with **one logical CPU being fully
+occupied**. If the game was frozen throughout the measurement, an active
+loop in the application/RenderWare/Glide stack becomes a high-priority
+hypothesis, but the sample does **not** locate the loop or exclude a
+normal high-CPU render loop in a responsive game.
+
+The loaded process modules show:
+- `SPVOODOO.EXE`, `RWDLVOOD.DLL`, and a local `Glide.dll`
+- GE-Proton 11-11 Wine libraries loaded from a Steam compatibility-tools path
+- 32-bit Vulkan/Radeon graphics stack, local `d3d11.dll`, MangoHud
+
+The text log's `Wine=wine-11.17 (Staging)` reflects the interpreter in the
+**script shell's PATH**, not necessarily the actual runner used for the game.
+The diagnostic tool now records `/proc/<pid>/exe` as well.
+
+**Next experiment:** capture two native GDB samples while the same hang is
+present, without switching away from fullscreen:
+
+```bash
+cd /path/to/installed/scorched-planet
+bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5 --game-dir . --gdb
+```
+
+The script collects all-thread backtraces, instruction pointers, nearby
+disassembly and process mappings in `gdb-sample-1.txt` and
+`gdb-sample-2.txt` under the timestamped details folder. The top-level
+`.log` includes an abbreviated overview. The GDB samples are opt-in;
+ptrace policy or the runtime may prevent attachment. Do not disable
+system-wide debugging restrictions merely for this test: send the
+diagnostic error instead.
+
+We will locate the busy thread in `info threads` (LWP = the Linux TID),
+then map its PC to the actual executable or module before changing any
+original binary. If GDB could not attach, inspect CPU and wait-channel
+snapshots first and consider running the process under a debugger from launch.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
