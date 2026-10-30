@@ -10,6 +10,8 @@ mod diagnostics;
 #[cfg(windows)]
 mod diagnostics_graphics;
 #[cfg(windows)]
+mod cue_image;
+#[cfg(windows)]
 mod iso_install;
 #[cfg(windows)]
 mod logger;
@@ -118,7 +120,7 @@ mod app {
             let image=match iso_install::find_image_and_install(&self.root){
                 Ok(image)=>image,
                 Err(e)=>{
-                    self.detect="Plusieurs images ISO détectées".into();
+                    self.detect="Images ISO/CUE ambiguës ou incomplètes".into();
                     self.stop_on_modal=true;
                     self.info("Image du jeu non supportée",e,true);
                     return;
@@ -153,10 +155,10 @@ mod app {
                 return;
             }
             if let Some(iso)=image {
-                self.detect="ISO détectée — validation et extraction…".into();
+                self.detect="Image ISO ou CUE/BIN détectée — validation et extraction…".into();
                 self.phase=Phase::Installing;
                 self.status="Validation de l'image…".into();
-                self.logger.write("DETECT: supported candidate ISO; starting validation before extraction");
+                self.logger.write("DETECT: ISO/CUE candidate; starting validation before extraction");
                 let dest=self.install.clone();
                 let tx=self.tx.clone();
                 let log=self.logger.clone();
@@ -169,12 +171,12 @@ mod app {
                     let _=tx.send(Event::Installed(result));
                 });
             }else{
-                self.detect="Ni image ISO ni dossier splanet trouvés".into();
+                self.detect="Ni image ISO/CUE ni dossier splanet trouvés".into();
                 self.stop_on_modal=true;
-                self.status="Placez l'ISO compatible ou un dossier splanet près du patcher".into();
+                self.status="Placez une image ISO ou CUE/BIN, ou un dossier splanet, près du patcher".into();
                 self.logger.write("DETECT: no ISO and no splanet folder");
                 self.info("Aucune installation détectée",
-                    "Placez une ISO de Scorched Planet (édition Windows 3dfx) ou le dossier splanet à côté de ScorchedPlanetFix.exe, puis relancez le programme.",true);
+                    "Placez un ISO ou un couple CUE/BIN de Scorched Planet (édition Windows 3dfx), ou le dossier splanet, près de ScorchedPlanetFix.exe puis relancez le programme.",true);
             }
         }
         fn progress_events(&mut self){
