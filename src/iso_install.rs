@@ -8,6 +8,7 @@
 //! file's SHA256 against bytes read from ISO, update video= to local install.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::ORIGINAL_SHA256;
+use crate::cue_image;
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -207,17 +208,25 @@ fn mandatory_file_hashes(iso: &mut File, files: &Inventory) -> Result<Edition,St
 }
 pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     let mut images = Vec::new();
+    let mut bare_bins = 0;
     let entries=fs::read_dir(folder).map_err(|e|e.to_string())?;
     for item in entries {
         let item=item.map_err(|e|e.to_string())?;
         let ty=item.file_type().map_err(|e|e.to_string())?;
-        if ty.is_symlink() {continue;}
-        if ty.is_file() && item.path().extension().is_some_and(|ext|ext.eq_ignore_ascii_case("iso")){
-            images.push(item.path());
+        if ty.is_symlink() || !ty.is_file() {continue;}
+        if item.file_name().to_string_lossy().starts_with(".scorchedplanetfix-"){continue;}
+        let extension=item.path().extension().map(|e|e.to_string_lossy().to_ascii_lowercase());
+        match extension.as_deref(){
+            Some("iso")|Some("cue")=>images.push(item.path()),
+            Some("bin")=>bare_bins+=1,
+            _=>{},
         }
     }
     images.sort();
-    if images.len()>1 {return Err("Plusieurs ISO trouvées : laisser une seule image du jeu".into());}
+    if images.len()>1 {return Err("Plusieurs images ISO/CUE trouvées : laisser une seule image du jeu".into());}
+    if images.is_empty() && bare_bins>0 {
+        return Err("Image BIN détectée sans fichier CUE : placez le .cue associé dans ce dossier".into());
+    }
     Ok(images.pop())
 }
 /// Keep all existing user settings unmodified except video, selected language
@@ -304,14 +313,24 @@ pub fn install_iso(
     if destination.exists() || destination.is_symlink(){
         return Err("Installation existante splanet : refus d'écrasement".into());
     }
-    let mut iso=File::open(image).map_err(|e|format!("ISO illisible : {e}"))?;
+    // CUE/BIN is normalized to a temporary data-only ISO. The guard deletes
+    // it on any success/error path; source .cue and .bin stay read-only.
+    let temporary=if image.extension().is_some_and(|e|e.eq_ignore_ascii_case("cue")){
+        let parent=destination.parent().ok_or("Dossier de destination invalide")?;
+        report(0,100,"Analyse et conversion de l'image CUE/BIN…");
+        Some(cue_image::normalize_cue(image,parent,
+            |done,total,label|report(done.saturating_mul(9)/total,100,label),
+            |message|log(message))?)
+    } else {None};
+    let source=temporary.as_ref().map(|x|x.path.as_path()).unwrap_or(image);
+    let mut iso=File::open(source).map_err(|e|format!("Image du jeu illisible : {e}"))?;
     let iso_len=iso.metadata().map_err(|e|e.to_string())?.len();
     if iso_len < 32 * 2048 || iso_len > MAX_TOTAL_BYTES {
         return Err("Image du jeu non supportée : taille ISO incorrecte".into());
     }
-    report(0,100,"Analyse de l'image du CD…");
+    report(10,100,"Analyse de l'image du CD…");
     log("ISO: parsing read-only image filesystem");
-    let root=detect_and_parse_filesystem(&mut iso,&image.to_string_lossy())
+    let root=detect_and_parse_filesystem(&mut iso,&source.to_string_lossy())
         .map_err(|e|format!("Image du jeu non supportée : {e}"))?;
     validate_bounds(iso_len,&root)?;
     let inventory=inventory(&root)?;
@@ -400,6 +419,21 @@ pub fn install_iso(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn disc_discovery_treats_cue_bin_as_one_image(){
+        let dir=std::env::temp_dir().join(format!("scorched-cue-discovery-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("DISC.BIN"),b"bin").unwrap();
+        assert!(find_image_and_install(&dir).unwrap_err().contains("CUE"));
+        let cue=dir.join("DISC.CuE");
+        fs::write(&cue,b"FILE \"DISC.BIN\" BINARY").unwrap();
+        assert_eq!(find_image_and_install(&dir).unwrap(),Some(cue));
+        fs::write(dir.join(".scorchedplanetfix-cue-99-0.iso"),b"temporary").unwrap();
+        assert_eq!(find_image_and_install(&dir).unwrap(),Some(dir.join("DISC.CuE")));
+        fs::write(dir.join("other.ISO"),b"iso").unwrap();
+        assert!(find_image_and_install(&dir).unwrap_err().contains("Plusieurs"));
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test] fn reject_filename_traversal_and_reserved(){
         for n in ["..",".","", "a/b","a\\b","C:foo","CON","NUL.txt"," test."," bad\n"]{
             assert!(!valid_name(n),"{n:?}");
