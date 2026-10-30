@@ -230,7 +230,7 @@ mod app {
                 ui.add_space(16.0);
                 ui.vertical_centered(|ui|{
                     ui.heading(RichText::new("ScorchedPlanetFix").size(28.0).strong());
-                    ui.label(RichText::new(&self.version).size(13.0).color(Color32::LIGHT_GRAY));
+                    ui.label(RichText::new(self.version.as_str()).size(13.0).color(Color32::LIGHT_GRAY));
                     ui.label("Licence GNU GPL-3.0-or-later");
                 });
                 ui.add_space(18.0);
@@ -242,7 +242,7 @@ mod app {
                         .on_hover_text(DESCRIPTION);
                 });
                 ui.add_space(16.0);
-                ui.label(RichText::new(&self.detect).color(Color32::GRAY));
+                ui.label(RichText::new(self.detect.as_str()).color(Color32::GRAY));
                 ui.label(&self.status);
                 if !matches!(self.phase,Phase::Ready){
                     ui.add(egui::ProgressBar::new(self.progress).show_percentage().desired_width(ui.available_width()));
@@ -273,7 +273,7 @@ mod app {
         log.system_information();
         let title=format!("ScorchedPlanetFix {version}");
         let options=eframe::NativeOptions {
-            viewport:egui::ViewportBuilder::default().with_title(&title)
+            viewport:egui::ViewportBuilder::default().with_title(title.clone())
                 .with_inner_size([590.0,330.0]).with_min_inner_size([530.0,310.0]),
             ..Default::default()
         };
