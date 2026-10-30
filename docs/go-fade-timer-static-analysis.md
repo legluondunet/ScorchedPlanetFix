@@ -234,3 +234,40 @@ work or reveal unrelated timing assumptions. Without a runtime
 test confirming successful level transition and audio/graphics
 behavior, this is an experiment, not a confirmed fix.
 
+## Future isolated Wine/nGlide validation checklist (not yet performed)
+
+**Status:** the offline static analysis and copy generation passed;
+**no Windows/Wine gameplay validation has been run**.
+
+If a later manual game test is authorized, compare unchanged
+retail `SPVOODOO.EXE` against the `low` experiment first.
+Keep the game executable and data in an **isolated duplicate**
+of the installation folder, not the existing Lutris game folder.
+Use the same Wine runner, Wine prefix, graphics wrapper and
+display settings so that only the four-byte fade constant changes.
+Do not run the game itself as root; sudo is not required for
+creating or launching the experimental copy.
+
+Record the following outcomes:
+
+1. Main menu loads and plays music as before.
+2. Clicking Go proceeds to gameplay instead of freezing;
+   measure the time and note whether the last ~4 s of audio repeat.
+3. Loading an existing saved game works.
+4. Menu fade transitions, fullscreen/focus, and 3dfx visuals are intact.
+5. CPU usage and, if necessary, a new perf capture identify
+   whether the busy main-thread timing loop disappears.
+6. Quit and restart several times to check repeatability.
+
+If the `low` copy behaves identically to the original, do not
+claim success; consider the `zero` experiment only with a new
+explicitly isolated copy and the same observations. If either
+causes a new problem, stop using the test copy. Rollback consists
+of deleting the isolated copy; the original remains untouched.
+
+Separately, the read-only live-value test of timer delta
+`0x556314`, fade remaining `0x4C99C8`, and game-state
+`0x537EB0` would distinguish timer starvation from
+other causes when the user is ready for in-game diagnostics.
+No live-memory capture is performed by the offline tools.
+
