@@ -1,0 +1,28 @@
+name: 3dfx diagnostic script syntax
+
+on:
+  push:
+    branches: [research/3dfx-hang-diagnostics]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell 5.1 diagnostic script
+        shell: powershell
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools\diagnose-3dfx-hang.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host 'PowerShell 5.1 script parses successfully.'
