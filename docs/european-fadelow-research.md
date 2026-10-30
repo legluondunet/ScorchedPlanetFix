@@ -1,6 +1,6 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
-Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE FadeLow test did not reach gameplay: the menu displays “PAS DE CD” (owner screenshot, 2026-10-30). This is a media-detection obstacle; the FadeLow threshold itself is neither validated nor disproven for FR/DE.** This report does not imply all missions, cinematics, or both wrappers have been tested.
+Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE: FadeLow-only test displayed “PAS DE CD”; the owner subsequently reported “validé!” for the combined FadeLow + two-byte CD-media diagnostic copy (2026-10-30). This validates the combination in the user's game test, not the FR/DE FadeLow-only candidate.** This report does not imply all missions, cinematics, or both wrappers have been tested.
 
 This analysis used the two owner-supplied original executables, without modifying them, and compares the palette-fade mechanism with the previously validated US FadeLow 4-byte patch. No original or patched commercial executable is stored in this repository.
 
@@ -26,10 +26,10 @@ Both supplied European files are PE32 i386, ImageBase `0x00400000`, Windows GUI 
 
 ## Release gate and testing
 
-- The Windows x64 Rust GUI now permits FadeLow for **US and EN/ES/IT only**, protected by exact original/patched hashes, verified per-edition backup and restore. **FR/DE remains disabled**, pending a game test.
+- The Windows x64 Rust GUI now offers exactly three hash-locked combinations: **US FadeLow only**, **EN/ES/IT FadeLow only**, and **FR/DE FadeLow + CD-media gate**. Each uses an exact original hash, known raw PE offsets, the expected old bytes, a known patched SHA-256 and matching original backup for reversible application.
 - Trial binaries are separate private output files, supplied only to the original owner via this conversation. **Do not add original or modified commercial EXEs to GitHub, CI, or a public release**.
 - Test using an isolated copy of each installed edition, keeping its original `SPVOODOO.EXE` untouched. Launch the alternate-name trial EXE via Lutris/Wine or Windows, repeat the previous Go/mission fade scenario and verify menu, mission transitions, playback, input and audio. Revert simply by selecting the original EXE again.
-- Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. That edition is eligible for Rust production patch/restore, but the new Rust GUI/installer itself still requires a separate end-to-end test. FR/DE is not eligible until its own gameplay test passes.
+- Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. The owner then confirmed the **combined** FR/DE six-byte test copy works. Both editions are eligible for their exact tested Rust patch/restore combinations; the new Rust GUI/installer itself still requires a separate end-to-end test.
 
 No modification to `main`; research and proposed changes are kept in draft PR #5.
 
@@ -108,7 +108,7 @@ byte; it does not guarantee EAX equals exactly one. The global is observed
 to be consumed as a Boolean in known uses; unknown consumers and effects
 have not been exhaustively audited.
 
-**This is a hypothesis test, NOT a validated CD-free solution.** It cannot
+**The owner confirmed the combined binary works in the reported game test; this does NOT demonstrate complete CD-free gameplay or eliminate all asset dependencies.** It cannot
 supply any missing data files and must not be integrated into the installer.
 A non-binary control is to mount the original CD ISO as a read-only CD-ROM
 drive in Wine's *Drives* settings, ensuring `splanet/geometry.rwb` exists
@@ -116,7 +116,11 @@ under that mapped drive letter. Compare the original unpatched executable
 and FadeLow copy in the same installation and INI, then the experimental
 combined copy only if desired.
 
-Owner test requests: whether “PAS DE CD” disappears, whether the Go
-button becomes accessible, whether FadeLow transitions complete, and
-whether video/audio/mission files all load. Until those results, no
-production CD-gate bypass or FR/DE FadeLow support is enabled.
+Owner result (2026-10-30): **“validé!”** after testing the combined
+FadeLow + media-gate trial. The precise breadth of tested missions,
+cinematics, video and audio playback has not been documented.
+The combined six-byte candidate (and only that candidate) was promoted
+to the Rust edition-specific profile with exact SHA-256 checks, backup
+and restore. The GUI installer remains awaiting independent testing
+with a real FR/DE ISO. There is **no general-purpose NoCD patch**
+for US, EN/ES/IT, or unknown versions.
