@@ -158,3 +158,29 @@ and both float32 thresholds. Its `--self-test` mode uses
 deterministic clock models without copyrighted binaries
 and runs in GitHub Actions.
 
+## State-dispatch route containing the sampled fade branch
+
+The executable has a state-specific dispatcher at `0x436190`.
+It reads `0x537EB0`, bounds-checks the value 0..4, and jumps
+through the table at `0x4361BC`. Raw table words decode to:
+
+| State value | Dispatch target | Next destination |
+| --- | --- | --- |
+| 0 | `0x4361A6` | `0x427C80` |
+| 1 | `0x4361BA` | returns |
+| 2 | `0x4361AB` | `0x41FF70` |
+| 3 | `0x4361B0` | `0x456E20` |
+| 4 | `0x4361B5` | `0x403E80` |
+
+The sampled palette wait branch at `0x427D38` lies inside
+the state-0 initialization/cleanup path beginning `0x427C80`.
+`0x436190` is called by several menu/state transitions
+and state writes also occur outside the dispatcher.
+We therefore have a tighter **possible control-flow path**
+for the observed CPU sample, but no proof which state the
+game selected when the user clicked Go.
+
+Future runtime observation of the value at `0x537EB0` would
+help distinguish the menu-to-game transition from other
+fade and cleanup code without changing any game assets.
+
