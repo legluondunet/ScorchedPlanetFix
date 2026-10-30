@@ -49,7 +49,7 @@ fn emit(logger:&Logger,sink:&mut impl FnMut(&str),msg:&str){
 pub fn run(arguments:&[OsString],root:&Path,
     logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
     let args=parse_args(arguments)?;
-     let install=root.join("splanet");
+    let install=root.join("splanet");
     if install.is_symlink() {
         return Err("Dossier splanet : lien symbolique refusé".into());
     }
@@ -60,10 +60,10 @@ pub fn run(arguments:&[OsString],root:&Path,
         if !install.is_dir() || !install.join("SPVOODOO.EXE").is_file() {
             return Err("Dossier splanet incomplet : SPVOODOO.EXE absent".into());
         }
-        emit(logger,&mut sink,logger,&mut sink,"Installation existante détectée. Vérification du correctif automatique…");
+        emit(logger,&mut sink,"Installation existante détectée. Vérification du correctif automatique…");
         let outcome=scorched_planet_fix::execute(Action::Apply,&install.join("SPVOODOO.EXE"),None,true)?;
-        emit(logger,&mut sink,logger,&mut sink,&outcome);
-        emit(logger,&mut sink,logger,&mut sink,"Terminé. SPVOODOO.EXE.bak contient l'exécutable original.");
+        emit(logger,&mut sink,&outcome);
+        emit(logger,&mut sink,"Terminé. SPVOODOO.EXE.bak contient l'exécutable original.");
         return Ok(());
     }
     let source=match args.image {
