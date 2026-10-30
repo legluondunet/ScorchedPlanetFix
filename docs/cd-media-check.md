@@ -154,3 +154,30 @@ or menu displayed but Go failed.
 
 **No result of this NoCD candidate trial has been received yet.**
 
+## Successful user test after INI video-path relocation (2026-10-30)
+
+The user reports that after renaming the original CD files directory
+`/mnt/LUTRIS/Games/scorched-planet/drive_c/splanetcd` out of the way,
+and changing the `splanet.ini` setting from
+`video= c:\splanetcd\splanet\video` to
+`video= c:\splanet\video`,
+**the game launches and reaches gameplay**.
+
+This strongly implicates the previously configured video-resource
+path in the earlier startup failure. The user did not explicitly
+identify which EXE was selected for this particular successful run,
+so it does **not yet prove** whether the 2-byte experimental NoCD
+check change was necessary. Also, reaching gameplay does not
+demonstrate that every cinematic, audio file or mission loads.
+
+**Next controlled A/B test:** keep the corrected INI path and CD
+directory absent, select the previously validated
+`SPVOODOO-FadeLow.EXE` (without the two-byte NoCD experiment),
+and attempt mission start. If it works, keep FadeLow plus the INI
+change and do not ship the unnecessary NoCD patch. If only the
+combined FadeLow+NoCD EXE works, investigate the media-availability
+flag separately. Confirm necessary files actually exist under
+`C:\splanet\video` and test playback of cinematics.
+
+No NoCD patch is validated or merged based on this observation alone.
+
