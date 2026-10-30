@@ -1,0 +1,15 @@
+[package]
+name = "scorched-planet-setup"
+version = "0.1.0"
+edition = "2024"
+description = "Installer for an original Scorched Planet (1996) CD copy"
+publish = false
+
+[dependencies]
+eframe = "0.36.2"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "png", "jpeg"] }
+rfd = "0.17.2"
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = "3"
