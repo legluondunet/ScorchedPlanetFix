@@ -1,0 +1,20 @@
+[package]
+name = "scorched-planet-fix"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.95"
+description = "Windows x64 command-line CD installer, verifier and game launcher for Scorched Planet (1996)"
+license = "GPL-3.0-or-later"
+authors = ["legluondunet assisted by ChatGPT (OpenAI)"]
+publish = false
+build = "build.rs"
+
+[dependencies]
+isomage = "=2.1.0"
+sha2 = "0.10"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

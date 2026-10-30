@@ -1,0 +1,69 @@
+name: ScorchedPlanetFix Windows 1.0 CLI
+
+on:
+  push:
+    branches: [feat/rust-fadelow-patcher]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows CLI build and tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Update Rust dependencies / lock file
+        run: cargo generate-lockfile
+      - name: Add Windows x64 target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Test all targets (includes ISO and FadeLow tests)
+        run: cargo test --target x86_64-pc-windows-msvc --all-targets
+      - name: Compile release console (Windows x64 only)
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
+      - name: Verify Windows x64 console subsystem and executable
+        shell: pwsh
+        run: |
+          $exe = "target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe"
+          if (!(Test-Path $exe)) { throw "Missing patcher binary" }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x8664) { throw "Expected AMD64 PE (0x8664), received $machine" }
+          $optional = $pe + 24
+          $magic = [BitConverter]::ToUInt16($bytes, $optional)
+          if ($magic -ne 0x20b) { throw "Expected PE32+ optional header (0x20b), received $magic" }
+          $subsystem = [BitConverter]::ToUInt16($bytes, $optional + 68)
+          if ($subsystem -ne 3) { throw "Expected Windows console subsystem (3), received $subsystem" }
+          Write-Host "Windows x64 console verified; size=$($bytes.Length)"
+      - name: Package executable, GPL license, README and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe dist/ScorchedPlanetFix.exe
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item README.md dist/README.md
+          $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+      - name: Upload Windows CLI executable (development build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v1.0.0-Windows-x64
+          path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Archive generated dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v1.0.0-Cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 30

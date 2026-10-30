@@ -1,0 +1,5 @@
+# Static MSVC C runtime for a standalone Windows patcher binary.
+# The patcher makes no external network calls and includes no game content.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
