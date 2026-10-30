@@ -237,6 +237,33 @@ pub fn make_fadelow(data: &[u8]) -> Result<Vec<u8>> {
     patch_with_hashes_for(data, profile.original_hash, profile.patched_hash, profile)
 }
 
+/// Resolve the original executable in an already installed game irrespective
+/// of its historical name casing (CD dumps may be uppercase). Reject multiple
+/// case-folded matches instead of guessing, and reject symlinks.
+pub fn find_installed_exe(directory:&Path)->Result<PathBuf> {
+    let metadata=fs::symlink_metadata(directory)
+        .map_err(|e|format!("Dossier du jeu inaccessible : {e}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink(){
+        return Err("Dossier splanet invalide ou lien symbolique".into());
+    }
+    let mut candidates=Vec::new();
+    for entry in fs::read_dir(directory).map_err(|e|e.to_string())? {
+        let entry=entry.map_err(|e|e.to_string())?;
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("spvoodoo.exe") {
+            let ty=entry.file_type().map_err(|e|e.to_string())?;
+            if !ty.is_file() || ty.is_symlink(){
+                return Err("Exécutable spvoodoo.exe invalide ou lien symbolique".into());
+            }
+            candidates.push(entry.path());
+        }
+    }
+    match candidates.len() {
+        1=>Ok(candidates.remove(0)),
+        0=>Err("spvoodoo.exe absent du dossier splanet".into()),
+        _=>Err("Plusieurs spvoodoo.exe différant par la casse : installation ambiguë".into()),
+    }
+}
+
 fn read_regular(path: &Path) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -544,6 +571,20 @@ mod tests {
         replace_atomically(&exe,&input,&perms,&sha256_hex(&input)).unwrap();
         assert_eq!(fs::read(&exe).unwrap(),input);
         assert_eq!(fs::read(&backup).unwrap(),input);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn find_installed_exe_accepts_upper_and_lower_casing(){
+        let dir=fixture_dir();
+        assert!(find_installed_exe(&dir).is_err());
+        let upper=dir.join("SPVOODOO.EXE");
+        fs::write(&upper,b"placeholder").unwrap();
+        assert_eq!(find_installed_exe(&dir).unwrap(),upper);
+        #[cfg(not(windows))]
+        {
+            let lower=dir.join("spvoodoo.exe");
+            fs::write(&lower,b"placeholder").unwrap();
+            assert!(find_installed_exe(&dir).unwrap_err().contains("Plusieurs"));
+        }
         fs::remove_dir_all(dir).unwrap();
     }
     #[test] fn requested_backup_name_is_bak() {
