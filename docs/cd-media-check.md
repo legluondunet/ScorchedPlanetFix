@@ -181,3 +181,30 @@ flag separately. Confirm necessary files actually exist under
 
 No NoCD patch is validated or merged based on this observation alone.
 
+## Final controlled comparison: FadeLow alone works without CD directory (2026-10-30)
+
+**Confirmed directly by the owner:** with the directory
+`/mnt/LUTRIS/Games/scorched-planet/drive_c/splanetcd` disabled,
+with `splanet.ini` set to `video=c:\splanet\video`, and with
+**`SPVOODOO-FadeLow.EXE`** (the validated four-byte timing patch
+**without** the experimental CD patch) selected, the game starts
+and the user can enter gameplay.
+
+**Result:** for this installation and startup/mission-start scenario,
+the NoCD media-flag patch is **not needed**. The original failure
+with the CD folder renamed is explained by the prior configuration
+still referring to `c:\splanetcd\splanet\video`; redirecting it
+to the locally installed video folder restores normal behavior.
+
+**Project decision:** DO NOT promote the experimental two-byte NoCD
+patch into the production FadeLow patcher or installer. Preserve
+the code only as historical optional research (unvalidated and
+not recommended), and document the INI path configuration instead.
+
+This test establishes that the renamed `splanetcd` folder is
+unnecessary for the tested startup and mission entry, not that
+all video sequences, music, later missions or original-media
+checks have been exhaustively tested. Additional media files
+must actually exist at the configured paths. No native Windows
+or alternate-executable variant is inferred to behave identically.
+
