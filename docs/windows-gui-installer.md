@@ -31,14 +31,20 @@ or commercial DLLs are included.
 4. If `splanet` exists, it is **never overwritten**. The patcher uses
    its installed `SPVOODOO.EXE` (or reports an error if missing).
 5. If `splanet` does not exist and exactly one image (`.iso` or `.cue`)
-   is present, the patcher parses it, validates the supported 3dfx
-   edition, merges the
-   original `SPLANET/` files and `VOODOO/` game components into a temporary
-   directory, excluding obsolete `glide.dll`, `sst1init.dll`, and
-   `fxmemmap.vxd` CD drivers; checks all installed file transfers, generates `splanet.ini` if absent
-   (or preserves its settings if present), writes the local `video=`
-   path and finally atomically names the new
-   installation `splanet`.
+   is present, the patcher recognizes its exact 3dfx edition. It extracts
+   **only** `SPLANET/` and `VOODOO/` into temporary directories
+   `temp/splanet` and `temp/voodoo`, with normalized **lowercase paths**
+   and SHA-256 verification. Then it copies the entire `temp/splanet`
+   directory into a separate staged game installation, followed by
+   `spvoodoo.exe` and `rwdlvood.dll` from `temp/voodoo`.
+   Original `glide.dll`, `sst1init.dll` and `fxmemmap.vxd` are
+   excluded. The second copy is also SHA-256 verified. After copying,
+   the patcher saves `spvoodoo.exe.bak`, applies and verifies the
+   edition-specific binary correction, **then** generates `splanet.ini`
+   with local video path, correct language and `HighQualityVideo=1`.
+   Only after all these operations succeed is the staging folder
+   atomically renamed `splanet`; all temporary extraction directories
+   are removed.
 6. During extraction a percentage progress bar is displayed. An OK
    dialog reports completion or error. The installer never deletes or
    overwrites the original ISO or a pre-existing `splanet` directory.
@@ -52,7 +58,7 @@ or commercial DLLs are included.
 8. **The correct edition-specific fix is automatically and obligatorily
    applied after extraction**: US and EN/ES/IT receive 4-byte FadeLow;
    FR/DE receives 6-byte FadeLow + CD-media detection. The unmodified
-   `SPVOODOO.EXE` is saved as `SPVOODOO.EXE.bak` **before** patching.
+   `spvoodoo.exe` is saved as `spvoodoo.exe.bak` **before** patching.
    Exact source/output SHA-256 hashes and expected PE bytes are checked.
    If extraction or patching fails, the staged installation is discarded,
    so no incomplete `splanet` folder is published.
@@ -88,7 +94,7 @@ The new GUI workflow remains untested end-to-end.
 | File offset | `0x489CD` |
 | Original bytes | `17 B7 D1 38` |
 | Patched bytes | `AC C5 27 37` |
-| Backup | `splanet/SPVOODOO.EXE.bak` (created before any modification) |
+| Backup | `splanet/spvoodoo.exe.bak` for fresh installations (created before modification) |
 
 The independently tested patch binaries work on Linux/Wine/nGlide, but this
 new graphical Rust program must still be tested on the owner's actual
@@ -121,10 +127,14 @@ The preflight checks:
   generated when absent;
 - **exact SHA-256** of original `SPVOODOO.EXE` and `RWDLVOOD.DLL`
   against verified retail reference binaries;
-- streamed extraction of all selected `SPLANET` files and `VOODOO`
-  game components (omitting only the three obsolete original Glide drivers),
-  with individual SHA-256 comparison between bytes read from the
-  ISO and bytes written to disk.
+- streamed extraction into `temp/splanet` and `temp/voodoo` of
+  the game tree plus only two `VOODOO` components, omitting
+  `glide.dll`, `sst1init.dll`, `fxmemmap.vxd`; verify exact SHA-256
+  between the CD image and each extracted file;
+- SHA-256 comparison for every copy from temporary trees into staged
+  `splanet`, rejecting name collisions and preserving all game assets;
+- canonical lowercase file and directory names across all three editions
+  (including US). The source CD image is never renamed or modified.
 
 The installer recognizes three **owner-inventoried 3dfx CD editions** using
 exact EXE + GEOMETRY + RWDLVOOD SHA-256 signatures: US (InstallKey 1.08),
@@ -257,8 +267,9 @@ is an existing `splanet` folder and no explicit image, the program
 verifies and automatically patches its original EXE; if a particular
 image was specified, it refuses to overwrite the existing folder.
 
-The same hash verification, language defaults, stage/rollback behavior,
-mandatory automatic patch and `SPVOODOO.EXE.bak` apply to both modes.
+The same hash verification, language defaults, lowercase extraction,
+stage/rollback behavior, mandatory automatic patch and
+`spvoodoo.exe.bak` apply to both modes.
 CLI does not launch the game and uses no other options. Its log is
 `ScorchedPlanetFix.log` in the **current working directory**.
 Return status is zero on success and nonzero on failure. The EXE keeps
