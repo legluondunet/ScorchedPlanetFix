@@ -95,7 +95,7 @@ fi
 
 # Save a visible, timestamped log directly in the directory from which this
 # script is run (normally the game directory). Keep auxiliary files grouped.
-run_id="$(date +%Y%m%d-%H%M%S)-pid$pid-$"
+run_id="$(date +%Y%m%d-%H%M%S)-pid${pid}-shell${BASHPID}"
 log_file="$PWD/ScorchedPlanetFix-3dfx-$run_id.log"
 if [[ -z "$out" ]]; then
   out="$PWD/ScorchedPlanetFix-3dfx-$run_id"
