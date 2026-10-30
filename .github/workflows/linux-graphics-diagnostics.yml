@@ -177,3 +177,27 @@ jobs:
           test -s "$work/report/perf-samples.txt"
           grep -q "Jeu termine avant snapshot-2" "$work/report/summary.txt"
           grep -q '0x00401BAD' "$work"/game/ScorchedPlanetFix-3dfx-*.log
+      - name: Test offline disassembly of a synthetic 32-bit object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/scorchedplanet-disasm-test"
+          mkdir -p "$work"
+          cat > "$work/test.s" <<'ASM'
+          .global _start
+          _start:
+            mov $2, %eax
+          loop_test:
+            dec %eax
+            jnz loop_test
+          ASM
+          as --32 "$work/test.s" -o "$work/test.o"
+          ld -m elf_i386 -Ttext=0x432b62 "$work/test.o" -o "$work/test-program"
+          bash tools/inspect-go-hotspots-linux.sh "$work/test-program" "$work/report.txt"
+          test -s "$work/report.txt"
+          grep -q '432b62' "$work/report.txt"
+          grep -q 'WARNING: different binary' "$work/report.txt"
+          if bash tools/inspect-go-hotspots-linux.sh "$work/test-program" "$work/report.txt"; then
+            echo "Should refuse to overwrite an existing report"
+            exit 1
+          fi
