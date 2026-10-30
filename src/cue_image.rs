@@ -166,7 +166,7 @@ fn resolve_bin(cue:&Path, filename:&str)->Result<PathBuf,String>{
     if !current.is_file(){return Err(format!("Fichier BIN absent : {normalized}"));}
     Ok(current)
 }
-fn data_track(cue:&Path)->Result<DataTrack,String>{
+fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
     let meta=fs::symlink_metadata(cue).map_err(|e|format!("CUE illisible : {e}"))?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>MAX_CUE_BYTES{
         return Err("CUE non régulier ou trop grand".into());
@@ -182,7 +182,21 @@ fn data_track(cue:&Path)->Result<DataTrack,String>{
     if tracks.iter().skip(1).any(|t|t.mode!=TrackMode::Audio){
         return Err("CUE multisession ou plusieurs pistes de données non pris en charge".into());
     }
-    let file=resolve_bin(cue,&first.file)?;
+    let file=if let Some(explicit)=bin_override {
+        // Explicit positional BIN is allowed outside the CUE directory,
+        // but must match the BIN basename declared by its first FILE.
+        let declared=first.file.replace('\\',"/");
+        let expected_name=Path::new(&declared).file_name().ok_or("Nom de BIN CUE absent")?;
+        if !explicit.file_name().is_some_and(|actual|actual.to_string_lossy()
+            .eq_ignore_ascii_case(&expected_name.to_string_lossy())){
+            return Err("Le BIN explicite ne correspond pas au FILE déclaré dans le CUE".into());
+        }
+        let metadata=fs::symlink_metadata(explicit).map_err(|e|format!("BIN explicite absent : {e}"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("Le BIN explicite doit être un fichier régulier non symbolique".into());
+        }
+        explicit.to_path_buf()
+    }else{resolve_bin(cue,&first.file)?};
     let size=fs::metadata(&file).map_err(|e|e.to_string())?.len();
     if size<17*first.mode.sector_bytes() as u64 || size>MAX_IMAGE_BYTES{
         return Err("BIN trop petit ou trop volumineux".into());
@@ -230,10 +244,17 @@ impl Drop for TemporaryIso {
 /// The existing isomage filesystem parser then verifies actual original game
 /// hashes; the normalized file is always removed after installation.
 pub fn normalize_cue(
-    cue:&Path,output_dir:&Path,mut progress:impl FnMut(u64,u64,&str),
+    cue:&Path,output_dir:&Path,progress:impl FnMut(u64,u64,&str),
+    log:impl FnMut(&str),
+)->Result<TemporaryIso,String>{
+    normalize_cue_with_bin(cue,None,output_dir,progress,log)
+}
+pub fn normalize_cue_with_bin(
+    cue:&Path,bin_override:Option<&Path>,output_dir:&Path,
+    mut progress:impl FnMut(u64,u64,&str),
     mut log:impl FnMut(&str),
 )->Result<TemporaryIso,String>{
-    let data=data_track(cue)?;
+    let data=data_track(cue,bin_override)?;
     log(&format!("CUE: mode {:?}, sectors {}, first INDEX 01={}, source {}",
         data.mode,data.sector_count,data.first_sector,data.file.display()));
     let mut source=File::open(&data.file).map_err(|e|format!("BIN illisible : {e}"))?;
@@ -283,6 +304,19 @@ mod tests {
         assert_eq!(t.len(),2);
         assert_eq!(t[0].mode,TrackMode::Mode1_2352);
         assert_eq!(t[1].index00,Some(44*60*75+30*75));
+    }
+    #[test] fn explicit_bin_match_and_missing_is_rejected(){
+        let root=std::env::temp_dir().join(format!("scorched-explicit-bin-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cue=root.join("game.cue");
+        fs::write(&cue,b"FILE \"disc.bin\" BINARY\nTRACK 01 MODE1/2352\nINDEX 01 00:00:00\n").unwrap();
+        fs::write(root.join("wrong.bin"),vec![0u8;20*2352]).unwrap();
+        assert!(data_track(&cue,Some(&root.join("wrong.bin"))).is_err());
+        let good=root.join("disc.bin");
+        fs::write(&good,vec![0u8;20*2352]).unwrap();
+        assert!(data_track(&cue,Some(&good)).is_ok());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test] fn rejects_unsafe_cues(){
         assert!(parse_cue("TRACK 01 MODE1/2352\n INDEX 01 00:00:00").is_err());
