@@ -183,6 +183,13 @@ jobs:
           set -Eeuo pipefail
           python3 -m py_compile tools/verify_go_fade_static.py
           python3 tools/verify_go_fade_static.py --self-test
+      - name: Test experimental copy-only patch builder using synthetic PE fixtures
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/experimental_go_fade_patch.py
+          python3 -m unittest discover -s tests -p 'test_experimental_go_fade_patch.py' -v
+
       - name: Test offline disassembly of a synthetic 32-bit object
         shell: bash
         run: |
