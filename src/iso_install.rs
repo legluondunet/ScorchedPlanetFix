@@ -3,15 +3,17 @@
 //!
 //! Preflight: parse image, reject unsafe/ambiguous paths, require exact known
 //! 3dfx exe+driver hashes, required game resources and at least one SMK video (INI generated if absent).
-//! Extract: flatten SPLANET then VOODOO (VOODOO wins), excluding three
-//! obsolete 3dfx hardware drivers, verify every extracted
-//! file's SHA256 against bytes read from ISO, update video= to local install.
+//! Extract: unpack the two necessary CD trees into temp/splanet and temp/voodoo,
+//! copy temp/splanet to staged splanet (canonical lowercase names), then copy
+//! the two playable VOODOO game components, excluding obsolete 3dfx drivers.
+//! Verify SHA-256 for both extraction and staged copies, patch before writing
+//! the final INI, then atomically publish the complete installation.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
 use crate::cue_image;
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -23,7 +25,14 @@ const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 #[derive(Clone)]
 struct Asset { node: TreeNode, relative: PathBuf, size: u64, from_voodoo: bool }
 #[derive(Default)]
-struct Inventory { files: BTreeMap<String, Asset>, image_entries: usize, video_files: usize, skipped_legacy_drivers: usize }
+struct Inventory {
+    files: BTreeMap<String, Asset>,
+    splanet_files: BTreeMap<String, Asset>,
+    voodoo_files: BTreeMap<String, Asset>,
+    seen_splanet: BTreeSet<String>,
+    seen_voodoo: BTreeSet<String>,
+    image_entries: usize, video_files: usize, skipped_legacy_drivers: usize,
+}
 pub struct InstallReport {
     pub files: usize, pub bytes: u64, pub folder: PathBuf,
     pub edition: &'static str, pub patch_report: String,
@@ -77,18 +86,25 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
         if !valid_name(&child.name) {
             return Err(err("ISO non prise en charge (nom de fichier dangereux)"));
         }
-        // These three original 3dfx hardware drivers are obsolete on modern
-        // Windows and can shadow a user-provided compatible Glide wrapper.
-        // Skip *only* these top-level VOODOO driver files; preserve source ISO.
-        if voodoo && prefix.as_os_str().is_empty()
-            && !child.is_directory && matches!(child.name.to_ascii_lowercase().as_str(),
-                "glide.dll" | "fxmemmap.vxd" | "sst1init.dll") {
-            inventory.skipped_legacy_drivers += 1;
-            continue;
+        // Preserve source names inside the ISO, but normalize installation
+        // paths to ASCII lowercase: all three inventoried editions use ASCII
+        // filesystem names. Never allow a case-fold collision, including a
+        // directory with a file of the same normalized name.
+        let relative=prefix.join(child.name.to_ascii_lowercase());
+        let key=relative.to_string_lossy().replace('\\', "/");
+        let seen=if voodoo {&mut inventory.seen_voodoo}else{&mut inventory.seen_splanet};
+        if !seen.insert(key.clone()) {
+            return Err(format!("Image ambiguë : fichiers/répertoires de casse différente ({key})"));
         }
-        let relative = prefix.join(&child.name);
         if child.is_directory {
             collect(child, &relative, voodoo, inventory)?;
+            continue;
+        }
+        // Older drivers in European CDs are not needed on modern Wine/Windows.
+        // Drop all three only at the root of the original VOODOO directory.
+        if voodoo && prefix.as_os_str().is_empty() &&
+            matches!(key.as_str(),"glide.dll" | "fxmemmap.vxd" | "sst1init.dll") {
+            inventory.skipped_legacy_drivers += 1;
             continue;
         }
         if child.file_length != Some(child.size) || child.file_location.is_none() {
@@ -97,7 +113,6 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
         if child.size > MAX_TOTAL_BYTES {
             return Err(err("ISO non prise en charge (fichier trop grand)"));
         }
-        let key = relative.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
         if !voodoo && key.starts_with("video/") && key.ends_with(".smk") {
             inventory.video_files += 1;
         }
@@ -108,9 +123,13 @@ fn collect(node: &TreeNode, prefix: &Path, voodoo: bool, inventory: &mut Invento
                 return Err(format!("ISO non prise en charge (doublon : {key})"));
             }
         }
-        inventory.files.insert(key, Asset {
-            node: child.clone(), relative, size: child.size, from_voodoo: voodoo,
-        });
+        let asset=Asset {node:child.clone(),relative,size:child.size,from_voodoo:voodoo};
+        if voodoo {
+            inventory.voodoo_files.insert(key.clone(),asset.clone());
+        }else{
+            inventory.splanet_files.insert(key.clone(),asset.clone());
+        }
+        inventory.files.insert(key, asset);
     }
     Ok(())
 }
@@ -136,6 +155,16 @@ fn inventory(root: &TreeNode) -> Result<Inventory, String> {
     }
     if !list.files["spvoodoo.exe"].from_voodoo || !list.files["rwdlvood.dll"].from_voodoo {
         return Err(err("Image du jeu non supportée : composants VOODOO absents"));
+    }
+    // No overlap is expected in the three known original media inventories.
+    // An unexpected VOODOO override would risk silently replacing game data.
+    if list.voodoo_files.keys().any(|key|list.splanet_files.contains_key(key)) {
+        return Err("Image du jeu ambiguë : fichiers SPLANET/VOODOO en conflit".into());
+    }
+    // Reject file/directory collisions across both source trees.
+    if list.voodoo_files.keys().any(|key|list.seen_splanet.contains(key)) ||
+       list.splanet_files.keys().any(|key|list.seen_voodoo.contains(key)) {
+        return Err("Image du jeu ambiguë : fichier et répertoire en conflit".into());
     }
     let bytes: u64 = list.files.values().map(|a| a.size).sum();
     if bytes == 0 || bytes > MAX_TOTAL_BYTES {
@@ -360,91 +389,131 @@ pub fn install_image(
     log(&format!("ISO: {} install files; {} SMK videos; {} legacy 3dfx drivers skipped",
         inventory.files.len(),inventory.video_files,inventory.skipped_legacy_drivers));
     let parent=destination.parent().ok_or("Invalid installation parent")?;
+    // Disk preflight and validation are complete before creating any working
+    // directory. Temp contains only the required source trees, not the CD's
+    // obsolete installers/DirectX/Mystique/Verite directories.
+    let temp=parent.join(format!(".scorchedplanetfix-extract-{}",std::process::id()));
     let staging=parent.join(format!(".splanet-setup-{}",std::process::id()));
-    fs::create_dir(&staging).map_err(|e|format!("Can't stage installation: {e}"))?;
+    if temp.exists() || staging.exists() || temp.is_symlink() || staging.is_symlink(){
+        return Err("Dossier temporaire déjà présent : nettoyage manuel requis (aucun fichier écrasé)".into());
+    }
+    fs::create_dir(&temp).map_err(|e|format!("Extraction temporaire impossible : {e}"))?;
     let install_result=(||{
+        fs::create_dir(&staging).map_err(|e|format!("Installation temporaire impossible : {e}"))?;
         let total: u64=inventory.files.values().map(|a|a.size).sum();
         let mut done=0u64;
-        for (key,asset) in &inventory.files {
-            let output=staging.join(&asset.relative);
-            if let Some(dir)=output.parent(){fs::create_dir_all(dir).map_err(|e|e.to_string())?;}
-            let mut file=OpenOptions::new().write(true).create_new(true).open(&output)
-                .map_err(|e|format!("Création {} : {e}",asset.relative.display()))?;
-            let mut writer=HashWriter{output:&mut file,hasher:Sha256::new(),
-                transferred:0,report:|delta| {
-                    done+=delta;
-                    report(10+done.saturating_mul(85)/total,100,"Extraction des fichiers du jeu…");
-                }};
-            cat_node(&mut iso,&asset.node,&mut writer)
-                .map_err(|e|format!("Extraction {key} : {e}"))?;
-            if writer.transferred != asset.size {
-                return Err(format!("Données incomplètes : {key}"));
+        // Phase 1: extract exact original SPLANET and VOODOO trees under temp.
+        // The two legacy directories are preserved as two distinct sources.
+        for (directory,files) in [
+            ("splanet",&inventory.splanet_files),
+            ("voodoo",&inventory.voodoo_files),
+        ] {
+            let base=temp.join(directory);
+            fs::create_dir(&base).map_err(|e|e.to_string())?;
+            for (key,asset) in files {
+                let output=base.join(&asset.relative);
+                if let Some(dir)=output.parent(){fs::create_dir_all(dir).map_err(|e|e.to_string())?;}
+                let mut file=OpenOptions::new().write(true).create_new(true).open(&output)
+                    .map_err(|e|format!("Création de temp/{directory}/{key} : {e}"))?;
+                let mut writer=HashWriter{output:&mut file,hasher:Sha256::new(),
+                    transferred:0,report:|delta|{
+                        done+=delta;
+                        report(10+done.saturating_mul(48)/total,100,"Extraction du CD dans temp…");
+                    }};
+                cat_node(&mut iso,&asset.node,&mut writer)
+                    .map_err(|e|format!("Extraction {directory}/{key} : {e}"))?;
+                if writer.transferred!=asset.size {
+                    return Err(format!("Données incomplètes : {directory}/{key}"));
+                }
+                let original_hash=format!("{:x}",writer.hasher.finalize());
+                file.flush().map_err(|e|e.to_string())?;
+                file.sync_all().map_err(|e|e.to_string())?;
+                drop(file);
+                if file_digest(&output)?!=original_hash {
+                    return Err(format!("Vérification extraction impossible : {directory}/{key}"));
+                }
+                let mut permissions=fs::metadata(&output).map_err(|e|e.to_string())?.permissions();
+                permissions.set_readonly(false);
+                fs::set_permissions(&output,permissions).map_err(|e|e.to_string())?;
+                log(&format!("EXTRACT: temp/{directory}/{key} bytes={} sha256={original_hash}",asset.size));
             }
-            let content_hash=format!("{:x}",writer.hasher.finalize());
-            file.flush().map_err(|e|e.to_string())?;
-            file.sync_all().map_err(|e|e.to_string())?;
-            drop(file);
-            let copied_hash=file_digest(&output)?;
-            if copied_hash!=content_hash {
-                return Err(format!("Echec de vérification des données extraites : {key}"));
+        }
+        // Phase 2: copy the whole temp/splanet file tree to staged splanet,
+        // then overlay *only* two original 3dfx gameplay files from voodoo.
+        // Both copy sets are verified against the extracted temp sources.
+        let mut copied=0u64;
+        for (directory,files) in [
+            ("splanet",&inventory.splanet_files),
+            ("voodoo",&inventory.voodoo_files),
+        ] {
+            for (key,asset) in files {
+                if directory=="voodoo" && !matches!(key.as_str(),"spvoodoo.exe"|"rwdlvood.dll") {
+                    return Err(format!("Fichier VOODOO imprévu (refus de copie) : {key}"));
+                }
+                let source=temp.join(directory).join(&asset.relative);
+                let target=staging.join(&asset.relative);
+                if let Some(dir)=target.parent(){fs::create_dir_all(dir).map_err(|e|e.to_string())?;}
+                let mut input=File::open(&source).map_err(|e|format!("Lecture temp/{directory}/{key} : {e}"))?;
+                let mut output=OpenOptions::new().write(true).create_new(true).open(&target)
+                    .map_err(|e|format!("Copie vers splanet/{key} : {e}"))?;
+                let transferred=std::io::copy(&mut input,&mut output).map_err(|e|e.to_string())?;
+                output.flush().map_err(|e|e.to_string())?;
+                output.sync_all().map_err(|e|e.to_string())?;
+                drop(output);
+                if transferred!=asset.size || file_digest(&source)?!=file_digest(&target)? {
+                    return Err(format!("Vérification copie impossible : {key}"));
+                }
+                copied+=transferred;
+                report(58+copied.saturating_mul(35)/total,100,
+                    if directory=="splanet" {"Copie de temp/splanet…"}
+                    else {"Copie des composants temp/voodoo…"});
+                log(&format!("COPY: temp/{directory}/{key} -> splanet/{key}, sha256={}",
+                    file_digest(&target)?));
             }
-            // Make original CD-ROM read-only files writable after copying.
-            let mut permission=fs::metadata(&output).map_err(|e|e.to_string())?.permissions();
-            permission.set_readonly(false);
-            fs::set_permissions(&output,permission).map_err(|e|e.to_string())?;
-            log(&format!("EXTRACT: {key} bytes={} sha256={content_hash}",asset.size));
         }
-        report(97,100,"Configuration de splanet.ini…");
-        // The actual installed folder is renamed from staging after success:
-        // write the FINAL destination path, not the staging path.
-        let ini=staging.join("splanet.ini");
-        let ini=if ini.is_file(){ini}else {
-            let candidates=fs::read_dir(&staging).map_err(|e|e.to_string())?;
-            candidates.filter_map(Result::ok).map(|e|e.path()).find(|p|
-                p.file_name().is_some_and(|n|n.to_string_lossy().eq_ignore_ascii_case("splanet.ini"))
-            ).unwrap_or_else(||staging.join("splanet.ini"))
-        };
-        let generated_ini=!ini.exists();
-        if generated_ini {
-            log("INI: absent from original CD; generating [scorch] configuration");
-        } else {
-            log("INI: preserving original settings; updating local video path");
-        }
-        let default_language=match edition.label {
-            "FR/DE" => 2, // French (German=3)
-            _ => 1, // English (Italian=4, Spanish=5 for EN/ES/IT)
-        };
-        update_ini(&ini,&destination.join("video"),default_language)?;
-        log(&format!("INI: default language={} for edition {}",default_language,edition.label));
-        log(&format!("INI: written and verified: {}",file_digest(&ini)?));
-        // The patch is required for every supported edition. Apply it *while
-        // still in staging* so a failure removes the whole incomplete install.
-        // This creates SPVOODOO.EXE.bak with a verified unmodified original
-        // before replacing the game EXE. No partially patched install is exposed.
-        report(99,100,"Sauvegarde .bak et application automatique du correctif…");
-        let game_exe=staging.join("SPVOODOO.EXE");
-        log("PATCH-AUTO: backing up original SPVOODOO.EXE.bak then patching edition");
+        // Phase 3: patch first, exactly as requested, and ensure the original
+        // is backed up BEFORE changing any executable instruction bytes.
+        report(94,100,"Sauvegarde .bak et application du correctif du jeu…");
+        let game_exe=staging.join("spvoodoo.exe");
+        let original_hash=edition.exe_sha256;
+        log("PATCH-AUTO: backing up original spvoodoo.exe.bak before patch");
         let patch_report=scorched_planet_fix::execute(Action::Apply,&game_exe,None,true)
             .map_err(|e|format!("Correctif automatique impossible : {e}"))?;
-        log(&format!("PATCH-AUTO OK: {patch_report}"));
-        if !staging.join("SPVOODOO.EXE.bak").is_file() {
-            return Err("Correctif automatique : sauvegarde .bak absente".into());
+        let backup=staging.join("spvoodoo.exe.bak");
+        if !backup.is_file() || file_digest(&backup)?!=original_hash {
+            return Err("Sauvegarde spvoodoo.exe.bak absente ou non conforme".into());
         }
-        // User-specific resources and wrappers are NOT embedded or downloaded.
-        if destination.exists(){return Err("splanet créé entre-temps : opération annulée".into());}
-        fs::rename(&staging,destination).map_err(|e|format!("Finalisation de l'installation : {e}"))?;
+        log(&format!("PATCH-AUTO OK: {patch_report}"));
+        // Phase 4: generate the INI *after* the executable is verified.
+        report(97,100,"Génération de splanet.ini…");
+        let ini=staging.join("splanet.ini");
+        let generated_ini=!ini.exists();
+        let default_language=if edition.label=="FR/DE" {2}else{1};
+        update_ini(&ini,&destination.join("video"),default_language)?;
+        log(&format!("INI: edition={} language={} sha256={}",
+            edition.label,default_language,file_digest(&ini)?));
+        // Publish only after every validation, copy, backup, patch and INI
+        // step has succeeded. Never expose a half-installed destination.
+        if destination.exists() || destination.is_symlink() {
+            return Err("splanet créé entre-temps : opération annulée".into());
+        }
+        fs::rename(&staging,destination)
+            .map_err(|e|format!("Finalisation de l'installation : {e}"))?;
         report(100,100,"Installation terminée");
-        let file_count=inventory.files.len()+usize::from(generated_ini)+1; // SPVOODOO.EXE.bak
-        log(&format!("INSTALL-OK: {} files ({} from CD, {} generated), {} extracted bytes",
-            file_count,inventory.files.len(),usize::from(generated_ini),total));
+        let file_count=inventory.files.len()+usize::from(generated_ini)+1;
+        log(&format!("INSTALL-OK: edition={} {} files {} source bytes, original .bak verified",
+            edition.label,file_count,total));
         Ok(InstallReport{
             files:file_count,bytes:total,folder:destination.to_owned(),
             edition:edition.label,patch_report,
         })
     })();
-    if install_result.is_err(){
+    if install_result.is_err() {
         let _=fs::remove_dir_all(&staging);
-        log("INSTALL-ERROR: extraction aborted; staging removed, original ISO unchanged");
+        log("INSTALL-ERROR: staging removed; source CD image preserved");
+    }
+    if let Err(e)=fs::remove_dir_all(&temp) {
+        log(&format!("TEMP-CLEANUP: unable to remove {} : {e}",temp.display()));
     }
     install_result
 }
