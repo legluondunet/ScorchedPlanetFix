@@ -75,9 +75,9 @@ target.
 
 ## Proposed development path
 
-1. **First obtain original `RWDLVOOD.DLL`** from the same working
-   installation and check its SHA-256, PE import table, exports and
-   dynamic calls to Glide; also inspect `Glide.dll` if needed.
+1. **Completed:** verified the exact `RWDLVOOD.DLL` SHA-256,
+   PE imports, export, and call to Glide `grSstOpen` (details below).
+   **Still needed:** the active nGlide `Glide.dll`.
 2. Reconstruct device initialization and video-mode enumeration.
 3. Prototype **800 × 600 internal 4:3** in an isolated copy only after
    verifying driver acceptance and the surface/viewport contract.
@@ -93,10 +93,10 @@ target.
 7. Any experimental copy must retain FadeLow's known-good behavior,
    refuse unknown hashes, preserve the original, and be rollback-safe.
 
-**STOP CONDITION:** no experimental resolution binary is produced
-until the **exact** working `RWDLVOOD.DLL` can be inspected.
-No game test, user-visible resolution change, or driver compatibility
-has been claimed.
+**STOP CONDITION (updated 2026-10-30):** The exact working
+`RWDLVOOD.DLL` has now been inspected (details below). Do not generate
+a resolution patch until the actual active **nGlide `Glide.dll`**
+has been inspected and mode/pitch/viewport invariants are understood.
 
 ## Reproducible inspection
 
@@ -113,3 +113,65 @@ python3 tools/inspect_native_resolution.py --self-test
 ```
 
 Related research branches: FadeLow PR #2, CD/INI PR #3. None is merged.
+
+## Received RWDLVOOD.DLL: direct inspection (2026-10-30)
+
+The project owner provided the **exact RenderWare 3dfx driver** from
+the working game installation:
+
+| Property | Value |
+| --- | --- |
+| SHA-256 | `1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de` |
+| File length | 101,376 bytes |
+| Format | PE32/i386 DLL, 8 PE sections |
+| Link timestamp | 1996-09-03 16:49:05 (PE header) |
+| Image base | `0x10000000` |
+| Only exported name | `_rwdev` (RVA `0x2530`) |
+| Graphics dependency | `glide.dll` imported directly by decorated stdcall symbols |
+
+**Important: this build imports the historical `_grSstOpen@24`**,
+not the later `_grSstWinOpen` API. It also imports drawing, texture,
+fog, buffer swap, hardware detection and LFB functions, including
+`_grLfbGetWritePtr@4` and `_grLfbWriteMode@4`. A replacement
+Glide wrapper must export the correct decorated names.
+
+### Specific locked mode values
+
+| DLL VA | Raw file offset | Disassembly / role |
+| --- | --- | --- |
+| `0x100013F3` | `0x7F3` | `push 7` immediately before `call 0x10008F3A` (`_grSstOpen@24` thunk) |
+| `0x10001453` | `0x853` | `push 480; push 640` passed to internal RenderWare setup `0x100055F0` |
+| `0x10001939` | `0xD39` | write width=640 to graphics mode descriptor |
+| `0x10001946` | `0xD46` | write height=480 to descriptor |
+| `0x10001953` | `0xD53` | write color depth=16 |
+| `0x10001960` | `0xD60` | write `0x800` (2048) to another descriptor field; **not yet identified as a pitch** |
+
+The `_grSstOpen@24` thunk at `0x10008F3A` jumps through the
+Glide import address table at `0x10026380`. The Glide resolution
+enumeration maps `7` to `GR_RESOLUTION_640x480` and `8` to
+`GR_RESOLUTION_800x600`; this is documented in public Glide
+source code / headers. The driver's mode number is therefore
+not merely an arbitrary literal.
+
+**Consequence:** modifying only `SPVOODOO.EXE` dimensions cannot
+request 800x600 from Glide: this driver explicitly requests 640x480
+and advertises the same dimensions in its device descriptor.
+An internal 800x600 experiment would require coordinated updates
+at the EXE/window, RenderWare DLL, Glide mode setting, device
+surface properties and likely UI coordinate assumptions.
+
+### Required next input
+
+The user reports having the CD's original `Glide.dll` **and**
+a newer `Glide.dll` supplied by nGlide, but is currently using
+**nGlide**. The nGlide DLL from the exact working installation
+is the correct next input to inspect: exports / supported
+historical `_grSstOpen@24` ABI, implementation/version metadata,
+and behavior at the interface. The CD-era DLL is optional
+for historical comparison, not needed to start.
+
+**Updated stop condition:** The exact RWDLVOOD DLL is now inspected.
+Do not generate or ask the owner to test an experimental mode
+patch until the **active nGlide `Glide.dll`** has been inspected
+and the cross-module resolution assumptions are mapped.
+
