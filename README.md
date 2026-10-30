@@ -15,10 +15,16 @@ game directory, or **one** original 3dfx CD image as `.iso` or a
 keep the `.cue` and referenced files together and select the **CUE**, not
 the BIN as a separate image. When an image is detected and `splanet`
 is absent, the program
-checks its structure, the exact original game executable and
-RenderWare DLL hashes, copies the `SPLANET/` game files and the `VOODOO/` 3dfx game components
-(with videos) into a staged `splanet` installation. The obsolete CD copies of
-`glide.dll`, `sst1init.dll` and `fxmemmap.vxd` are deliberately not installed.
+checks its structure and the exact original executable, RenderWare and
+geometry hashes. **Only** original `SPLANET/` and `VOODOO/` trees are
+extracted to a temporary workspace (`temp/splanet` and `temp/voodoo`).
+The complete `temp/splanet` game tree is then copied into a separate
+staged installation; only `spvoodoo.exe` and `rwdlvood.dll` are copied
+from `temp/voodoo`. Three obsolete 3dfx components
+(`glide.dll`, `sst1init.dll`, `fxmemmap.vxd`) are excluded if present.
+All installed file and directory names are **normalized to lowercase**,
+regardless of the original CD's casing, with collision rejection.
+Both extraction and final copies are individually SHA-256 checked.
 For `CUE/BIN`, the program reads the first supported data track and
 normalizes its 2048-byte sectors into a **temporary ISO** for the same
 hash-verified installer; no conversion utility, virtual CD mounting or
@@ -29,12 +35,15 @@ and unknown formats are rejected rather than guessed. Audio tracks
 are **not** installed as CD audio or made available as emulated tracks.
 For this approach, free space for the temporary data-track ISO is required.
 
-The patcher creates `splanet.ini` if absent (or updates an existing copy)
-to use local videos, enable high-quality video and select a language available
-on the detected edition. It preserves existing personal controller, gamma and
-other settings. **The original SPVOODOO.EXE is first saved as
-SPVOODOO.EXE.bak, then automatically patched before the new splanet folder is
-finalized.** An extraction or patch failure leaves no half-installed splanet.
+**After the game files are copied,** the patcher first saves the
+unmodified `spvoodoo.exe` as `spvoodoo.exe.bak`, applies the exact
+edition-specific correction, verifies the output SHA-256, and **only then**
+generates `splanet.ini` with the local video path, the edition's default
+language and `HighQualityVideo=1`. Existing personal controller, gamma
+and other settings are preserved. The final directory `splanet` is
+published only when every step succeeds. Both the installation workspace
+and temporary CD extraction are then deleted. On error no incomplete
+`splanet` directory is left behind.
 An existing install is never overwritten; the existing original game
 executable is automatically backed up and patched when the GUI starts.
 
@@ -108,8 +117,9 @@ Explicit paths can point elsewhere, but the output remains
 `./splanet/` in the current working directory. If it already exists
 and no image is specified, the CLI only verifies and automatically patches
 the existing exact-edition executable; with an explicit image, it refuses
-to overwrite `splanet`. The original `SPVOODOO.EXE` is stored in
-`splanet/SPVOODOO.EXE.bak` before any patch. The program never starts
+to overwrite `splanet`. The normalized original `spvoodoo.exe` is stored in
+`splanet/spvoodoo.exe.bak` before any patch. Existing installations
+with uppercase filenames are resolved case-insensitively. The program never starts
 the game in `--nogui` mode. For detailed diagnostics, see
 `ScorchedPlanetFix.log` in the current directory.
 
