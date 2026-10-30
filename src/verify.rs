@@ -142,7 +142,7 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
     let profile=profile_from_hash(&digest)
         .ok_or_else(||format!("Unrecognized executable: SHA-256 {digest}"))?;
     if digest!=profile.patched_hash{
-        return Err(format!("Executable {} is not patched. Run the installer/--nogui to apply the patch.",
+        return Err(format!("Executable {} is not patched. Run ScorchedPlanetFix.exe without arguments to apply the patch.",
             profile.label));
     }
     // A backup must match the exact edition: never blindly trust a .bak.
