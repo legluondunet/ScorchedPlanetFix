@@ -390,7 +390,7 @@ pub fn manifest_for(label:&str)->Option<&'static [ReferenceFile]>{
     match label{
         "US 1.08"=>Some(MANIFEST_US),
         "EN/ES/IT 1.06"=>Some(MANIFEST_EN_ES_IT),
-        "FR/DE 1.06 (FadeLow + contrôle CD)"=>Some(MANIFEST_FR_DE),
+        "FR/DE 1.06 (FadeLow + CD check fix)"=>Some(MANIFEST_FR_DE),
         _=>None,
     }
 }
