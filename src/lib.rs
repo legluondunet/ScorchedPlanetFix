@@ -63,7 +63,7 @@ pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
     media_gate: None,
 };
 pub const FR_DE_PROFILE: FadeProfile = FadeProfile {
-    label: "FR/DE 1.06 (FadeLow + contrôle CD)",
+    label: "FR/DE 1.06 (FadeLow + CD check fix)",
     original_hash: "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72",
     patched_hash: "426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c",
     target_va: 0x0044_966D, target_offset: 0x48A6D,
@@ -251,9 +251,9 @@ pub fn make_fadelow(data: &[u8]) -> Result<Vec<u8>> {
 /// case-folded matches instead of guessing, and reject symlinks.
 pub fn find_installed_exe(directory:&Path)->Result<PathBuf> {
     let metadata=fs::symlink_metadata(directory)
-        .map_err(|e|format!("Dossier du jeu inaccessible : {e}"))?;
+        .map_err(|e|format!("Game directory inaccessible: {e}"))?;
     if !metadata.is_dir() || metadata.file_type().is_symlink(){
-        return Err("Dossier splanet invalide ou lien symbolique".into());
+        return Err("Invalid splanet directory or symlink".into());
     }
     let mut candidates=Vec::new();
     for entry in fs::read_dir(directory).map_err(|e|e.to_string())? {
@@ -261,15 +261,15 @@ pub fn find_installed_exe(directory:&Path)->Result<PathBuf> {
         if entry.file_name().to_string_lossy().eq_ignore_ascii_case("spvoodoo.exe") {
             let ty=entry.file_type().map_err(|e|e.to_string())?;
             if !ty.is_file() || ty.is_symlink(){
-                return Err("Exécutable spvoodoo.exe invalide ou lien symbolique".into());
+                return Err("Invalid spvoodoo.exe or symlink".into());
             }
             candidates.push(entry.path());
         }
     }
     match candidates.len() {
         1=>Ok(candidates.remove(0)),
-        0=>Err("spvoodoo.exe absent du dossier splanet".into()),
-        _=>Err("Plusieurs spvoodoo.exe différant par la casse : installation ambiguë".into()),
+        0=>Err("spvoodoo.exe not found in the splanet directory".into()),
+        _=>Err("Multiple spvoodoo.exe files differing by case: ambiguous installation".into()),
     }
 }
 
@@ -423,7 +423,7 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
             let upgrading_us=p.original_hash==ORIGINAL_SHA256 && hash==FADELOW_SHA256;
             let (original,patch)=if upgrading_us {
                 let original=backed.as_ref().ok_or(
-                    "Migration du correctif US impossible : fichier original .bak vérifié manquant")?;
+                    "Cannot upgrade US patch: verified original .bak backup is missing")?;
                 let patch=patch_with_hashes_for(original,p.original_hash,p.patched_hash,p)?;
                 (original.clone(),patch)
             }else{
@@ -438,8 +438,8 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
                 return Err("EXE modified before replacement; refusing".into());
             }
             replace_atomically(exe,&patch,&perms,p.patched_hash)?;
-            Ok(format!("Correctif {} {}appliqué. Sauvegarde originale vérifiée : {}",
-                p.label,if upgrading_us {"mis à niveau et "}else{""},backup.display()))
+            Ok(format!("Patch for {} {}applied. Verified original backup: {}",
+                p.label,if upgrading_us {"upgraded and "}else{""},backup.display()))
         }
         Action::Restore => {
             if !confirmed { return Err("restore requires explicit --yes".into()); }
