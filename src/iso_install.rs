@@ -6,7 +6,7 @@
 //! Extract: flatten SPLANET then VOODOO (VOODOO wins), verify every extracted
 //! file's SHA256 against bytes read from ISO, update video= to local install.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
-use crate::{sha256_hex, ORIGINAL_SHA256};
+use scorched_planet_fix::ORIGINAL_SHA256;
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -118,7 +118,8 @@ impl<W: Write, F: FnMut(u64)> Write for HashWriter<'_, W, F> {
     fn flush(&mut self) -> std::io::Result<()> { self.output.flush() }
 }
 fn node_digest(iso: &mut File, node: &TreeNode) -> Result<String, String> {
-    let mut writer=HashWriter { output: &mut std::io::sink(), hasher: Sha256::new(),
+    let mut sink=std::io::sink();
+    let mut writer=HashWriter { output: &mut sink, hasher: Sha256::new(),
         transferred: 0, report: |_| {} };
     cat_node(iso,node,&mut writer).map_err(|e|format!("Lecture ISO : {e}"))?;
     if writer.transferred != node.size {
