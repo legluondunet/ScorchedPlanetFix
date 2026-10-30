@@ -216,6 +216,44 @@ on future captures, while retaining the full detail files.
 The existing captured details are preferable to re-running the game
 solely to regenerate a more complete summary.
 
+### Two complete GDB snapshots analyzed (2026-10-30)
+
+The two 162,300-byte GDB captures are **byte-for-byte identical**.
+SHA-256 of each: `b5989531615f0444a089e9b0ecca602a436a6bc9dc93c628f7620da4195d6d35`.
+
+Main Linux TID `417981` is stopped in both samples at
+`0x00007f596854c192` in native Wine `ntdll.so`
+(mapped 0x7f5968513000-0x7f5968583000). The disassembled instruction is
+`stmxcsr 0xd8(%rcx)` (saving the SIMD control/status register).
+The next call-stack frame `0x00006ffffc3a1526` maps to Wine's
+64-bit `wow64.dll`. GDB warns about incompatible architecture
+`i386:x86-64` vs `i386:x64-32`, limiting visibility into 32-bit game code.
+
+**Do not patch ntdll.so or assume the busy loop lives there.** GDB attach
+may stop in Wine's thread-context save code. An identical suspended RIP
+does not locate the actual hot instruction, even though the `/proc`
+CPU accounting independently shows a busy main thread.
+
+Next step: **Linux perf sampling** of instructions while the game is running.
+Unlike GDB attachment, perf collects asynchronous CPU samples without
+repeatedly stopping the game at a debugger attach location.
+
+```bash
+cd /path/to/installed/scorched-planet
+WINEPREFIX="/path/to/your/wine-prefix" \
+  bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5 \
+  --game-dir . --perf-sudo
+```
+
+The opt-in `--perf-sudo` obtains sudo authorization before fullscreen,
+then samples the main Linux TID for five seconds with user-mode CPU-clock
+events (`perf record -e cpu-clock:u -F 99 -t PID`). It saves
+`perf-report.txt`, `perf-samples.txt`, and a local `perf.data` in the
+timestamped details folder, and inserts a concise summary in the main log.
+Collection may fail due to kernel perf policy, missing tool, or perf
+capabilities. The script neither changes kernel policy nor patches any
+Wine/game files. Review metadata/paths before sharing; send text first.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
