@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows 1.0 CLI
 
 on:
   push:
-    branches: [feat/rust-fadelow-patcher]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -53,6 +53,45 @@ jobs:
           $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
           Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+      - name: Verify packaged ZIP and SHA-256 manifest
+        shell: pwsh
+        run: |
+          $archive = "ScorchedPlanetFix-v1.0.0-Windows-x64.zip"
+          $unpacked = "dist-verify"
+          Expand-Archive -Path $archive -DestinationPath $unpacked -Force
+          $expectedFiles = @("ScorchedPlanetFix.exe", "LICENSE.txt", "README.md", "SHA256SUMS.txt")
+          foreach ($name in $expectedFiles) {
+            if (!(Test-Path -PathType Leaf (Join-Path $unpacked $name))) {
+              throw "Release archive is missing $name"
+            }
+          }
+          $actualFiles = @(Get-ChildItem -Path $unpacked -File)
+          if ($actualFiles.Count -ne $expectedFiles.Count) {
+            throw "Release archive contains unexpected or duplicate files"
+          }
+          $manifest = (Get-Content (Join-Path $unpacked "SHA256SUMS.txt") -Raw).Trim()
+          if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v1.0.0-Windows-x64
+          path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Archive generated dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v1.0.0-Cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 30
+) {
+            throw "Invalid SHA256SUMS.txt format"
+          }
+          $actualHash = (Get-FileHash (Join-Path $unpacked "ScorchedPlanetFix.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($manifest.Substring(0,64) -cne $actualHash) {
+            throw "SHA-256 of packaged executable does not match SHA256SUMS.txt"
+          }
+          Write-Host "Release ZIP verified: four expected files, executable SHA-256 matches manifest"
       - name: Upload Windows CLI executable (development build)
         uses: actions/upload-artifact@v4
         with:
