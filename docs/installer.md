@@ -41,3 +41,19 @@ A Windows GitHub Actions workflow builds and runs unit tests using synthetic sam
 3. Handle `COMPRESS.BIN` according to the original `CompressSpecials` flags.
 4. Add clean uninstallation.
 5. Analyze game runtime CD detection and 3dfx/RenderWare launch stability.
+
+## Auditing the original CD before changing the installer
+
+Use **Analyser le contenu du CD…** / **CD-Inhalt analysieren…** on the setup screen.
+The button asks where to save `ScorchedPlanet-CD-audit.txt`.
+It creates a read-only inventory of the selected source directory:
+
+- Relative file names and byte sizes, without the local absolute CD path.
+- Presence of `SPLANET`, `VOODOO`, `SPVOODOO.EXE`, `RWDLVOOD.DLL`, and `COMPRESS.BIN`.
+- Contents of textual `SETUP.INI` files of at most 128 KiB, to help compare editions and reconstruct legacy setup instructions. Binary or larger files are not embedded.
+
+The report does not extract archives, execute the 1996 setup, inspect the registry, or
+change the original CD copy. Only the explicitly chosen report destination is written.
+Review the text before sharing it. A full faithful installation, support for English
+game data, and the interpretation of `COMPRESS.BIN` remain unverified
+until a representative original CD audit can be studied.
