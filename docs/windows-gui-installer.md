@@ -41,7 +41,8 @@ or commercial DLLs are included.
    excluded. The second copy is also SHA-256 verified. After copying,
    the patcher saves `spvoodoo.exe.bak`, applies and verifies the
    edition-specific binary correction, **then** generates `splanet.ini`
-   with local video path, correct language and `HighQualityVideo=1`.
+   with the portable setting `[scorch]` / `video= video`, the correct
+   language and `HighQualityVideo=1`. No absolute video path is stored.
    Only after all these operations succeed is the staging folder
    atomically renamed `splanet`; all temporary extraction directories
    are removed.
@@ -49,7 +50,7 @@ or commercial DLLs are included.
    dialog reports completion or error. The installer never deletes or
    overwrites the original ISO or a pre-existing `splanet` directory.
 7. After extraction, select a language supported by the detected edition in
-   **Langue du jeu**. The installer writes the local `video=` path,
+   **Langue du jeu**. The installer writes the relative `video= video` setting,
    `HighQualityVideo=1` and the selected `language=` code into `splanet.ini`
    without overwriting existing `keymap`, `gamma`, `joystick` or
    personal `settings`. Defaults are English for US and EN/ES/IT, French
@@ -154,11 +155,12 @@ per-file authenticity**. This is a non-negotiable limitation.
 The file layout is based on the user's
 [Windows 3dfx Lutris script](https://lutris.net/games/install/39685/view),
 NOT the linked [Matrox 86Box script](https://lutris.net/games/install/39693/view).
-The original script puts videos under `c:\splanetcd\splanet\video`;
-the user tested that **FadeLow runs without the CD folder** after
-redirecting the INI `video=` path to the local `splanet\video`.
-The patcher incorporates that result by writing its local installation
-path rather than an outdated CD-resource path.
+The original script puts videos under `c:\splanetcd\splanet\video`.
+The owner has since confirmed `[scorch]` with `video= video`
+is sufficient for the game to find its videos, provided the game starts
+with `splanet` as its working directory. The patcher now writes this
+portable relative setting and does not embed machine-specific absolute
+paths or Windows/Wine drive letters.
 
 ## Log file and privacy
 
@@ -267,9 +269,9 @@ is an existing `splanet` folder and no explicit image, the program
 verifies and automatically patches its original EXE; if a particular
 image was specified, it refuses to overwrite the existing folder.
 
-The same hash verification, language defaults, lowercase extraction,
-stage/rollback behavior, mandatory automatic patch and
-`spvoodoo.exe.bak` apply to both modes.
+The same hash verification, portable relative video setting, language
+defaults, lowercase extraction, stage/rollback behavior, mandatory
+automatic patch and `spvoodoo.exe.bak` apply to both modes.
 CLI does not launch the game and uses no other options. Its log is
 `ScorchedPlanetFix.log` in the **current working directory**.
 Return status is zero on success and nonzero on failure. The EXE keeps
@@ -281,3 +283,48 @@ obtain its exit status (e.g. PowerShell `Start-Process -Wait -PassThru`).
 The owner reports that the Scorched Planet CD variants have **no audio
 tracks**, so audio-track extraction or CDDA emulation is not necessary
 for this game.
+
+## Strict verification and launch
+
+The same Windows x64 executable also supports:
+
+```powershell
+.\ScorchedPlanetFix.exe --verify
+.\ScorchedPlanetFix.exe --launch
+```
+
+These commands require **no extra arguments** and always use the
+`splanet` folder **beside ScorchedPlanetFix.exe**, regardless of the
+shell's current directory. This differs intentionally from `--nogui`
+which installs into the current directory.
+
+`--verify` is strictly read-only. It checks the exact SHA-256 of the
+corrected, recognized executable and its original matching `.bak`;
+`splanet.ini` must have `[scorch]` and the portable
+`video= video` setting, with a valid selected edition language if
+specified. It also verifies each installed **immutable resource** by
+name, byte count and SHA-256 from the owner's CD inventory. Mutable
+`*.sav` slots are exempt because gameplay legitimately changes them,
+and the INI itself is checked semantically rather than comparing its
+hash. Other user-added files are allowed. Verification does not
+rewrite anything or silently repair a failure.
+
+`--launch` runs the **same full verification before spawning** the
+original game executable in the `splanet` working directory; it
+refuses to launch a failing installation. It waits for the game to
+finish, then reports an abnormal exit code. The graphical **Lancer**
+button uses the same verification on a worker thread, so the GUI
+remains responsive, and monitors the game's termination.
+
+All expected application errors (missing files, invalid options,
+failed verification, installation and patch errors, launching and
+process-exit failures) are reported and recorded to
+`ScorchedPlanetFix.log`. In the GUI and `--verify`/`--launch`
+modes it is located beside the patcher; `--nogui` retains its
+current-directory log. If a log cannot be written, the program
+attempts a fallback log, but an entirely unwritable system cannot
+guarantee persistence.
+
+The verification profiles use the owner-supplied inventories rather
+than an independent official retail-master database. The new
+GUI/CLI flows remain subject to real Windows and Wine testing.
