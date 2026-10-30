@@ -240,7 +240,7 @@ fn node_digest(iso: &mut File, node: &TreeNode) -> Result<String, String> {
     let mut sink=std::io::sink();
     let mut writer=HashWriter { output: &mut sink, hasher: Sha256::new(),
         transferred: 0, report: |_| {} };
-    cat_node(iso,node,&mut writer).map_err(|e|format!("Lecture ISO : {e}"))?;
+    cat_node(iso,node,&mut writer).map_err(|e|format!("Cannot read ISO: {e}"))?;
     if writer.transferred != node.size {
         return Err("Unsupported game image: truncated ISO file".into());
     }
@@ -323,7 +323,7 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     let original=match fs::read(ini) {
         Ok(bytes)=>bytes,
         Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Vec::new(),
-        Err(e)=>return Err(format!("Lecture splanet.ini : {e}")),
+        Err(e)=>return Err(format!("Cannot read splanet.ini: {e}")),
     };
     // Numeric language indices come from the original game's PE32 resource
     // pointer table: 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
@@ -504,9 +504,9 @@ pub fn install_image(
                 let source=temp.join(directory).join(&asset.relative);
                 let target=staging.join(&asset.relative);
                 if let Some(dir)=target.parent(){fs::create_dir_all(dir).map_err(|e|e.to_string())?;}
-                let mut input=File::open(&source).map_err(|e|format!("Lecture temp/{directory}/{key} : {e}"))?;
+                let mut input=File::open(&source).map_err(|e|format!("Cannot read temp/{directory}/{key}: {e}"))?;
                 let mut output=OpenOptions::new().write(true).create_new(true).open(&target)
-                    .map_err(|e|format!("Copie vers splanet/{key} : {e}"))?;
+                    .map_err(|e|format!("Unable to copy to splanet/{key}: {e}"))?;
                 let transferred=std::io::copy(&mut input,&mut output).map_err(|e|e.to_string())?;
                 output.flush().map_err(|e|e.to_string())?;
                 output.sync_all().map_err(|e|e.to_string())?;
@@ -556,7 +556,7 @@ pub fn install_image(
             return Err("splanet directory created during installation: operation cancelled".into());
         }
         fs::rename(&staging,destination)
-            .map_err(|e|format!("Finalisation de l'installation : {e}"))?;
+            .map_err(|e|format!("Unable to finalize installation: {e}"))?;
         report(100,100,"Installation completed");
         let file_count=inventory.files.len()+usize::from(generated_ini)+1;
         log(&format!("INSTALL-OK: edition={} {} files {} source bytes, original .bak verified",
