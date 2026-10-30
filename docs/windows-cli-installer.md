@@ -33,6 +33,37 @@ HighQualityVideo=1
 
 Language 1 is the default for US and EN/ES/IT (Italian=4, Spanish=5); FR/DE defaults to French=2 (German=3). This example is not the FR/DE default.
 
+## US no-CD candidate and safe upgrades
+
+The owner's fresh US 1.08 installation ran successfully through extraction,
+FadeLow and immutable-file SHA-256 verification but displayed **NO CD** at
+game launch; changing the INI video path to an absolute local path did not
+fix it. Earlier experiments with the same edition sometimes launched without
+the CD, so the media check was omitted from the first release candidate.
+The new **experimental** US candidate changes six bytes: FadeLow four bytes
+at raw offset `0x489CD` and the separately researched CD-media failure
+result two bytes at `0x34C1B` (`33 C0` -> `B0 01`). Its exact
+expected SHA-256 is
+`4dc4de1f9034e17b266da7b64a83ba897b4dca9e8cf9a8654f5988d02d1e0613`.
+**It has not yet been user-validated during no-disc gameplay.**
+
+Previously installed US executables with exact earlier FadeLow hash
+`0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45`
+are recognized by the patch engine. Rerun the CLI installer with no
+argument **from the directory already containing `splanet`** to migrate
+them. Migration is refused if `spvoodoo.exe.bak` is missing, corrupt,
+or does not match the exact original US retail hash. The new six-byte
+candidate is deterministically rebuilt from the verified original backup
+and atomically replaces the old FadeLow executable. The original backup
+and game saves are preserved. `--verify` deliberately refuses the
+previous US FadeLow-only result once the six-byte profile is selected.
+
+Test `--verify` followed by `--launch`, then ensure the menu, Go/mission,
+videos, sound, save/load, and normal exit all work **without any optical
+CD image mounted**. If the game still reports NO CD, investigate file
+attributes/drive-root mapping instead of blindly applying more patches.
+Do not merge the US patch until gameplay is confirmed.
+
 ## nGlide dependency and GPL boundary
 
 **Do not include nGlide in our GPL archive.** nGlide v2.10 is proprietary freeware from Zeus Software; free download does not imply permission to redistribute.
