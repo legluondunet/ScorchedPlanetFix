@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -18,6 +19,7 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
 
     let mut entries: Vec<(String, u64)> = Vec::new();
     let mut setup_ini: Vec<(String, String)> = Vec::new();
+    let mut archive_headers: Vec<(String, String)> = Vec::new();
     let mut total_bytes = 0_u64;
 
     for entry in WalkDir::new(root).follow_links(false) {
@@ -43,6 +45,21 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
             .checked_add(size)
             .ok_or("Taille totale du CD trop grande.")?;
 
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("COMPRESS.BIN") {
+            let mut file = fs::File::open(entry.path())
+                .map_err(|e| format!("Ouverture de {relative} impossible : {e}"))?;
+            let mut header = [0u8; 16];
+            let len = file
+                .read(&mut header)
+                .map_err(|e| format!("Lecture de {relative} impossible : {e}"))?;
+            let signature = header[..len]
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            archive_headers.push((relative.clone(), signature));
+        }
+
         if entry.file_name().to_string_lossy().eq_ignore_ascii_case("SETUP.INI") {
             let detail = if size > MAX_INI_BYTES {
                 format!("Fichier trop volumineux ({size} octets), contenu non inclus.")
@@ -66,6 +83,7 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
             .then(a.0.cmp(&b.0))
     });
     setup_ini.sort_by(|a, b| a.0.cmp(&b.0));
+    archive_headers.sort_by(|a, b| a.0.cmp(&b.0));
 
     let has_dir = |name: &str| {
         fs::read_dir(root).ok().into_iter().flatten().flatten().any(|entry| {
@@ -88,6 +106,9 @@ pub fn audit_cd(root: &Path) -> Result<String, String> {
     writeln!(output, "SPVOODOO.EXE : {}", contains("VOODOO/SPVOODOO.EXE")).unwrap();
     writeln!(output, "RWDLVOOD.DLL : {}", contains("VOODOO/RWDLVOOD.DLL")).unwrap();
     writeln!(output, "COMPRESS.BIN : {has_archive}").unwrap();
+    for (path, signature) in &archive_headers {
+        writeln!(output, "En-tete de {path} (16 premiers octets) : {signature}").unwrap();
+    }
     writeln!(output, "\nInventaire relatif (octets | fichier) :").unwrap();
     for (path, size) in &entries {
         writeln!(output, "{size} | {path}").unwrap();
@@ -129,6 +150,7 @@ mod tests {
         assert!(report.contains("SPLANET : true"));
         assert!(report.contains("SPVOODOO.EXE : true"));
         assert!(report.contains("COMPRESS.BIN : true"));
+        assert!(report.contains("61 72 63 68 69 76 65"));
         assert!(report.contains("INSTALL/WINDOWS/SETUP.INI"));
         assert!(report.contains("Foo=Bar"));
         assert!(!report.contains(dir.path().to_string_lossy().as_ref()));
