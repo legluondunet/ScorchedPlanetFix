@@ -11,7 +11,8 @@ pub const ORIGINAL_SHA256: &str =
     "fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a";
 pub const FADELOW_SHA256: &str =
     "0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45";
-pub const BACKUP_SUFFIX: &str = ".ScorchedPlanetFix-original.bak";
+pub const BACKUP_SUFFIX: &str = ".bak";
+const LEGACY_BACKUP_SUFFIX: &str = ".ScorchedPlanetFix-original.bak";
 pub const TARGET_VA: u32 = 0x0044_95CD;
 pub const TARGET_FILE_OFFSET: usize = 0x489CD;
 pub const ORIGINAL_BYTES: [u8; 4] = [0x17, 0xB7, 0xD1, 0x38];
@@ -262,11 +263,14 @@ fn read_backup(path: &Path, expected_hash: Option<&str>) -> Result<Option<Vec<u8
     }
 }
 
-fn backup_path(exe: &Path) -> Result<PathBuf> {
+fn backup_path_with_suffix(exe: &Path, suffix: &str) -> Result<PathBuf> {
     let mut name: OsString = exe.file_name()
         .ok_or("EXE path has no file name")?.to_os_string();
-    name.push(BACKUP_SUFFIX);
+    name.push(suffix);
     Ok(exe.with_file_name(name))
+}
+fn backup_path(exe: &Path) -> Result<PathBuf> {
+    backup_path_with_suffix(exe, BACKUP_SUFFIX)
 }
 
 fn write_new(path: &Path, data: &[u8], permissions: &Permissions, hash: &str) -> Result<()> {
@@ -333,8 +337,19 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
     let profile = profile_from_hash(&hash);
     let backup = backup_path(exe)?;
     // Even unknown EXEs must not be allowed to use an unrelated existing backup.
-    let backed = read_backup(&backup, profile.map(|p| p.original_hash))?;
+    let expected = profile.map(|p| p.original_hash);
+    let mut backed = read_backup(&backup, expected)?;
     let perms = fs::symlink_metadata(exe).map_err(|e| e.to_string())?.permissions();
+    // Older builds stored a longer filename. On apply/restore, migrate
+    // verified original bytes to the requested .bak filename without
+    // deleting the old backup. Status/copy remain read-only.
+    if backed.is_none() && matches!(action,Action::Apply|Action::Restore) {
+        let previous=backup_path_with_suffix(exe,LEGACY_BACKUP_SUFFIX)?;
+        if let Some(original)=read_backup(&previous,expected)? {
+            write_new(&backup,&original,&perms,expected.ok_or("Unknown backup edition")?)?;
+            backed=Some(original);
+        }
+    }
 
     match action {
         Action::Status => {
@@ -530,6 +545,12 @@ mod tests {
         assert_eq!(fs::read(&exe).unwrap(),input);
         assert_eq!(fs::read(&backup).unwrap(),input);
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn requested_backup_name_is_bak() {
+        assert_eq!(backup_path(Path::new("SPVOODOO.EXE")).unwrap(),
+            PathBuf::from("SPVOODOO.EXE.bak"));
+        assert_eq!(backup_path_with_suffix(Path::new("SPVOODOO.EXE"),LEGACY_BACKUP_SUFFIX).unwrap(),
+            PathBuf::from("SPVOODOO.EXE.ScorchedPlanetFix-original.bak"));
     }
     #[test] fn refusing_unknown_backup() {
         let dir=fixture_dir();
