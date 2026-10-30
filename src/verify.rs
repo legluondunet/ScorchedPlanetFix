@@ -4,6 +4,7 @@
 //! Save slots (*.sav) and splanet.ini are mutable, so validate structure and
 //! safety rather than requiring their original hashes.
 use crate::verify_manifest::{manifest_for, ReferenceFile};
+use crate::nglide;
 use sha2::{Digest,Sha256};
 use std::fs::{self, File};
 use std::io::Read;
@@ -163,6 +164,9 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
             return Err(format!("INI : language={lang} incompatible avec l'édition {}",profile.label));
         }
     }
+    // nGlide is a runtime prerequisite: the check is read-only and never
+    // downloads/installs the proprietary DLL.
+    nglide::verify_local_glide(folder)?;
     let data=manifest_for(profile.label).ok_or("Edition sans manifeste de vérification")?;
     let mut total=0u64;
     for entry in data{
@@ -183,7 +187,10 @@ pub fn launch_verified(folder:&Path,mut log:impl FnMut(&str))->Result<Child,Stri
     let report=verify_install(folder,|message|log(message))?;
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
-    Command::new(&report.executable).current_dir(folder).spawn()
+    let mut command=Command::new(&report.executable);
+    command.current_dir(folder);
+    nglide::configure_process(&mut command,|message|log(message));
+    command.spawn()
         .map_err(|e|format!("Impossible de lancer {} : {e}",report.executable.display()))
 }
 #[cfg(test)]
