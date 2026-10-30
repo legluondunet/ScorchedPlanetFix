@@ -132,6 +132,14 @@ def self_test():
     for us in (9, 20):
         rem, accepted, _, _ = model_polling(us, 300_000, gate=threshold)
         assert rem <= 0.001 and accepted > 0, (us, rem, accepted)
+    # Same synthetic timing input, only the gating constant differs.
+    # Demonstrates the intended narrow behavioral effect of test copies.
+    for us in (5, 8):
+        remaining_original, _, _, _ = model_polling(us, 300_000, gate=threshold)
+        assert remaining_original == 3.0
+        for test_gate in (f32(0.00001), 0.0):
+            remaining_test, accepted, _, _ = model_polling(us, 300_000, gate=test_gate)
+            assert remaining_test <= 0.001 and accepted > 0
     rem, n, calls = model_jitter()
     assert n == 30 and calls == 300000 and 2.95 < rem < 2.98
     assert len(FADE_LOOP_BRANCHES) == 12
@@ -159,6 +167,10 @@ def main():
     for us in (1, 5, 8, 9, 20):
         rem, accepted, ticks, delta = model_polling(us, 300_000, gate=gate)
         print(f"  {us:2} us/poll: delta={delta:.8g}, accepted={accepted}, remaining={rem:.8g}")
+    print("5us timing model, 300000 polls: original threshold vs experimental copies")
+    for label, test_gate in (("original", gate), ("low", f32(0.00001)), ("zero", 0.0)):
+        rem, accepted, _, _ = model_polling(5, 300_000, gate=test_gate)
+        print(f"  {label}: accepted={accepted}, remaining={rem:.8g}")
     rem, accepted, loops = model_jitter()
     print(f"Periodic 5us / 100us every 10,000 calls: accepted={accepted}, remaining={rem:.8g}")
     print("CAUTION: this model does not establish the actual Go-freeze cause.")
