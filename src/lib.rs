@@ -533,6 +533,40 @@ mod tests {
         assert_ne!(FADELOW_SHA256,US_PROFILE.patched_hash);
         assert_eq!(US_PROFILE.original_hash,ORIGINAL_SHA256);
     }
+    #[test] fn en_es_it_has_exact_six_byte_media_gate_candidate(){
+        // Disassembly of original owner-supplied EN/ES/IT PE32 establishes a
+        // matching CD search/return routine at VA 0x435570..0x435645.
+        assert_eq!(EN_ES_IT_PROFILE.media_gate,
+            Some(MediaGate{va:0x43562B,file_offset:0x34A2B}));
+        assert_eq!(EN_ES_IT_PROFILE.patched_hash,EN_ES_IT_FADELOW_NOCD_SHA256);
+        assert_eq!(profile_from_hash(EN_ES_IT_FADELOW_SHA256),Some(EN_ES_IT_PROFILE));
+        assert_eq!(profile_from_hash(EN_ES_IT_FADELOW_NOCD_SHA256),Some(EN_ES_IT_PROFILE));
+        let mut raw=synthetic_pe();
+        raw[EN_ES_IT_PROFILE.target_offset..EN_ES_IT_PROFILE.target_offset+4]
+            .copy_from_slice(&ORIGINAL_BYTES);
+        raw[0x34A2B..0x34A2D].copy_from_slice(&MEDIA_GATE_ORIGINAL);
+        let mut expected=raw.clone();
+        expected[EN_ES_IT_PROFILE.target_offset..EN_ES_IT_PROFILE.target_offset+4]
+            .copy_from_slice(&FADELOW_BYTES);
+        expected[0x34A2B..0x34A2D].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+        let patched=patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),
+            EN_ES_IT_PROFILE).expect("EN/ES/IT six-byte patch");
+        assert_eq!(patched,expected);
+        let changed:Vec<_>=raw.iter().zip(&patched).enumerate()
+            .filter(|(_, (before,after))|before!=after).map(|(i,_)|i).collect();
+        assert_eq!(changed,vec![0x34A2B,0x34A2C,0x487AD,0x487AE,0x487AF,0x487B0]);
+        raw[0x34A2B]=0x90;
+        assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),
+            EN_ES_IT_PROFILE).is_err());
+    }
+    #[test] fn legacy_en_es_it_fadelow_can_only_be_upgraded_from_verified_original(){
+        assert_eq!(legacy_fadelow_hash(EN_ES_IT_PROFILE),Some(EN_ES_IT_FADELOW_SHA256));
+        assert_eq!(legacy_fadelow_hash(US_PROFILE),Some(FADELOW_SHA256));
+        assert_eq!(legacy_fadelow_hash(FR_DE_PROFILE),None);
+        assert_ne!(EN_ES_IT_FADELOW_SHA256,EN_ES_IT_PROFILE.patched_hash);
+        assert_eq!(profile_from_hash(EN_ES_IT_FADELOW_SHA256),Some(EN_ES_IT_PROFILE));
+        assert!(profile_from_hash("5373c7b24389556b7466932695e7e2d1076531105f9bb879749e783a64898d90").is_none());
+    }
     #[test] fn fr_de_profile_requires_combined_fix() {
         assert_eq!(FR_DE_PROFILE.media_gate, Some(MediaGate{va:0x4358BB,file_offset:0x34CBB}));
         assert_eq!(profile_from_hash(FR_DE_PROFILE.original_hash),Some(FR_DE_PROFILE));
