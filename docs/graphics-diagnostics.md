@@ -21,8 +21,18 @@ To avoid triggering it, **arm the monitor before starting the game**.
 Open a terminal **in the installed game's directory** and run:
 
 ```bash
-bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5
+WINEPREFIX="/mnt/LUTRIS/Games/scorched-planet/" \
+  bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5 --game-dir . --gdb
 ```
+
+With `WINEPREFIX` set, the script checks the process's exported
+`WINEPREFIX` if readable, prefers a matching process during discovery,
+and refuses a process whose reported prefix is definitively different.
+It neither starts Wine nor changes the game's prefix. If the process
+does not expose its prefix in `/proc/PID/environ`, the report explicitly
+marks that association unverified rather than claiming a match.
+Only the script process inherits this variable; start the game using
+its existing correctly configured Lutris runner, separately.
 
 The script waits for up to 120 seconds for the Linux process named
 `spvoodoo.exe`. Now launch the game normally with the same Wine prefix
