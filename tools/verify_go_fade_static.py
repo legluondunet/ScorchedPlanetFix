@@ -104,6 +104,24 @@ def model_polling(microseconds, calls, freq=10_000_000, gate=None):
             break
     return remaining, accepted, tickstep, delta
 
+def model_jitter(normal_us=5, slow_us=100, every=10000, calls=300000,
+                 freq=10_000_000):
+    """Deterministic periodic long-poll model, not OS scheduling data."""
+    gate = struct.unpack("<f", bytes.fromhex("17b7d138"))[0]
+    scaled_frequency = f32(freq / 12)
+    fast_delta = f32(round(normal_us * freq / 1_000_000) / scaled_frequency)
+    slow_delta = f32(round(slow_us * freq / 1_000_000) / scaled_frequency)
+    remaining = f32(3.0)
+    accepted = 0
+    for i in range(1, calls + 1):
+        delta = slow_delta if i % every == 0 else fast_delta
+        if delta > gate:
+            accepted += 1
+            remaining = f32(max(0, remaining - delta))
+        if remaining <= 0.001:
+            return remaining, accepted, i
+    return remaining, accepted, calls
+
 def self_test():
     factor, threshold = 1 / 12, f32(0.0001)
     assert factor == 0.08333333333333333
@@ -114,8 +132,10 @@ def self_test():
     for us in (9, 20):
         rem, accepted, _, _ = model_polling(us, 300_000, gate=threshold)
         assert rem <= 0.001 and accepted > 0, (us, rem, accepted)
+    rem, n, calls = model_jitter()
+    assert n == 30 and calls == 300000 and 2.95 < rem < 2.98
     assert len(FADE_LOOP_BRANCHES) == 12
-    print("Self-test: 12 branch locations and toy timing model OK.")
+    print("Self-test: 12 branch locations, timing and periodic-jitter models OK.")
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -139,6 +159,8 @@ def main():
     for us in (1, 5, 8, 9, 20):
         rem, accepted, ticks, delta = model_polling(us, 300_000, gate=gate)
         print(f"  {us:2} us/poll: delta={delta:.8g}, accepted={accepted}, remaining={rem:.8g}")
+    rem, accepted, loops = model_jitter()
+    print(f"Periodic 5us / 100us every 10,000 calls: accepted={accepted}, remaining={rem:.8g}")
     print("CAUTION: this model does not establish the actual Go-freeze cause.")
     return 0
 
