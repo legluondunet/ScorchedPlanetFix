@@ -184,3 +184,53 @@ Future runtime observation of the value at `0x537EB0` would
 help distinguish the menu-to-game transition from other
 fade and cleanup code without changing any game assets.
 
+## Copy-only experimental builder (created, NOT validated in game)
+
+`tools/experimental_go_fade_patch.py` now implements a strictly
+opt-in, version-gated build of **two independent test copies**.
+It does not modify the user's installed executable, and
+no patched commercial binary is published to GitHub.
+
+- `low`: replaces the float32 immediate at VA `0x4495CD`
+  (raw PE offset `0x489CD`) with `1e-5` game units (approximately
+  0.833 us in the /12 QPC timer branch).
+- `zero`: replaces the same immediate with `0`, allowing any
+  strictly positive floating-point time step to proceed.
+- In both cases all other bytes are unchanged; instruction lengths
+  and branch targets are preserved.
+
+Example **only for isolated offline generation**, not a recommendation
+to overwrite an installed game:
+
+```bash
+python3 tools/experimental_go_fade_patch.py /path/to/original/SPVOODOO.EXE \
+  --output /path/to/isolated-test/SPVOODOO.EXE \
+  --mode low --i-accept-the-risk
+```
+
+The input must match the original SHA-256 and expected instruction
+signature; output must not exist (create-only `O_EXCL`), may not
+be the source path, and the command requires an explicit risk flag.
+Generated test copies are not shipped, installed, or game-tested.
+
+**Local verification against the user's original file:**
+
+| Mode | Output SHA-256 (local reproducibility) |
+| --- | --- |
+| low | `0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45` |
+| zero | `274fb66521339e0c36567293bcd26899d6b868f2c18cc897e6b1bbbabd969c9c` |
+
+Both generated PE copies retain their size (836,608 bytes),
+pass `objdump` PE-i386 decoding, and differ from the original
+**at exactly the four-byte threshold immediate**.
+Six synthetic PE unit tests run locally, including safe rejection
+of unknown hashes and forbidden overwrites. The same synthetic
+fixture tests run in Linux CI without access to the commercial game.
+
+**Important safety/compatibility caveat:** this test changes how
+often a 256-color interpolation is calculated, not merely the
+clock. An extremely small threshold could cause excessive CPU
+work or reveal unrelated timing assumptions. Without a runtime
+test confirming successful level transition and audio/graphics
+behavior, this is an experiment, not a confirmed fix.
+
