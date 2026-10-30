@@ -268,7 +268,7 @@ pub fn update_ini(ini:&Path,video:&Path,language:u8)->Result<(),String>{
                 if trimmed.len()>=names[i].len() &&
                    trimmed[..names[i].len()].eq_ignore_ascii_case(names[i]) {
                     if i<=2 {
-                        out.push(values[0].clone());
+                        out.push(values[i].clone());
                     }else{
                         out.push(line.to_vec());
                     }
