@@ -177,6 +177,12 @@ jobs:
           test -s "$work/report/perf-samples.txt"
           grep -q "Jeu termine avant snapshot-2" "$work/report/summary.txt"
           grep -q '0x00401BAD' "$work"/game/ScorchedPlanetFix-3dfx-*.log
+      - name: Verify static fade signatures and deterministic timing model (no game required)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/verify_go_fade_static.py
+          python3 tools/verify_go_fade_static.py --self-test
       - name: Test offline disassembly of a synthetic 32-bit object
         shell: bash
         run: |
