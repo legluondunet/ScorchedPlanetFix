@@ -215,8 +215,10 @@ fn log_cpu_memory(emit:&mut dyn FnMut(&str)) {
         if first==0 && GetLastError()==122 && bytes>=24 && bytes<=1024*1024 {
             let mut buffer=vec![0u8;bytes as usize];
             if GetLogicalProcessorInformation(buffer.as_mut_ptr().cast(),&mut bytes)!=0 {
-                for chunk in buffer[..(bytes as usize).min(buffer.len())].chunks_exact(24) {
-                    if u32::from_ne_bytes(chunk[4..8].try_into().unwrap())==0 { cores+=1; }
+                let stride=if cfg!(target_pointer_width="64"){32}else{24};
+                let relationship=if cfg!(target_pointer_width="64"){8}else{4};
+                for chunk in buffer[..(bytes as usize).min(buffer.len())].chunks_exact(stride) {
+                    if u32::from_ne_bytes(chunk[relationship..relationship+4].try_into().unwrap())==0 { cores+=1; }
                 }
             }
         }

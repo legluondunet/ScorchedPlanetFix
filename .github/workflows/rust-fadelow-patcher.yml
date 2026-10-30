@@ -26,6 +26,12 @@ jobs:
         run: cargo test --all-targets
       - name: Compile release GUI (Windows only)
         run: cargo build --release --bin scorched-planet-fix
+      - name: Add Windows i686 target
+        run: rustup target add i686-pc-windows-msvc
+      - name: Test 32-bit Windows binaries
+        run: cargo test --target i686-pc-windows-msvc --all-targets
+      - name: Build 32-bit Windows GUI (Wine32 compatible)
+        run: cargo build --release --target i686-pc-windows-msvc --bin scorched-planet-fix
       - name: Verify program is Windows subsystem GUI and CRT static
         shell: pwsh
         run: |
@@ -52,6 +58,23 @@ jobs:
         with:
           name: ScorchedPlanetFix-v1.0.0-Windows-x64
           path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Package 32-bit Windows GUI for Win32 Wine prefixes
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-x86 | Out-Null
+          Copy-Item target/i686-pc-windows-msvc/release/scorched-planet-fix.exe dist-x86/ScorchedPlanetFix.exe
+          Copy-Item LICENSE dist-x86/LICENSE.txt
+          Copy-Item docs/windows-gui-installer.md dist-x86/README.md
+          $digest = (Get-FileHash dist-x86/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist-x86/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path dist-x86/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x86.zip
+      - name: Upload Windows 32-bit GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-v1.0.0-Windows-x86
+          path: ScorchedPlanetFix-v1.0.0-Windows-x86.zip
           if-no-files-found: error
           retention-days: 30
       - name: Archive generated dependency lockfile

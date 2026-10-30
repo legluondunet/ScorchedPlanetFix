@@ -2,7 +2,7 @@
 name = "scorched-planet-fix"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 description = "Windows GUI patcher and ISO installer for Scorched Planet (1996)"
 license = "GPL-3.0-or-later"
 authors = ["legluondunet assisted by ChatGPT (OpenAI)"]
