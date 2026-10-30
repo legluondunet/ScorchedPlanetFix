@@ -32,6 +32,25 @@ impl Logger {
             let _=file.flush();
         }
     }
+    pub fn error(&self,message:&str){
+        self.write(&format!("ERROR: {message}"));
+    }
+    /// Fallback for an error that occurs before the regular logger is open.
+    /// Prefer the patcher's directory, then the current working directory.
+    /// This cannot write a log if all destinations are unwritable.
+    pub fn emergency_error(root:Option<&Path>,message:&str){
+        let cwd=std::env::current_dir().ok();
+        let candidates=[root,cwd.as_deref()];
+        for directory in candidates.into_iter().flatten(){
+            let path=directory.join("ScorchedPlanetFix.log");
+            if let Ok(mut file)=OpenOptions::new().create(true).append(true).open(&path){
+                let safe=message.replace(['\r','\n']," ");
+                let _=writeln!(file,"ERROR (startup): {safe}");
+                let _=file.flush();
+                return;
+            }
+        }
+    }
     pub fn system_information(&self) {
         self.write("SYSTEM: passive Windows / Wine hardware inventory (no personal identifiers)");
         crate::diagnostics::report(|line|self.write(line));
