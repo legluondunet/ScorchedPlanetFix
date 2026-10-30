@@ -239,6 +239,15 @@ pub fn execute_install(
             }
             fs::copy(&file.source, &output)
                 .map_err(|e| format!("Copie de {} impossible: {e}", file.source.display()))?;
+            // Files copied from optical media often retain their read-only bit.
+            // Installed saves and configuration must remain writable.
+            if !file.relative.to_string_lossy().eq_ignore_ascii_case("GEOMETRY.RWB") {
+                let mut permissions = fs::metadata(&output)
+                    .map_err(|e| e.to_string())?
+                    .permissions();
+                permissions.set_readonly(false);
+                fs::set_permissions(&output, permissions).map_err(|e| e.to_string())?;
+            }
             copied_bytes += file.size;
             on_progress(copied_bytes, plan.total_bytes, &file.relative.to_string_lossy());
         }
