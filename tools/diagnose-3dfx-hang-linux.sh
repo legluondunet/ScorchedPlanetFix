@@ -6,7 +6,8 @@ export LC_ALL=C
 usage() {
   cat <<'EOF'
 Usage: diagnose-3dfx-hang-linux.sh [--pid LINUX_PID] [--game-dir PATH]
-          [--interval SECONDS] [--delay SECONDS] [--wait] [--output NEW_DIR] [--gdb]
+          [--interval SECONDS] [--delay SECONDS] [--wait] [--output NEW_DIR]
+          [--gdb | --gdb-sudo]
 
 By default, launch SPVOODOO.EXE in Wine first, then run this script.
 With --wait, start the script BEFORE the game, then launch the game normally.
@@ -23,6 +24,8 @@ WINEPREFIX=/path/to/prefix: optional process matching and logging
 Default: a dated report directory plus a .log in your current directory.
 --gdb: optionally take two GDB samples of thread stacks and instructions;
        briefly pauses the game and might fail due to ptrace policy
+--gdb-sudo: opt-in privileged GDB attach using sudo (without changing
+            kernel-wide ptrace_scope). Asks sudo authorization BEFORE launch.
 EOF
 }
 
@@ -38,6 +41,7 @@ interval=5
 delay=0
 out=""
 with_gdb=0
+use_sudo_gdb=0
 wait_for_game=0
 expected_prefix=""
 observed_prefix=""
@@ -76,6 +80,7 @@ while (($# > 0)); do
       esac
       ;;
     --gdb) with_gdb=1 ;;
+    --gdb-sudo) with_gdb=1; use_sudo_gdb=1 ;;
     --wait) wait_for_game=1 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "Option inconnue : $1" ;;
@@ -87,6 +92,16 @@ done
   die "L'intervalle doit etre compris entre 1 et 60 secondes."
 [[ "$delay" =~ ^[0-9]+$ ]] && ((delay <= 600)) ||
   die "Le delai doit etre compris entre 0 et 600 secondes."
+
+# Ask for administrative authorization while the terminal is still in focus,
+# before launching fullscreen Wine. Never change system-wide ptrace policy.
+if ((use_sudo_gdb)); then
+  command -v gdb >/dev/null 2>&1 || die "GDB absent (requis pour --gdb-sudo)"
+  command -v sudo >/dev/null 2>&1 || die "sudo absent (requis pour --gdb-sudo)"
+  printf "Mode GDB privilegie : sudo autorisera un attachement au processus du jeu.\n" >&2
+  printf "Aucun changement de kernel.yama.ptrace_scope ne sera effectue.\n" >&2
+  sudo -v || die "Autorisation sudo refusee; relance sans --gdb-sudo"
+fi
 
 if [[ -z "$pid" ]]; then
   if ((wait_for_game)); then
@@ -156,7 +171,7 @@ out="$(realpath -- "$out")"
 [[ ! -e "$log_file" ]] || die "Le fichier de log existe deja : $log_file"
 log "Diagnostic Scorched Planet / Wine / nGlide"
 log "Fichier de log : $log_file"
-log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb"
+log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb GDB_SUDO=$use_sudo_gdb"
 if [[ -n "$expected_prefix" ]]; then
   log "WINEPREFIX demande=$expected_prefix"
   if [[ -n "$observed_prefix" ]]; then
@@ -168,6 +183,14 @@ fi
 log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
 log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
 log "CLK_TCK=$(getconf CLK_TCK 2>/dev/null || printf '?')"
+if [[ -r /proc/sys/kernel/yama/ptrace_scope ]]; then
+  log "Yama ptrace_scope=$(cat /proc/sys/kernel/yama/ptrace_scope) (lecture seule)"
+else
+  log "Yama ptrace_scope indisponible"
+fi
+if [[ -r "/proc/$pid/status" ]]; then
+  log "TracerPid=$(awk '/^TracerPid:/ {print $2}' "/proc/$pid/status")"
+fi
 log "Session graphique : XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
 if command -v wine >/dev/null 2>&1; then
   log "Wine dans le PATH (pas necessairement celui du processus)=$(wine --version 2>/dev/null || printf '?')"
@@ -249,11 +272,18 @@ if ((with_gdb)); then
   if ! command -v gdb >/dev/null 2>&1; then
     log "GDB absent : capture des piles non effectuee."
   else
-    # Native GDB must attach to the Linux PID, not the Wine process ID.
-    # Separate, successive attaches allow comparing instruction pointers.
+    # Native GDB must attach to the Linux PID, not the Windows PID.
+    # An optional, explicitly selected sudo attach avoids changing the
+    # system-wide Yama ptrace_scope. sudo -n never prompts during fullscreen.
+    debugger=(gdb)
+    if ((use_sudo_gdb)); then debugger=(sudo -n gdb); fi
     for sample in 1 2; do
+      [[ -d "/proc/$pid/task" ]] || { log "Jeu termine avant GDB capture $sample/2"; break; }
       log "GDB capture $sample/2 : attachement temporaire, peut suspendre le jeu."
-      if gdb -q -nx -batch -p "$pid" \
+      if "${debugger[@]}" -q -nx -batch \
+        -iex 'set auto-load off' \
+        -p "$pid" \
+        -ex 'set confirm off' \
         -ex 'set pagination off' \
         -ex 'set print thread-events off' \
         -ex 'info threads' \
@@ -266,9 +296,16 @@ if ((with_gdb)); then
         log "GDB capture $sample/2 reussie."
       else
         log "GDB capture $sample/2 impossible : voir le rapport detaille."
+        if grep -qiE 'ptrace: Operation not permitted|Operation not permitted|sudo: a password is required' "$out/gdb-sample-$sample.txt"; then
+          log "Permissions ptrace refusees : relancer avec --gdb-sudo si vous autorisez une capture privilegiee."
+          break
+        fi
+      fi
+      if [[ ! -d "/proc/$pid/task" ]]; then
+        log "Processus Wine disparu apres GDB capture $sample/2 (cause non determinee)."
+        break
       fi
       if (( sample == 1 )); then sleep 3; fi
-      [[ -d "/proc/$pid/task" ]] || break
     done
     if [[ -f "$out/gdb-sample-1.txt" ]]; then
       {
