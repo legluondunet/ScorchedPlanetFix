@@ -13,8 +13,9 @@ Put `ScorchedPlanetFix.exe` beside an existing `splanet`
 game directory, or a single supported original Windows 3dfx CD ISO.
 When an ISO is detected and `splanet` is absent, the program
 checks its structure, the exact original game executable and
-RenderWare DLL hashes, copies the `SPLANET/` and `VOODOO/`
-trees (with videos) into a staged `splanet` installation and
+RenderWare DLL hashes, copies the `SPLANET/` game files and the `VOODOO/` 3dfx game components
+(with videos) into a staged `splanet` installation. The obsolete CD copies of
+`glide.dll`, `sst1init.dll` and `fxmemmap.vxd` are deliberately not installed and
 creates `splanet.ini` if absent (or updates an existing copy)
 to use local videos. It never overwrites
 an existing game directory.
