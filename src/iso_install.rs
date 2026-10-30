@@ -2,7 +2,7 @@
 //! ISO9660/Joliet (or UDF) game install into a *new* splanet directory.
 //!
 //! Preflight: parse image, reject unsafe/ambiguous paths, require exact known
-//! 3dfx exe+driver hashes, required game resources and at least one SMK video.
+//! 3dfx exe+driver hashes, required game resources and at least one SMK video (INI generated if absent).
 //! Extract: flatten SPLANET then VOODOO (VOODOO wins), verify every extracted
 //! file's SHA256 against bytes read from ISO, update video= to local install.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
@@ -86,7 +86,7 @@ fn inventory(root: &TreeNode) -> Result<Inventory, String> {
     let mut list = Inventory::default();
     collect(find_dir(root, "SPLANET")?, Path::new(""), false, &mut list)?;
     collect(find_dir(root, "VOODOO")?, Path::new(""), true, &mut list)?;
-    for item in ["spvoodoo.exe", "rwdlvood.dll", "geometry.rwb", "splanet.ini"] {
+    for item in ["spvoodoo.exe", "rwdlvood.dll", "geometry.rwb"] {
         if !list.files.contains_key(item) {
             return Err(format!("Image du jeu non supportée : fichier {item} absent"));
         }
@@ -190,7 +190,11 @@ fn update_ini(ini:&Path,video:&Path)->Result<(),String>{
     // Preserve all legacy non-UTF8 bytes in original INI lines; replace
     // video= as ASCII, add missing 3dfx defaults from the user's Lutris
     // installation script without overwriting existing user settings.
-    let original=fs::read(ini).map_err(|e|format!("splanet.ini manquant : {e}"))?;
+    let original=match fs::read(ini) {
+        Ok(bytes)=>bytes,
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Vec::new(),
+        Err(e)=>return Err(format!("Lecture splanet.ini : {e}")),
+    };
     let names: [&[u8];4]=[b"video=",b"HighQualityVideo=",b"settings=",b"name="];
     let values: [Vec<u8>;4]=[
         format!("video={}",video.display()).into_bytes(),
@@ -318,15 +322,24 @@ pub fn install_iso(
             let candidates=fs::read_dir(&staging).map_err(|e|e.to_string())?;
             candidates.filter_map(Result::ok).map(|e|e.path()).find(|p|
                 p.file_name().is_some_and(|n|n.to_string_lossy().eq_ignore_ascii_case("splanet.ini"))
-            ).ok_or("Fichier splanet.ini manquant")?
+            ).unwrap_or_else(||staging.join("splanet.ini"))
         };
+        let generated_ini=!ini.exists();
+        if generated_ini {
+            log("INI: absent from original CD; generating [scorch] configuration");
+        } else {
+            log("INI: preserving original settings; updating local video path");
+        }
         update_ini(&ini,&destination.join("video"))?;
+        log(&format!("INI: written and verified: {}",file_digest(&ini)?));
         // User-specific resources and wrappers are NOT embedded or downloaded.
         if destination.exists(){return Err("splanet créé entre-temps : opération annulée".into());}
         fs::rename(&staging,destination).map_err(|e|format!("Finalisation de l'installation : {e}"))?;
         report(100,100,"Installation terminée");
-        log(&format!("INSTALL-OK: {} files, {} bytes",inventory.files.len(),total));
-        Ok(InstallReport{files:inventory.files.len(),bytes:total,folder:destination.to_owned()})
+        let file_count=inventory.files.len()+usize::from(generated_ini);
+        log(&format!("INSTALL-OK: {} files ({} from CD, {} generated), {} extracted bytes",
+            file_count,inventory.files.len(),usize::from(generated_ini),total));
+        Ok(InstallReport{files:file_count,bytes:total,folder:destination.to_owned()})
     })();
     if install_result.is_err(){
         let _=fs::remove_dir_all(&staging);
@@ -347,13 +360,31 @@ mod tests {
         let mut root=TreeNode::new_directory("/".into());
         let mut sp=TreeNode::new_directory("SPLANET".into());
         sp.add_child(TreeNode::new_file_with_location("GEOMETRY.RWB".into(),10,2048,10));
-        sp.add_child(TreeNode::new_file_with_location("SPLANET.INI".into(),10,4096,10));
+        let mut video=TreeNode::new_directory("VIDEO".into());
+        video.add_child(TreeNode::new_file_with_location("INTRO.SMK".into(),10,4096,10));
+        sp.add_child(video);
         let mut voodoo=TreeNode::new_directory("VOODOO".into());
         voodoo.add_child(TreeNode::new_file_with_location("SPVOODOO.EXE".into(),10,8192,10));
         voodoo.add_child(TreeNode::new_file_with_location("RWDLVOOD.DLL".into(),10,12288,10));
         root.add_child(sp);
         root.add_child(voodoo);
-        assert!(inventory(&root).is_err());
+        let checked=inventory(&root).expect("CD sans splanet.ini doit être accepté");
+        assert!(!checked.files.contains_key("splanet.ini"));
+        assert_eq!(checked.video_files,1);
+    }
+    #[test] fn creates_missing_ini_with_local_video_and_defaults(){
+        let dir=std::env::temp_dir().join(format!("scorched-new-ini-test-{}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ini=dir.join("splanet.ini");
+        assert!(!ini.exists());
+        update_ini(&ini,Path::new(r"C:\splanet\video")).unwrap();
+        let result=fs::read_to_string(&ini).unwrap();
+        assert!(result.contains("[scorch]"));
+        assert!(result.contains(r"video=C:\splanet\video"));
+        assert!(result.contains("HighQualityVideo=1"));
+        assert!(result.contains("settings=1 0 1 1 5 95 127 0 0 5 320"));
+        assert!(result.contains("name=Player"));
+        fs::remove_dir_all(&dir).unwrap();
     }
     #[test] fn ini_video_path_is_local(){
         let dir=std::env::temp_dir().join(format!("scorched-ini-test-{}",std::process::id()));
