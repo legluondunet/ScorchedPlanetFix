@@ -20,16 +20,20 @@ European editions include three legacy driver files in the `VOODOO` tree (`glide
 - Extract only the original `SPLANET/` and `VOODOO/` trees into an isolated temporary workspace; install the full `SPLANET/` tree plus `VOODOO/SPVOODOO.EXE` and `VOODOO/RWDLVOOD.DLL` only. Normalize all resulting names to lowercase and refuse case-fold collisions. Exclude `glide.dll`, `sst1init.dll` and `fxmemmap.vxd`. Create and verify `spvoodoo.exe.bak`, patch, and finally generate `splanet.ini` with local videos.
 - **Validated patch combinations:** US 1.08: FadeLow only (4 bytes); EN/ES/IT 1.06: FadeLow only (4 bytes); FR/DE 1.06: FadeLow plus a separate, edition-specific CD-media result change (6 bytes). The owner confirmed the combined FR/DE candidate works in gameplay on 2026-10-30 after the FadeLow-only candidate reached a "PAS DE CD" menu. This does **not** establish that standalone FR/DE FadeLow is sufficient, that physical CD media are never needed for any gameplay resource, or that the automated GUI installer has already been tested.
 - Original-CD per-file SHA-256 inventories are retained in `data/cd-inventories/` and compiled as `src/verify_manifest.rs` for **read-only `--verify` and pre-launch audits** of immutable installed game assets. The audits also require the exact patched executable, matching original `.bak`, semantically valid INI (`video= video`, valid edition language) and skip mutable `.sav` slots. Installer preflight separately validates critical original EXE/DLL/geometry fingerprints and hashes source-to-temporary-to-install copy data. These fingerprints are owner-supplied, not authenticated publisher retail-master hashes.
-- No fully authenticated retail-master provenance or end-to-end European installation/playability test is claimed. All changes remain in draft PR #5 until separately approved.
+- These owner-supplied manifests are not independently authenticated publisher retail masters; the new console install/launch workflow is not yet end-to-end validated. All changes remain in draft PR #5 until separately approved.
 
 Developed by legluondunet, assisted by ChatGPT (OpenAI).
 
 ## Language mapping determined from the original game executables
 
-A PE32 data table of pointers to language resource names is indexed as follows: `1=English`, `2=French`, `3=German`, `4=Italian`, `5=Spanish` (index zero is null). The owner-provided tested EN/ES/IT `splanet.ini` has `language=4` (Italian). The GUI offers only languages for which the CD inventory has a corresponding `SPLANET/*.REZ` resource:
+A PE32 data table of pointers to language resource names is indexed as follows: `1=English`, `2=French`, `3=German`, `4=Italian`, `5=Spanish` (index zero is null). The owner-provided tested EN/ES/IT `splanet.ini` has `language=4` (Italian). The installer supports only languages for which the CD inventory has a corresponding `SPLANET/*.REZ` resource:
 
 - US: English (1)
 - EN/ES/IT: English (1), Italian (4), Spanish (5)
 - FR/DE: French (2), German (3)
 
-After the game EXE is backed up and patched, the installer writes `[scorch]` and the owner-tested portable `video= video` setting, together with `HighQualityVideo=1` and the edition default `language=`. Existing keymapping, gamma, joystick, and other personal options are preserved. The complete original GUI install path has not yet been user-validated.
+After the game EXE is backed up and patched, the installer writes `[scorch]` and the owner-tested portable `video= video` setting, together with `HighQualityVideo=1` and the edition default `language=`. Existing keymapping, gamma, joystick, and other personal options are preserved. The new console installation and launch workflow still requires end-to-end testing.
+
+## Console-only nGlide dependency
+
+The original CD's `glide.dll` is excluded because it is an obsolete Voodoo hardware driver. The Windows x64 **console** patcher does not bundle nGlide (third-party proprietary freeware). The game requires a **user-provided local 32-bit `splanet/glide.dll`**, which the tool may copy from the user's own installation; users download nGlide themselves from https://www.zeus-software.com/downloads/nglide . `--verify` and `--launch` check its presence. The program applies per-game nGlide environment variables instead of globally changing the Windows/Wine registry.
