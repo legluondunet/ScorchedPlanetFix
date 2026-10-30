@@ -6,7 +6,7 @@ This tool installs **from an already copied original CD directory**, not from a 
 
 Expected source root contains `SPLANET` and `VOODOO` directories (names are matched case-insensitively). It may also contain `INSTALL`, `MYSTIQUE`, `VERITE`, etc.
 
-The installer copies all files beneath `SPLANET`, retaining subfolders, then overlays files from `VOODOO`. Both original 3dfx DLLs and game assets remain unmodified. Any `COMPRESS.BIN` is copied but **not extracted** yet; the application displays a warning. This is a provisional mapping of the InstallShield script, not a claim that every CD edition is fully supported.
+The installer copies all files beneath `SPLANET`, retaining subfolders, then overlays files from `VOODOO`. Both original 3dfx DLLs and game assets remain unmodified. If a `COMPRESS.BIN` happens to be present, it is copied unchanged and a warning is displayed; **the file is not required** and its presence on the owner's French/German CD has not been confirmed. This is a provisional copy strategy, not a verified reconstruction of the InstallShield script.
 
 The configuration file `SPLANET.INI` is created/updated with language and local video path. Supported UI languages are French and German, mapped to the game's numeric language selections 2 and 3. Other game languages already on the disc are preserved in the destination.
 
@@ -38,7 +38,7 @@ A Windows GitHub Actions workflow builds and runs unit tests using synthetic sam
 
 1. Verify exact source mapping using the original CD and InstallShield `SETUP.INI`.
 2. Extract original BMPs from the InstallShield support data if they are not separate files.
-3. Handle `COMPRESS.BIN` according to the original `CompressSpecials` flags.
+3. Use a real CD audit to identify any actual packed resources, then implement only the extraction operations justified by the original media. Do not assume a `COMPRESS.BIN` exists.
 4. Add clean uninstallation.
 5. Analyze game runtime CD detection and 3dfx/RenderWare launch stability.
 
@@ -49,11 +49,11 @@ The button asks where to save `ScorchedPlanet-CD-audit.txt`.
 It creates a read-only inventory of the selected source directory:
 
 - Relative file names and byte sizes, without the local absolute CD path.
-- Presence of `SPLANET`, `VOODOO`, `SPVOODOO.EXE`, `RWDLVOOD.DLL`, and `COMPRESS.BIN`.
+- Presence of `SPLANET`, `VOODOO`, `SPVOODOO.EXE` and `RWDLVOOD.DLL`; also reports an optional `COMPRESS.BIN` if one exists.
 - Contents of textual `SETUP.INI` and `SPLANET.INI` files of at most 128 KiB, to help compare editions and reconstruct legacy setup instructions. Binary or larger files are not embedded.
 
 The report does not extract archives, execute the 1996 setup, inspect the registry, or
 change the original CD copy. Only the explicitly chosen report destination is written.
 Review the text before sharing it. A full faithful installation, support for English
-game data, and the interpretation of `COMPRESS.BIN` remain unverified
+game data, and the need for any original InstallShield extraction step remain unverified
 until a representative original CD audit can be studied.
