@@ -33,19 +33,45 @@ mod app {
     la résolution ni le fonctionnement du CD.";
 
 
-    /// Exact original executable fingerprints of editions identified from CD inventories.
-    /// Only the US binary has a validated FadeLow patch.
+    /// Exact game executable hashes. EU FR/DE remains intentionally unpatched.
     fn installed_edition(exe:&Path)->(&'static str,bool){
         let Ok(bytes)=fs::read(exe) else {return ("inconnue",false)};
         let hash=format!("{:x}",Sha256::digest(&bytes));
+        if let Some(profile)=scorched_planet_fix::profile_from_hash(&hash) {
+            return (profile.label,true);
+        }
         match hash.as_str(){
-            ORIGINAL_SHA256 | FADELOW_SHA256 => ("US 1.08",true),
-            "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f" =>
-                ("Europe EN/ES/IT 1.06",false),
             "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72" =>
-                ("Europe FR/DE 1.06",false),
+                ("FR/DE 1.06",false),
             _ => ("inconnue",false),
         }
+    }
+
+    const EN_LANGUAGES:&[(u8,&str)]=&[(1,"English"),(4,"Italiano"),(5,"Español")];
+    const FR_LANGUAGES:&[(u8,&str)]=&[(2,"Français"),(3,"Deutsch")];
+    const US_LANGUAGES:&[(u8,&str)]=&[(1,"English")];
+    fn edition_languages(edition:&str)->&'static [(u8,&'static str)] {
+        if edition.starts_with("EN/ES/IT") {EN_LANGUAGES}
+        else if edition.starts_with("FR/DE") {FR_LANGUAGES}
+        else {US_LANGUAGES}
+    }
+    fn edition_default_language(edition:&str)->u8 {
+        edition_languages(edition)[0].0
+    }
+    fn read_ini_language(path:&Path)->Option<u8> {
+        let bytes=fs::read(path).ok()?;
+        let mut in_scorch=false;
+        for line in bytes.split(|b|*b==b'\n') {
+            let trimmed=line.trim_ascii();
+            if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
+                in_scorch=trimmed.eq_ignore_ascii_case(b"[scorch]");
+                continue;
+            }
+            if in_scorch && trimmed.len()>=9 && trimmed[..9].eq_ignore_ascii_case(b"language=") {
+                return std::str::from_utf8(trimmed[9..].trim_ascii()).ok()?.parse().ok();
+            }
+        }
+        None
     }
 
     enum Event {
@@ -63,6 +89,8 @@ mod app {
         install:PathBuf,
         patch_enabled:bool,
         fadelow_allowed:bool,
+        edition:&'static str,
+        language:u8,
         phase:Phase,
         status:String,
         progress:f32,
@@ -83,7 +111,8 @@ mod app {
             let (tx,rx)=mpsc::channel();
             let install=root.join("splanet");
             let mut app=Self {root,logger,version,install,
-                patch_enabled:false,fadelow_allowed:false,phase:Phase::Ready,status:"Initialisation…".into(),
+                patch_enabled:false,fadelow_allowed:false,edition:"inconnue",language:1,
+                phase:Phase::Ready,status:"Initialisation…".into(),
                 progress:0.0,dialog:None,rx,tx,game_ready:false,stop_on_modal:false,detect:String::new()};
             app.scan_start();
             app
@@ -115,6 +144,10 @@ mod app {
                 let (edition,can_patch)=installed_edition(&self.install.join("SPVOODOO.EXE"));
                 self.fadelow_allowed=can_patch;
                 self.patch_enabled=can_patch;
+                self.edition=edition;
+                let configured=read_ini_language(&self.install.join("splanet.ini"));
+                self.language=configured.filter(|id|edition_languages(edition).iter().any(|(n,_)|n==id))
+                    .unwrap_or_else(||edition_default_language(edition));
                 self.status="Installation splanet détectée".into();
                 self.detect=if image.is_some() {
                     format!("Edition {edition} ; installation existante conservée (ISO ignorée)")
@@ -159,7 +192,14 @@ mod app {
                         match result {
                             Ok(report)=>{
                                 self.game_ready=true;
-                                self.fadelow_allowed=report.edition=="US";
+                                self.edition=match report.edition{
+                                    "US"=>"US 1.08",
+                                    "EN/ES/IT"=>"EN/ES/IT 1.06",
+                                    "FR/DE"=>"FR/DE 1.06",
+                                    _=>"inconnue",
+                                };
+                                self.language=edition_default_language(self.edition);
+                                self.fadelow_allowed=matches!(report.edition,"US"|"EN/ES/IT");
                                 self.patch_enabled=self.fadelow_allowed;
                                 self.progress=1.0;
                                 self.status="Extraction terminée".into();
@@ -167,7 +207,7 @@ mod app {
                                 self.info("Installation réussie",
                                     format!("Edition {} installée : {} fichiers, {} octets.\nDossier : {}\n{}\nDétails dans ScorchedPlanetFix.log",
                                         report.edition,report.files,report.bytes,report.folder.display(),
-                                        if self.fadelow_allowed {"FadeLow disponible."}else{"FadeLow indisponible pour cet exécutable : correctif européen non encore validé."}),false);
+                                        if self.fadelow_allowed {"FadeLow disponible."}else{"FadeLow non validé pour cet exécutable."}),false);
                             },
                             Err(e)=>{
                                 self.progress=0.0;
@@ -195,10 +235,26 @@ mod app {
                 }
             }
         }
+        fn select_language(&mut self,selection:u8){
+            if !edition_languages(self.edition).iter().any(|(id,_)|*id==selection) {
+                self.info("Langue incompatible","Cette langue ne fait pas partie de l'édition du CD détectée.",true);
+                return;
+            }
+            let ini=self.install.join("splanet.ini");
+            let video=self.install.join("video");
+            match iso_install::update_ini(&ini,&video,selection){
+                Ok(())=>{
+                    self.language=selection;
+                    self.logger.write(&format!("INI: selected language={selection} for {}",self.edition));
+                    self.status=format!("Langue du jeu mise à jour (code {selection})");
+                },
+                Err(e)=>self.info("Configuration impossible",format!("splanet.ini: {e}"),true),
+            }
+        }
         fn apply_patch(&mut self){
             if !self.game_ready {self.info("Installation introuvable","Le répertoire splanet n'est pas prêt.",true);return;}
             if !self.fadelow_allowed {
-                self.info("FadeLow indisponible","Le correctif n'est validé que pour l'exécutable US d'origine. Aucun octet n'a été modifié.",true);
+                self.info("FadeLow indisponible","Le correctif n'est validé que pour les exécutables US et EN/ES/IT d'origine. Aucun octet n'a été modifié.",true);
                 return;
             }
             if !self.patch_enabled {self.info("Aucun correctif sélectionné","Cochez au moins un correctif avant de cliquer sur Appliquer.",true);return;}
@@ -288,7 +344,25 @@ mod app {
                     ui.label(RichText::new("FadeLow non validé pour cet exécutable ; application désactivée.")
                         .small().color(Color32::GRAY));
                 }
-                ui.add_space(16.0);
+                ui.add_space(12.0);
+                if self.game_ready {
+                    let choices=edition_languages(self.edition);
+                    let mut selected=self.language;
+                    ui.add_enabled_ui(matches!(self.phase,Phase::Ready),|ui|{
+                        egui::ComboBox::from_label("Langue du jeu")
+                            .selected_text(choices.iter().find(|(id,_)|*id==selected)
+                                .map(|(_,label)|*label).unwrap_or("Inconnue"))
+                            .show_ui(ui,|ui|{
+                                for &(id,label) in choices {
+                                    ui.selectable_value(&mut selected,id,label);
+                                }
+                            });
+                    });
+                    if selected!=self.language {self.select_language(selected);}
+                    ui.label(RichText::new("Vidéos locales ; HighQualityVideo=1. Autres réglages conservés.")
+                        .small().color(Color32::GRAY));
+                }
+                ui.add_space(10.0);
                 ui.label(RichText::new(self.detect.as_str()).color(Color32::GRAY));
                 ui.label(&self.status);
                 if !matches!(self.phase,Phase::Ready){
@@ -321,7 +395,7 @@ mod app {
         let title=format!("ScorchedPlanetFix {version}");
         let options=eframe::NativeOptions {
             viewport:egui::ViewportBuilder::default().with_title(title.clone())
-                .with_inner_size([590.0,330.0]).with_min_inner_size([530.0,310.0]),
+                .with_inner_size([620.0,395.0]).with_min_inner_size([560.0,370.0]),
             ..Default::default()
         };
         eframe::run_native(&title,options,Box::new(move |_cc|{
