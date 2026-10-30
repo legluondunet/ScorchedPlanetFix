@@ -1,0 +1,138 @@
+name: "Bug report"
+description: "Report a reproducible problem with ScorchedPlanetFix."
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue! Before submitting, review the
+        [existing issues](https://github.com/legluondunet/ScorchedPlanetFix/issues)
+        and [installation / verification guide](https://github.com/legluondunet/ScorchedPlanetFix/blob/main/docs/windows-cli-installer.md).
+
+        Only original, SHA-256-recognized US 1.08, EN/ES/IT 1.06 and
+        FR/DE 1.06 editions are supported. ScorchedPlanetFix does not
+        bundle the game or nGlide. Please do not attach copyrighted game
+        files, disc images, proprietary DLLs or private information.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "I have checked the existing issues and the known limitations."
+          required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - "Linux"
+        - "Windows"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Game CD edition
+      options:
+        - "US (InstallKey 1.08)"
+        - "EN / ES / IT (InstallKey 1.06)"
+        - "FR / DE (InstallKey 1.06)"
+        - "Unknown / not detected"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Where does the problem occur?
+      options:
+        - "ISO / CUE-BIN installation"
+        - "Patching an existing installation"
+        - "--verify"
+        - "--launch or in-game"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: os-details
+    attributes:
+      label: Operating system and Wine/Proton details
+      description: |
+        For Windows: specify the Windows version.
+        For Linux: specify the distribution name and version, whether you
+        use Wine or Proton, and its version.
+      placeholder: |
+        Windows version:
+        Linux distribution and version:
+        Wine or Proton:
+        Wine/Proton version:
+    validations:
+      required: true
+
+  - type: input
+    id: patch-version
+    attributes:
+      label: Patch version
+      description: "Run ScorchedPlanetFix.exe --version, or copy the version shown at the beginning of ScorchedPlanetFix.log."
+      placeholder: "e.g. ScorchedPlanetFix 1.0.0-12345678"
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: "Describe the actual behavior, including any error messages."
+      placeholder: "What goes wrong?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ScorchedPlanetFix.exe ...
+        2. Install, verify or launch ...
+        3. Observe the error ...
+      description: "Include the command, ISO/CUE-BIN format and game stage if relevant. Say whether it happens every time."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: "What should have happened?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Additional environment details
+      description: "If relevant: GPU, screen resolution, nGlide version, graphics backend, and whether a CD image was mounted."
+      placeholder: |
+        GPU / graphics driver:
+        Resolution:
+        nGlide version / backend:
+        CD image mounted?
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, and additional information
+      description: |
+        Reproduce the problem, then attach ScorchedPlanetFix.log or
+        screenshots if available. The log is written alongside the patcher.
+        Redact private paths or personal information. Do not upload
+        game executables, original media files or proprietary nGlide DLLs.
+      placeholder: "Drag files into this field or describe anything else that may help."
+    validations:
+      required: false
