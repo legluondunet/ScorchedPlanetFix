@@ -10,7 +10,6 @@ ScorchedPlanetFix runs as a **console executable, without a GUI**, on Windows 64
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe
 .\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.iso"
 .\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue"
 .\ScorchedPlanetFix.exe "D:\CD\Scorched Planet.cue" "D:\CD\Scorched Planet.bin"
