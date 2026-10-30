@@ -334,6 +334,55 @@ in the current/game directory. The tool neither modifies nor executes the
 commercial game executable. If binary hash differs, it warns the perf
 addresses may not map to the same build.
 
+### Sixth diagnostic: actual SPVOODOO.EXE disassembly (2026-10-30, 11:34)
+
+The user supplied a verified disassembly report generated from the exact
+`SPVOODOO.EXE` SHA-256
+`fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a`.
+The original is PE-i386, image base 0x00400000, entry 0x004a5d80.
+
+The runtime hotspot `0x00432b62` is part of the executable's
+timing routine beginning at `0x00432b00`:
+
+- At `0x432b2f`, the routine makes an indirect call through
+  `0x57f3d4`, an IAT slot for `QueryPerformanceCounter`.
+- At `0x432b8a`, it converts a measured delta to floating-point and
+  divides by a runtime variable; at `0x432b90`, it stores the result
+  to `0x556314`. A fallback branch references an incrementing
+  counter in `0x52db94`.
+- Wrapper `0x436100` calls `0x432b00`, then (for a zero-valued
+  argument) adds `0x556314` to an accumulated double at `0x57bc60`.
+- The function at `0x436130` calls `0x432b00`, accumulates time,
+  and dispatches via a state variable at `0x537eb0`.
+
+The report also reveals a potential **active repetition loop**
+at `0x427d24..0x427d38`: call `0x436100(0)` to update the
+elapsed time; pass the floating-point delta to `0x4495c0`;
+repeat while the return value is nonzero (`jne 0x427d24`).
+The conditional branch at `0x427d38` was sampled once in perf;
+the main timing function was sampled many times. This identifies
+a concrete candidate, but **does not prove the loop runs during
+the Go freeze**; a normal engine loop could similarly call timing
+every frame. The audio-buffer repetition is a separate symptom,
+not proof of the direct root cause.
+
+Before implementing any hook/patch, we must decode `0x4495c0`,
+including its loop condition, event/message pumping, and return value.
+The updated read-only `tools/inspect-go-hotspots-linux.sh` now
+disassembles `0x449560..0x4497e0`, its nearby helper
+`0x449450`, the complete caller context around `0x427d24`,
+timer setup around `0x432870`, and matching direct call sites.
+
+Run in the installed game directory:
+
+```bash
+bash ./inspect-go-hotspots-linux.sh ./SPVOODOO.EXE
+```
+
+Inspect the new `ScorchedPlanetFix-Go-code-*.txt` output. The game
+executable is **not** executed or modified, and no patch is
+proposed until the function semantics have been verified.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
