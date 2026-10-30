@@ -1,5 +1,73 @@
 # Scorched Planet — 3dfx / RenderWare startup hang
 
+## Linux / Wine / nGlide (preferred for current testing)
+
+The user has the commercial 3dfx game installed in a **Wine prefix under Linux**
+with **nGlide**. The first diagnostics should therefore be collected on Linux;
+the earlier PowerShell tool is retained for any future Windows tests.
+
+The read-only Bash script reads the Linux process from `/proc`. It does not
+need to know `WINEPREFIX`, does not reconfigure nGlide, does not modify
+`SPVOODOO.EXE`, and never calls `wineserver -k`.
+
+Start the game normally (Wine, Lutris or the installed launcher), launch a
+mission, and while it is frozen run in another Linux terminal:
+
+```bash
+bash tools/diagnose-3dfx-hang-linux.sh
+```
+
+Auto-detection searches for a Linux process whose `comm` equals
+`spvoodoo.exe` (case-insensitive). Some Wine launchers might show different
+Linux process names. To find the PID and supply it explicitly:
+
+```bash
+ps -eo pid,comm,args | grep -i '[s]pvoodoo'
+bash tools/diagnose-3dfx-hang-linux.sh --pid 12345
+```
+
+Replace 12345 with the actual Linux PID. This is **not** the Windows PID
+reported by WineDbg. You may optionally provide `--game-dir '/path/to/game'`
+to generate SHA-256 hashes of the original game executable and local wrapper
+DLLs without copying them.
+
+To capture the mission transition automatically without returning to a
+terminal at the moment of the freeze, run while still at the game menu:
+
+```bash
+bash tools/diagnose-3dfx-hang-linux.sh --delay 15 --interval 5
+```
+
+Then switch to the game and initiate the mission before the 15-second
+delay expires. Use the same nGlide settings in both tests.
+
+Default output directory:
+
+```text
+~/.local/state/ScorchedPlanetFix/diagnostics/<timestamp>-pid<PID>-<scriptPID>/
+```
+
+The tool writes `summary.txt`, `process.txt`, thread/CPU snapshots,
+`thread-cpu-delta.tsv` (per-thread CPU ticks accrued during the interval)
+and loaded graphics-module paths. A high CPU delta can identify a
+**busy thread**, while wait channels may indicate a waiting thread.
+Neither observation alone identifies the root cause; the next step is
+backtraces and instruction inspection.
+
+Optional `--gdb` attaches native GDB **only after** the two noninvasive
+snapshots, captures all-thread backtraces, then detaches. This can temporarily
+stop or disturb a Wine process, may fail due to Linux ptrace restrictions,
+and should not be used for the baseline run. If `gdb` is unavailable or
+attachment is denied, the read-only snapshots remain useful.
+
+Review captured local paths before sharing diagnostic text. Do not upload
+full memory dumps or copyrighted game files. CI checks Bash syntax and
+performs a smoke test against a harmless Linux `sleep` process; this does
+not validate actual game compatibility.
+
+---
+
+
 Status: **diagnostic proof of concept**, not a fix. The installer work is separate.
 
 ## Confirmed symptoms and references
