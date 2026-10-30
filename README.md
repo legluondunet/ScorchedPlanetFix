@@ -11,7 +11,7 @@ ScorchedPlanetFix is a **free and open-source console installer, patcher, verifi
 It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow** and **No-CD** fixes, and launches the game using your separately installed **nGlide** wrapper. No original game files or proprietary drivers are distributed.
 
 - **Windows x64** program; the original game remains **32-bit**
-- Also runs under **Wine on Linux**; all three supported CUE/BIN editions were validated on Wine 11.17
+- Also runs under **Wine on Linux**
 - **No GUI; no CD mounted at play time** for the tested editions
 - SHA-256 checks and an original-executable backup safeguard the patches
 
