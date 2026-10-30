@@ -19,8 +19,8 @@ No WINEPREFIX argument is required: it inspects the running Linux process.
 --wait: wait up to 120 seconds for the game to launch (avoids Alt+Tab)
 --output: a NEW, non-existing directory for detailed reports
 Default: a dated report directory plus a .log in your current directory.
---gdb: optionally attach native GDB to capture thread backtraces; this
-       pauses the target temporarily and might fail due to ptrace policy
+--gdb: optionally take two GDB samples of thread stacks and instructions;
+       briefly pauses the game and might fail due to ptrace policy
 EOF
 }
 
@@ -111,7 +111,12 @@ log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
 log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
 log "CLK_TCK=$(getconf CLK_TCK 2>/dev/null || printf '?')"
 log "Session graphique : XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown} DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
-if command -v wine >/dev/null 2>&1; then log "Wine=$(wine --version 2>/dev/null || printf '?')"; fi
+if command -v wine >/dev/null 2>&1; then
+  log "Wine dans le PATH (pas necessairement celui du processus)=$(wine --version 2>/dev/null || printf '?')"
+fi
+if [[ -e "/proc/$pid/exe" ]]; then
+  log "Binaire Linux reel du processus=$(readlink "/proc/$pid/exe" 2>/dev/null || printf '?')"
+fi
 
 ps -p "$pid" -o pid=,ppid=,comm=,args= > "$out/process.txt" || true
 if [[ -n "$game_dir" ]]; then
@@ -186,14 +191,36 @@ if ((with_gdb)); then
   if ! command -v gdb >/dev/null 2>&1; then
     log "GDB absent : capture des piles non effectuee."
   else
-    log "GDB : attachement temporaire, peut suspendre le jeu."
-    if gdb -q -nx -batch -p "$pid" \
-      -ex 'set pagination off' -ex 'info threads' \
-      -ex 'thread apply all bt 15' -ex 'detach' \
-      > "$out/gdb-backtraces.txt" 2>&1; then
-      log "Piles GDB capturees."
-    else
-      log "Echec GDB : lire gdb-backtraces.txt (ptrace peut etre limite)."
+    # Native GDB must attach to the Linux PID, not the Wine process ID.
+    # Separate, successive attaches allow comparing instruction pointers.
+    for sample in 1 2; do
+      log "GDB capture $sample/2 : attachement temporaire, peut suspendre le jeu."
+      if gdb -q -nx -batch -p "$pid" \
+        -ex 'set pagination off' \
+        -ex 'set print thread-events off' \
+        -ex 'info threads' \
+        -ex 'thread apply all p/x $pc' \
+        -ex 'thread apply all bt 12' \
+        -ex 'detach' \
+        > "$out/gdb-sample-$sample.txt" 2>&1; then
+        log "GDB capture $sample/2 reussie."
+      else
+        log "GDB capture $sample/2 impossible : voir le rapport detaille."
+      fi
+      if (( sample == 1 )); then sleep 3; fi
+      [[ -d "/proc/$pid/task" ]] || break
+    done
+    if [[ -f "$out/gdb-sample-1.txt" ]]; then
+      {
+        printf '\n=== GDB : thread principal Linux PID %s ===\n' "$pid"
+        for sample in 1 2; do
+          [[ -f "$out/gdb-sample-$sample.txt" ]] || continue
+          printf '\nGDB capture %s :\n' "$sample"
+          grep -E -m 30 '(^\*|LWP |^\$[0-9]+ = |Thread [0-9]+|ptrace:|Operation not permitted|Could not attach)' \
+            "$out/gdb-sample-$sample.txt" || true
+        done
+        printf 'Backtraces complets : voir le dossier detaille.\n'
+      } >> "$log_file"
     fi
   fi
 fi
