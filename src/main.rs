@@ -414,18 +414,76 @@ mod app {
         })).map_err(|e|format!("Erreur de l'interface graphique : {e}"))
     }
 }
+// The binary remains Windows GUI subsystem (no console window during normal
+// GUI launch). In --nogui mode attach to a calling cmd/PowerShell console
+// when available; also preserve normal redirected stdout and stderr.
+#[cfg(windows)]
+fn cli_console_write(message:&str,error:bool){
+    use std::ffi::c_void;
+    #[link(name="kernel32")]
+    extern "system"{
+        fn AttachConsole(process_id:u32)->i32;
+        fn GetStdHandle(kind:u32)->*mut c_void;
+        fn GetConsoleMode(handle:*mut c_void,mode:*mut u32)->i32;
+        fn WriteConsoleW(handle:*mut c_void,buffer:*const u16,chars:u32,
+            written:*mut u32,reserved:*mut c_void)->i32;
+        fn WriteFile(handle:*mut c_void,buffer:*const u8,bytes:u32,
+            written:*mut u32,overlapped:*mut c_void)->i32;
+    }
+    let text=format!("{message}\r\n");
+    unsafe{
+        let _=AttachConsole(u32::MAX); // ATTACH_PARENT_PROCESS
+        let handle=GetStdHandle(if error {u32::MAX-11}else{u32::MAX-10});
+        if handle.is_null() || handle as isize == -1 {return;}
+        let mut mode=0;
+        let mut count=0;
+        if GetConsoleMode(handle,&mut mode)!=0{
+            let utf16:Vec<u16>=text.encode_utf16().collect();
+            let _=WriteConsoleW(handle,utf16.as_ptr(),utf16.len() as u32,
+                &mut count,std::ptr::null_mut());
+        }else{
+            let bytes=text.as_bytes();
+            let _=WriteFile(handle,bytes.as_ptr(),bytes.len() as u32,
+                &mut count,std::ptr::null_mut());
+        }
+    }
+}
 #[cfg(windows)]
 fn main(){
+    let args:Vec<std::ffi::OsString>=std::env::args_os().skip(1).collect();
+    if !args.is_empty(){
+        if args[0]=="--nogui"{
+            let result=(||{
+                let current=std::env::current_dir()
+                    .map_err(|e|format!("Répertoire courant inaccessible : {e}"))?;
+                let version=format!("1.0.0-{}",env!("SCORCHED_COMMIT"));
+                let logger=logger::Logger::new(&current,&version)?;
+                logger.system_information();
+                cli::run(&args[1..],&current,&logger,|line|cli_console_write(line,false))
+                    .map_err(|e|{
+                        logger.write(&format!("CLI ERROR: {e}"));
+                        e
+                    })
+            })();
+            if let Err(message)=result{
+                cli_console_write(&format!("ScorchedPlanetFix : erreur : {message}"),true);
+                std::process::exit(1);
+            }
+            return;
+        }
+        cli_console_write("Argument inconnu. Utilisez --nogui [image.iso | image.cue [image.bin]]",true);
+        std::process::exit(2);
+    }
     if let Err(e)=app::start(){
         // The GUI cannot be started (or its log could not be opened).
-        // Avoid a silent failure when built as WINDOWS subsystem.
         use std::ffi::c_void;
         #[link(name="user32")]
-        extern "system" {
+        extern "system"{
             fn MessageBoxW(hwnd:*mut c_void,text:*const u16,caption:*const u16,flags:u32)->i32;
         }
         let msg:Vec<u16>=e.encode_utf16().chain(std::iter::once(0)).collect();
-        let cap:Vec<u16>="ScorchedPlanetFix — erreur".encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {MessageBoxW(std::ptr::null_mut(),msg.as_ptr(),cap.as_ptr(),0x10);}
+        let cap:Vec<u16>="ScorchedPlanetFix — erreur".encode_utf16()
+            .chain(std::iter::once(0)).collect();
+        unsafe{MessageBoxW(std::ptr::null_mut(),msg.as_ptr(),cap.as_ptr(),0x10);}
     }
 }
