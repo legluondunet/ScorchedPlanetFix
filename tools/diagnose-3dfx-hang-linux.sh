@@ -7,7 +7,7 @@ usage() {
   cat <<'EOF'
 Usage: diagnose-3dfx-hang-linux.sh [--pid LINUX_PID] [--game-dir PATH]
           [--interval SECONDS] [--delay SECONDS] [--wait] [--output NEW_DIR]
-          [--gdb | --gdb-sudo]
+          [--gdb | --gdb-sudo] [--perf-sudo]
 
 By default, launch SPVOODOO.EXE in Wine first, then run this script.
 With --wait, start the script BEFORE the game, then launch the game normally.
@@ -26,6 +26,9 @@ Default: a dated report directory plus a .log in your current directory.
        briefly pauses the game and might fail due to ptrace policy
 --gdb-sudo: opt-in privileged GDB attach using sudo (without changing
             kernel-wide ptrace_scope). Asks sudo authorization BEFORE launch.
+--perf-sudo: sample actual CPU instruction addresses of the busy Linux
+             main thread using Linux perf, without GDB stopping the game.
+             Requires local perf and sudo authorization BEFORE fullscreen.
 EOF
 }
 
@@ -42,6 +45,7 @@ delay=0
 out=""
 with_gdb=0
 use_sudo_gdb=0
+with_perf_sudo=0
 wait_for_game=0
 expected_prefix=""
 observed_prefix=""
@@ -81,6 +85,7 @@ while (($# > 0)); do
       ;;
     --gdb) with_gdb=1 ;;
     --gdb-sudo) with_gdb=1; use_sudo_gdb=1 ;;
+    --perf-sudo) with_perf_sudo=1 ;;
     --wait) wait_for_game=1 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "Option inconnue : $1" ;;
@@ -95,12 +100,17 @@ done
 
 # Ask for administrative authorization while the terminal is still in focus,
 # before launching fullscreen Wine. Never change system-wide ptrace policy.
-if ((use_sudo_gdb)); then
-  command -v gdb >/dev/null 2>&1 || die "GDB absent (requis pour --gdb-sudo)"
-  command -v sudo >/dev/null 2>&1 || die "sudo absent (requis pour --gdb-sudo)"
-  printf "Mode GDB privilegie : sudo autorisera un attachement au processus du jeu.\n" >&2
-  printf "Aucun changement de kernel.yama.ptrace_scope ne sera effectue.\n" >&2
-  sudo -v || die "Autorisation sudo refusee; relance sans --gdb-sudo"
+if ((use_sudo_gdb || with_perf_sudo)); then
+  if ((use_sudo_gdb)); then
+    command -v gdb >/dev/null 2>&1 || die "GDB absent (requis pour --gdb-sudo)"
+  fi
+  if ((with_perf_sudo)); then
+    command -v perf >/dev/null 2>&1 || die "perf absent : installe l'outil perf de ta distribution"
+  fi
+  command -v sudo >/dev/null 2>&1 || die "sudo absent (mode privilegie)"
+  printf "Diagnostic privilegie active (GDB=%s, perf=%s).\n" "$use_sudo_gdb" "$with_perf_sudo" >&2
+  printf "Autorisation sudo avant le plein ecran ; la politique ptrace ne sera pas modifiee.\n" >&2
+  sudo -v || die "Autorisation sudo refusee; relance sans option privilegiee"
 fi
 
 if [[ -z "$pid" ]]; then
@@ -171,7 +181,7 @@ out="$(realpath -- "$out")"
 [[ ! -e "$log_file" ]] || die "Le fichier de log existe deja : $log_file"
 log "Diagnostic Scorched Planet / Wine / nGlide"
 log "Fichier de log : $log_file"
-log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb GDB_SUDO=$use_sudo_gdb"
+log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb GDB_SUDO=$use_sudo_gdb PERF_SUDO=$with_perf_sudo"
 if [[ -n "$expected_prefix" ]]; then
   log "WINEPREFIX demande=$expected_prefix"
   if [[ -n "$observed_prefix" ]]; then
@@ -267,6 +277,43 @@ snapshot snapshot-2 || exit 0
     }' "$out/snapshot-1-thread-ticks.tsv" "$out/snapshot-2-thread-ticks.tsv" |
     sort -k2,2nr
 } > "$out/thread-cpu-delta.tsv"
+
+if ((with_perf_sudo)); then
+  # Sampling only the previously verified CPU-heavy main Linux TID avoids
+  # collecting the game's other Wine/DXVK threads. Unlike GDB, perf does not
+  # stop execution to take a snapshot at a debugger attach point.
+  log "perf : echantillonnage du TID $pid pendant 5 secondes sans pause GDB"
+  log "Evenement: cpu-clock:u ; frequence cible 99 Hz."
+  perf_data="$out/perf.data"
+  if sudo -n perf record -q -e cpu-clock:u -F 99 -t "$pid" \
+    -o "$perf_data" -- sleep 5 > "$out/perf-record.txt" 2>&1; then
+    log "perf record : collecte terminee."
+    if sudo -n perf report --stdio --no-children --sort dso,symbol \
+      -i "$perf_data" > "$out/perf-report.txt" 2> "$out/perf-report-errors.txt"; then
+      log "perf report : enregistre."
+      {
+        printf '\n=== perf: modules / instructions les plus actifs (TID %s) ===\n' "$pid"
+        head -n 45 "$out/perf-report.txt"
+      } >> "$log_file"
+    else
+      log "perf report indisponible : voir perf-report-errors.txt."
+    fi
+    if sudo -n perf script -i "$perf_data" -F ip,sym,dso \
+      > "$out/perf-samples.txt" 2> "$out/perf-script-errors.txt"; then
+      {
+        printf '\n=== perf: adresses IP les plus echantillonnees ===\n'
+        awk '$1 ~ /^(0x)?[0-9a-fA-F]+$/ {count[$1]++}
+          END {for (ip in count) printf "%d %s\n", count[ip], ip}' \
+          "$out/perf-samples.txt" | sort -nr | head -n 30
+      } >> "$log_file"
+      log "perf script : adresses sauvegardees dans perf-samples.txt."
+    else
+      log "perf script indisponible : voir perf-script-errors.txt."
+    fi
+  else
+    log "perf record a echoue : voir perf-record.txt. Aucune politique kernel modifiee."
+  fi
+fi
 
 if ((with_gdb)); then
   if ! command -v gdb >/dev/null 2>&1; then
