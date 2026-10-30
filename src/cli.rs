@@ -194,6 +194,15 @@ pub fn dispatch(arguments:&[OsString],version:&str)->Result<(),String>{
 mod tests{
     use super::*;
     fn args(s:&[&str])->Vec<OsString>{s.iter().map(OsString::from).collect()}
+    #[test] fn help_lists_all_cli_options_and_version_without_gui(){
+        let h=help("1.0.0-test1234");
+        for literal in ["1.0.0-test1234","--nogui","--verify","--launch",
+                        "--help","--version","image.iso","image.cue",
+                        "glide.dll","60 Hz"]{
+            assert!(h.contains(literal),"help missing {literal}");
+        }
+        assert!(!h.contains("Bouton Lancer"));
+    }
     #[test] fn supported_command_line_forms(){
         assert_eq!(parse_args(&args(&[])).unwrap(),Arguments{image:None,bin:None});
         assert_eq!(parse_args(&args(&["game.ISO"])).unwrap().image,Some(PathBuf::from("game.ISO")));
