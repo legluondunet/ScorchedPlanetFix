@@ -196,6 +196,26 @@ existing system policy and postpone instruction sampling until a
 debugger can launch the Wine process as its child while retaining the
 normal Lutris runtime environment.
 
+### Third real capture (2026-10-30, 10:14): dual GDB succeeds
+
+The user-provided main `.log` confirms two privileged GDB captures
+at 10:14:38 and 10:14:41. The Linux process has
+`WINEPREFIX` confirmed, and the principal thread (TID 417981)
+accumulated 515 CPU ticks in the five-second comparison window.
+
+**The primary log format at that time did not include the actual
+program counters or stack frames.** Both complete captures were saved in
+the timestamped details directory as `gdb-sample-1.txt` and
+`gdb-sample-2.txt`; those files are needed to assign the busy
+thread's instruction address to SPVOODOO.EXE, RWDLVOOD.DLL, Glide.dll,
+Wine, or the graphics driver.
+
+The Bash diagnostic now includes the matching Linux TID's PC,
+nearby disassembly and backtrace sections in the top-level `.log`
+on future captures, while retaining the full detail files.
+The existing captured details are preferable to re-running the game
+solely to regenerate a more complete summary.
+
 ## Capture two process snapshots (Windows 11)
 
 Prerequisites: installed commercial 3dfx edition and Windows PowerShell 5.1.
