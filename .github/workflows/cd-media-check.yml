@@ -1,0 +1,30 @@
+name: CD media check research (synthetic-only)
+
+on:
+  push:
+    branches: [research/cd-media-check]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cd-media-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile experimental CD patcher
+        run: python3 -m py_compile tools/experimental_cd_media_gate.py
+      - name: Run synthetic PE unit tests
+        run: python3 -m unittest discover -s tests -p 'test_cd_media_gate.py' -v
+      - name: Confirm script refuses writing without explicit experimental flag
+        run: |
+          set -eu
+          if python3 tools/experimental_cd_media_gate.py \
+            tools/experimental_cd_media_gate.py --output "$RUNNER_TEMP/out.exe"; then
+            echo 'Missing --experimental was accepted' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/out.exe"
