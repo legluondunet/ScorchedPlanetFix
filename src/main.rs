@@ -260,7 +260,7 @@ mod app {
             }
         }
         fn apply_patch(&mut self){
-            if !self.game_ready {self.info("Installation introuvable","Le répertoire splanet n'est pas prêt.",true);return;}
+            if !self.install.is_dir() {self.info("Installation introuvable","Le répertoire splanet n'est pas prêt.",true);return;}
             if !self.fadelow_allowed {
                 self.info("Correctif indisponible","Exécutable non reconnu. Correctifs validés : FadeLow US, EN/ES/IT ; FadeLow + détection CD FR/DE. Aucun octet modifié.",true);
                 return;
