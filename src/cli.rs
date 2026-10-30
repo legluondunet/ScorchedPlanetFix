@@ -57,13 +57,11 @@ pub fn run(arguments:&[OsString],root:&Path,
         if args.image.is_some() {
             return Err("Le dossier splanet existe déjà : extraction refusée, aucun fichier écrasé".into());
         }
-        if !install.is_dir() || !install.join("SPVOODOO.EXE").is_file() {
-            return Err("Dossier splanet incomplet : SPVOODOO.EXE absent".into());
-        }
+        let exe=scorched_planet_fix::find_installed_exe(&install)?;
         emit(logger,&mut sink,"Installation existante détectée. Vérification du correctif automatique…");
-        let outcome=scorched_planet_fix::execute(Action::Apply,&install.join("SPVOODOO.EXE"),None,true)?;
+        let outcome=scorched_planet_fix::execute(Action::Apply,&exe,None,true)?;
         emit(logger,&mut sink,&outcome);
-        emit(logger,&mut sink,"Terminé. SPVOODOO.EXE.bak contient l'exécutable original.");
+        emit(logger,&mut sink,&format!("Terminé. Original conservé : {}.bak",exe.display()));
         return Ok(());
     }
     let source=match args.image {
@@ -86,7 +84,7 @@ pub fn run(arguments:&[OsString],root:&Path,
         |message|logger.write(message))?;
     emit(logger,&mut sink,&format!("Edition reconnue : {}. {} fichiers, {} octets de jeu.",
         report.edition,report.files,report.bytes));
-    emit(logger,&mut sink,"Sauvegarde : splanet/SPVOODOO.EXE.bak");
+    emit(logger,&mut sink,"Sauvegarde : splanet/spvoodoo.exe.bak");
     emit(logger,&mut sink,&format!("Correctif automatique : {}",report.patch_report));
     emit(logger,&mut sink,"Installation et correctif terminés. Le jeu n'a pas été lancé.");
     Ok(())
