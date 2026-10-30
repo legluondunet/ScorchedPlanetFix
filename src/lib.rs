@@ -19,7 +19,7 @@ pub const US_FADELOW_NOCD_SHA256: &str =
 /// Legacy EN/ES/IT four-byte FadeLow hash, for migration only.
 pub const EN_ES_IT_FADELOW_SHA256: &str =
     "dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc";
-/// EN/ES/IT FadeLow + media check patch: six bytes, awaiting gameplay validation.
+/// EN/ES/IT FadeLow + media check patch: six bytes, owner-validated in Wine.
 pub const EN_ES_IT_FADELOW_NOCD_SHA256: &str =
     "66c705a77d290d4bed6abdb4b8b065337aaeb50f9e4480090bbe2dfd5006d35c";
 pub const BACKUP_SUFFIX: &str = ".bak";
@@ -31,8 +31,8 @@ pub const FADELOW_BYTES: [u8; 4] = [0xAC, 0xC5, 0x27, 0x37];
 
 /// Only exact owner-supplied and verified game binaries may be patched.
 /// The US and FR/DE combinations were confirmed by owner CUE/BIN gameplay tests.
-/// The EN/ES/IT six-byte candidate is based on independently verified original
-/// CD bytes and matching disassembly; real no-CD gameplay validation is pending.
+/// EN/ES/IT's six-byte patch is verified against the original CD bytes
+/// and was validated by the owner in a CUE/BIN no-CD gameplay test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FadeProfile {
     pub label: &'static str,
