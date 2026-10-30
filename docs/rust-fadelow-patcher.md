@@ -52,30 +52,30 @@ needed if you can write the game directory.
 
 Assuming you extracted the Linux binary somewhere on your disk:
 
-\`\`\`bash
+```bash
 chmod +x ./scorched-planet-fix
 ./scorched-planet-fix status --exe "/mnt/LUTRIS/Games/scorched-planet/drive_c/splanet/SPVOODOO.EXE"
 ./scorched-planet-fix copy \
   --exe "/mnt/LUTRIS/Games/scorched-planet/drive_c/splanet/SPVOODOO.EXE" \
   --output "/mnt/LUTRIS/Games/scorched-planet/drive_c/splanet/SPVOODOO-FadeLow.EXE"
-\`\`\`
+```
 
 In **Lutris → Configure → Game options**, select the new
-\`SPVOODOO-FadeLow.EXE\` as the executable. Keep the same working
+`SPVOODOO-FadeLow.EXE` as the executable. Keep the same working
 directory, Wine prefix and nGlide setup. To revert this method, point
-Lutris at the unchanged original \`SPVOODOO.EXE\`. Do not repeat
-\`copy\` over a file that already exists: overwrites are refused.
+Lutris at the unchanged original `SPVOODOO.EXE`. Do not repeat
+`copy` over a file that already exists: overwrites are refused.
 
 ### Windows (PowerShell)
 
 Run the Windows executable (extracted from its ZIP):
 
-\`\`\`powershell
+```powershell
 .\scorched-planet-fix.exe status --exe "C:\Games\ScorchedPlanet\SPVOODOO.EXE"
 .\scorched-planet-fix.exe copy --exe "C:\Games\ScorchedPlanet\SPVOODOO.EXE" --output "C:\Games\ScorchedPlanet\SPVOODOO-FadeLow.EXE"
-\`\`\`
+```
 
-Start the new \`SPVOODOO-FadeLow.EXE\` normally, with the game assets and
+Start the new `SPVOODOO-FadeLow.EXE` normally, with the game assets and
 driver DLLs already present in the installation folder.
 
 ### Optional: patch the original filename, with verified backup
@@ -83,16 +83,16 @@ driver DLLs already present in the installation folder.
 Some launchers may require the original filename. In that case, run
 (with the game closed):
 
-\`\`\`bash
+```bash
 ./scorched-planet-fix apply --exe "/path/to/SPVOODOO.EXE" --yes
 ./scorched-planet-fix status --exe "/path/to/SPVOODOO.EXE"
-\`\`\`
+```
 
 The patcher creates **before installation**:
 
-\`\`\`text
+```text
 SPVOODOO.EXE.ScorchedPlanetFix-original.bak
-\`\`\`
+```
 
 It will never overwrite an existing backup. If the backup exists, it
 must have the exact original SHA-256. Applying twice is idempotent if
@@ -101,36 +101,36 @@ replacement of the installed executable in the same directory.
 
 To undo, with the game closed:
 
-\`\`\`bash
+```bash
 ./scorched-planet-fix restore --exe "/path/to/SPVOODOO.EXE" --yes
-\`\`\`
+```
 
-\`restore\` accepts only a verified original backup and the exact
+`restore` accepts only a verified original backup and the exact
 known FadeLow EXE. The backup is preserved after restoration.
 
 On Windows, a running EXE or read-only game directory may cause
-replacement to fail safely. Use the non-destructive \`copy\` approach
+replacement to fail safely. Use the non-destructive `copy` approach
 or adjust your installation's permissions. Keep the original backup.
 
 ### CLI reference
 
-\`\`\`text
+```text
 scorched-planet-fix --help
 scorched-planet-fix --version
 scorched-planet-fix status  [--exe SPVOODOO.EXE]
 scorched-planet-fix copy    [--exe SPVOODOO.EXE] --output SPVOODOO-FadeLow.EXE
 scorched-planet-fix apply   [--exe SPVOODOO.EXE] --yes
 scorched-planet-fix restore [--exe SPVOODOO.EXE] --yes
-\`\`\`
+```
 
-For the default relative EXE path, first \`cd\` into the game folder.
+For the default relative EXE path, first `cd` into the game folder.
 
 ## Important boundaries
 
 - This build contains the **FadeLow timing fix only**.
 - **No NoCD patch**: the owner confirmed FadeLow itself works with
   the original CD data directory disabled after adjusting
-  \`splanet.ini\` to \`video=c:\splanet\video\` and ensuring that
+  `splanet.ini` to `video=c:\splanet\video` and ensuring that
   necessary resources are stored locally.
 - No graphics-resolution modifications, RenderWare patches or
   Glide replacements are included. All existing high-resolution
@@ -147,12 +147,12 @@ For the default relative EXE path, first \`cd\` into the game folder.
 
 Rust 1.76 or newer:
 
-\`\`\`bash
+```bash
 cargo test --locked
 cargo build --release --locked
-\`\`\`
+```
 
-Binary: \`target/release/scorched-planet-fix\` (or \`.exe\` on Windows).
+Binary: `target/release/scorched-planet-fix` (or `.exe` on Windows).
 
 The source has no runtime or build-time crates from third parties.
 The SHA-256 routine has FIPS standard-vector tests, PE32 parsing tests,
@@ -160,7 +160,7 @@ four-byte-only patch tests, and synthetic file copy/backup/rollback
 tests. The Windows and Linux CI workflows run them without distributing
 or checking in copyrighted game content.
 
-This program is licensed **GPL-3.0-or-later**; see \`LICENSE\`.
+This program is licensed **GPL-3.0-or-later**; see `LICENSE`.
 New code copyright legluondunet, assisted by ChatGPT (OpenAI).
 
 ## Release quality gate
@@ -171,7 +171,7 @@ Before declaring a production release, ensure:
 2. Both build archives contain binaries and SHA-256 lists.
 3. On a separate copy of the owner's original 3dfx EXE, the Rust
    patcher produces SHA-256
-   \`0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45\`.
+   `0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45`.
 4. It launches the game, reaches gameplay and does not regress FadeLow.
 5. A backup/apply/restore cycle returns exactly the retail SHA-256.
 6. The owner **explicitly approves** merging and publishing a release.
