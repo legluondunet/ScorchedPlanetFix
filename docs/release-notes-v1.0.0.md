@@ -20,6 +20,8 @@ ScorchedPlanetFix is a GPL-3.0-or-later Windows x64 console utility for installi
 
 The project owner validated **CUE/BIN extraction, verification and no-CD gameplay** on **Wine 11.17** for all three editions.
 
+On **native Windows 11**, the owner additionally reported successful `--version`, verification, extraction, No-CD and gameplay tests. The submitted logs confirm **EN/ES/IT 1.06 CUE/BIN** extraction, FadeLow + No-CD patching, original backup and a successful `--verify` (162 checked files), plus **US 1.08 ISO** extraction, patching and verified original backup. They do not independently record a US `--verify` session or the game's runtime; successful gameplay is owner-reported. Native Windows validation of the **FR/DE** edition is not yet documented.
+
 The game and installer have **not** been exhaustively tested on every mission, Windows-native setup, GPU or driver combination. This is a statement of the tests performed, not a universal compatibility guarantee.
 
 ### Installation
