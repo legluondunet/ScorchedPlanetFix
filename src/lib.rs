@@ -1,0 +1,424 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Exact-version, rollback-safe FadeLow patch for Scorched Planet (1996).
+//! No game data is bundled, downloaded, or executed by this library.
+
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions, Permissions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+pub const ORIGINAL_SHA256: &str =
+    "fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a";
+pub const FADELOW_SHA256: &str =
+    "0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45";
+pub const BACKUP_SUFFIX: &str = ".ScorchedPlanetFix-original.bak";
+pub const TARGET_VA: u32 = 0x0044_95CD;
+pub const TARGET_FILE_OFFSET: usize = 0x489CD;
+pub const ORIGINAL_BYTES: [u8; 4] = [0x17, 0xB7, 0xD1, 0x38];
+pub const FADELOW_BYTES: [u8; 4] = [0xAC, 0xC5, 0x27, 0x37];
+
+type Result<T> = std::result::Result<T, String>;
+
+/// SHA-256, implemented here to keep release builds dependency-free and
+/// reproducible. Known test vectors and independent file hashes are checked.
+pub fn sha256_hex(data: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    let mut state: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ];
+    let mut padded = Vec::with_capacity(data.len() + 72);
+    padded.extend_from_slice(data);
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&(data.len() as u64).wrapping_mul(8).to_be_bytes());
+    for block in padded.chunks_exact(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..64 {
+            let a = w[i - 15];
+            let b = w[i - 2];
+            let s0 = a.rotate_right(7) ^ a.rotate_right(18) ^ (a >> 3);
+            let s1 = b.rotate_right(17) ^ b.rotate_right(19) ^ (b >> 10);
+            w[i] = w[i - 16].wrapping_add(s0)
+                .wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let t1 = h.wrapping_add(s1).wrapping_add(ch)
+                .wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            h = g; g = f; f = e; e = d.wrapping_add(t1);
+            d = c; c = b; b = a; a = t1.wrapping_add(t2);
+        }
+        for (target, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *target = target.wrapping_add(value);
+        }
+    }
+    let mut out = String::with_capacity(64);
+    for word in state {
+        use std::fmt::Write as _;
+        write!(out, "{word:08x}").expect("write to String cannot fail");
+    }
+    out
+}
+
+fn u16_at(bytes: &[u8], pos: usize) -> Result<u16> {
+    let b = bytes.get(pos..pos + 2).ok_or("Truncated PE u16")?;
+    Ok(u16::from_le_bytes([b[0], b[1]]))
+}
+fn u32_at(bytes: &[u8], pos: usize) -> Result<u32> {
+    let b = bytes.get(pos..pos + 4).ok_or("Truncated PE u32")?;
+    Ok(u32::from_le_bytes(b.try_into().unwrap()))
+}
+
+/// Locate the four threshold bytes through the actual PE32 section table.
+pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
+    if data.len() < 0x100 || data.get(..2) != Some(b"MZ") {
+        return Err("Not a DOS/PE executable (MZ missing)".into());
+    }
+    let pe = u32_at(data, 0x3c)? as usize;
+    if data.get(pe..pe + 4) != Some(&b"PE\0\0"[..]) {
+        return Err("Invalid PE signature".into());
+    }
+    let n = u16_at(data, pe + 6)? as usize;
+    let opt_size = u16_at(data, pe + 20)? as usize;
+    let opt = pe.checked_add(24).ok_or("PE header overflow")?;
+    let sections = opt.checked_add(opt_size).ok_or("PE section overflow")?;
+    let end = sections.checked_add(n * 40).ok_or("PE section overflow")?;
+    if end > data.len() || opt_size < 32 || u16_at(data, opt)? != 0x10b {
+        return Err("Expected valid PE32 section table".into());
+    }
+    let image_base = u32_at(data, opt + 28)?;
+    if image_base != 0x0040_0000 {
+        return Err(format!("Unexpected image base 0x{image_base:x}"));
+    }
+    let rva = TARGET_VA - image_base;
+    for index in 0..n {
+        let p = sections + index * 40;
+        if data.get(p..p + 5) != Some(&b".text"[..]) {
+            continue;
+        }
+        let virtual_size = u32_at(data, p + 8)?;
+        let section_rva = u32_at(data, p + 12)?;
+        let raw_size = u32_at(data, p + 16)?;
+        let raw_ptr = u32_at(data, p + 20)?;
+        let size = virtual_size.min(raw_size);
+        if rva >= section_rva
+            && rva.checked_add(4).is_some_and(|end_rva| {
+                section_rva.checked_add(size).is_some_and(|end_sec| end_rva <= end_sec)
+            })
+        {
+            let offset = (raw_ptr as usize) + (rva - section_rva) as usize;
+            if data.get(offset..offset + 4).is_some() {
+                if offset != TARGET_FILE_OFFSET {
+                    return Err("Target file offset differs from verified retail EXE".into());
+                }
+                return Ok(offset);
+            }
+        }
+    }
+    Err("Fade threshold VA not backed by PE .text bytes".into())
+}
+
+/// Only patches data matching both the exact source SHA and opcode literal.
+/// Also independently verifies full patched-file SHA-256 and length.
+fn patch_with_hashes(data: &[u8], source: &str, target: &str) -> Result<Vec<u8>> {
+    if sha256_hex(data) != source {
+        return Err(format!("Unsupported original executable (SHA-256: {})", sha256_hex(data)));
+    }
+    let offset = pe_target_offset(data)?;
+    if data[offset..offset + 4] != ORIGINAL_BYTES {
+        return Err("Fade threshold instruction bytes differ from reference".into());
+    }
+    let mut changed = data.to_vec();
+    changed[offset..offset + 4].copy_from_slice(&FADELOW_BYTES);
+    if changed.len() != data.len() || sha256_hex(&changed) != target {
+        return Err("Patched file SHA-256 mismatch".into());
+    }
+    Ok(changed)
+}
+pub fn make_fadelow(data: &[u8]) -> Result<Vec<u8>> {
+    patch_with_hashes(data, ORIGINAL_SHA256, FADELOW_SHA256)
+}
+
+fn read_regular(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!("Not a regular file / symbolic link refused: {}", path.display()));
+    }
+    fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn read_backup(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                return Err(format!("Backup is not a regular file: {}", path.display()));
+            }
+            let data = read_regular(path)?;
+            if sha256_hex(&data) != ORIGINAL_SHA256 {
+                return Err(format!("Backup exists but is NOT the verified original: {}", path.display()));
+            }
+            Ok(Some(data))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Cannot inspect backup {}: {e}", path.display())),
+    }
+}
+
+fn backup_path(exe: &Path) -> Result<PathBuf> {
+    let mut name: OsString = exe.file_name()
+        .ok_or("EXE path has no file name")?.to_os_string();
+    name.push(BACKUP_SUFFIX);
+    Ok(exe.with_file_name(name))
+}
+
+fn write_new(path: &Path, data: &[u8], permissions: &Permissions, hash: &str) -> Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)
+        .map_err(|e| format!("Refusing existing/unwritable destination {}: {e}", path.display()))?;
+    let result = (|| {
+        file.write_all(data).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        file.set_permissions(permissions.clone()).map_err(|e| e.to_string())?;
+        drop(file);
+        if sha256_hex(&read_regular(path)?) != hash {
+            return Err("New file verification failed".into());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        // We exclusively created this file; it was not present beforehand.
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn replace_atomically(path: &Path, data: &[u8], permissions: &Permissions, hash: &str) -> Result<()> {
+    let mut temp = None;
+    for nonce in 0..1000 {
+        let mut name = path.file_name().ok_or("Missing exe file name")?.to_os_string();
+        name.push(format!(".scorchedplanetfix-{}-{nonce}.tmp", std::process::id()));
+        let candidate = path.with_file_name(name);
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(f) => { temp = Some((candidate, f)); break; }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Cannot create temporary file: {e}")),
+        }
+    }
+    let (tmp, mut file) = temp.ok_or("Cannot find free temporary name")?;
+    let result = (|| {
+        file.write_all(data).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        file.set_permissions(permissions.clone()).map_err(|e| e.to_string())?;
+        drop(file);
+        if sha256_hex(&read_regular(&tmp)?) != hash {
+            return Err("Temporary file hash mismatch".into());
+        }
+        // Replace on same filesystem. On Windows this fails safely if the
+        // executable is running/locked: the original backup stays intact.
+        fs::rename(&tmp, path).map_err(|e| format!("Cannot replace executable (close game first): {e}"))?;
+        if sha256_hex(&read_regular(path)?) != hash {
+            return Err("Post-install hash verification failed; use verified backup".into());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action { Status, Copy, Apply, Restore }
+
+pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: bool) -> Result<String> {
+    let source = read_regular(exe)?;
+    let hash = sha256_hex(&source);
+    let backup = backup_path(exe)?;
+    let backed = read_backup(&backup)?;
+    let perms = fs::symlink_metadata(exe).map_err(|e| e.to_string())?.permissions();
+
+    match action {
+        Action::Status => {
+            let state = if hash == ORIGINAL_SHA256 {"ORIGINAL"}
+                else if hash == FADELOW_SHA256 {"FADELOW"}
+                else {"UNKNOWN/UNSUPPORTED"};
+            Ok(format!("Executable: {state}\nSHA-256: {hash}\nBackup: {} ({})",
+                if backed.is_some() {"VERIFIED ORIGINAL"} else {"ABSENT"},
+                backup.display()))
+        }
+        Action::Copy => {
+            let destination = output.ok_or("copy requires --output FILE")?;
+            // create_new protects existing files and any same-file path, too.
+            let patch = make_fadelow(&source)?;
+            write_new(destination, &patch, &perms, FADELOW_SHA256)?;
+            Ok(format!("FadeLow copy created: {}\nSHA-256: {}\nOriginal executable unchanged.",
+                destination.display(), FADELOW_SHA256))
+        }
+        Action::Apply => {
+            if !confirmed { return Err("apply requires explicit --yes".into()); }
+            if hash == FADELOW_SHA256 {
+                if backed.is_none() { return Err("Already patched but verified original backup is missing".into()); }
+                return Ok("Already patched; verified backup exists. No changes.".into());
+            }
+            let patch = make_fadelow(&source)?;
+            if backed.is_none() {
+                write_new(&backup, &source, &perms, ORIGINAL_SHA256)?;
+            }
+            if sha256_hex(&read_regular(exe)?) != ORIGINAL_SHA256 {
+                return Err("EXE modified before replacement; refusing".into());
+            }
+            replace_atomically(exe, &patch, &perms, FADELOW_SHA256)?;
+            Ok(format!("FadeLow applied. Verified original backup: {}\nUse restore --yes to undo.", backup.display()))
+        }
+        Action::Restore => {
+            if !confirmed { return Err("restore requires explicit --yes".into()); }
+            let original = backed.ok_or("Missing verified original backup; restore refused")?;
+            if hash == ORIGINAL_SHA256 {
+                return Ok("Original already restored. Backup preserved.".into());
+            }
+            if hash != FADELOW_SHA256 {
+                return Err("Unsupported installed EXE; refusing to overwrite".into());
+            }
+            if sha256_hex(&read_regular(exe)?) != FADELOW_SHA256 {
+                return Err("EXE modified before restoration; refusing".into());
+            }
+            replace_atomically(exe, &original, &perms, ORIGINAL_SHA256)?;
+            Ok(format!("Original EXE restored. Verified backup preserved at {}", backup.display()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn synthetic_pe() -> Vec<u8> {
+        let mut data = vec![0u8; 0x60000];
+        data[0..2].copy_from_slice(b"MZ");
+        data[0x3c..0x40].copy_from_slice(&(0x80u32).to_le_bytes());
+        data[0x80..0x84].copy_from_slice(b"PE\0\0");
+        data[0x86..0x88].copy_from_slice(&(1u16).to_le_bytes());
+        data[0x94..0x96].copy_from_slice(&(0xe0u16).to_le_bytes());
+        data[0x98..0x9a].copy_from_slice(&(0x10bu16).to_le_bytes());
+        data[0x98+28..0x98+32].copy_from_slice(&(0x400000u32).to_le_bytes());
+        let section = 0x80 + 24 + 0xe0;
+        data[section..section + 8].copy_from_slice(b".text\0\0\0");
+        data[section + 8..section + 12].copy_from_slice(&(0x55000u32).to_le_bytes());
+        data[section + 12..section + 16].copy_from_slice(&(0x1000u32).to_le_bytes());
+        data[section + 16..section + 20].copy_from_slice(&(0x55000u32).to_le_bytes());
+        data[section + 20..section + 24].copy_from_slice(&(0x400u32).to_le_bytes());
+        data[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET + 4].copy_from_slice(&ORIGINAL_BYTES);
+        data
+    }
+    fn fixture_dir() -> PathBuf {
+        let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = env::temp_dir().join(format!("scorched-planet-rust-test-{}-{since}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+    fn patch_fake(data: &[u8]) -> Vec<u8> {
+        let mut expected = data.to_vec();
+        expected[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET + 4].copy_from_slice(&FADELOW_BYTES);
+        patch_with_hashes(data, &sha256_hex(data), &sha256_hex(&expected)).unwrap()
+    }
+
+    #[test] fn sha256_standard_vectors() {
+        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(sha256_hex(&vec![b'a'; 1_000_000]),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    }
+    #[test] fn maps_verified_pe_offset() {
+        let original = synthetic_pe();
+        assert_eq!(pe_target_offset(&original).unwrap(), TARGET_FILE_OFFSET);
+    }
+    #[test] fn only_changes_exact_four_bytes() {
+        let original = synthetic_pe();
+        let modified = patch_fake(&original);
+        assert_eq!(modified.len(), original.len());
+        let changes: Vec<_> = original.iter().zip(&modified).enumerate()
+            .filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
+        assert_eq!(changes, vec![TARGET_FILE_OFFSET, TARGET_FILE_OFFSET+1, TARGET_FILE_OFFSET+2, TARGET_FILE_OFFSET+3]);
+    }
+    #[test] fn rejects_wrong_source_hash_and_original_bytes() {
+        let mut raw = synthetic_pe();
+        assert!(patch_with_hashes(&raw, ORIGINAL_SHA256, FADELOW_SHA256).is_err());
+        raw[TARGET_FILE_OFFSET] = 0x90;
+        let mut desired=raw.clone();
+        desired[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET+4].copy_from_slice(&FADELOW_BYTES);
+        assert!(patch_with_hashes(&raw, &sha256_hex(&raw), &sha256_hex(&desired)).is_err());
+    }
+    #[test] fn rejects_non_pe_and_wrong_image_base() {
+        let mut raw=synthetic_pe();
+        raw[0x80] = 0x00;
+        assert!(pe_target_offset(&raw).is_err());
+        raw=synthetic_pe();
+        raw[0x98+28]=0x12;
+        assert!(pe_target_offset(&raw).is_err());
+    }
+    #[test] fn create_new_never_overwrites() {
+        let dir=fixture_dir();
+        let path=dir.join("existing.exe");
+        fs::write(&path,b"keep").unwrap();
+        let perms=fs::metadata(&path).unwrap().permissions();
+        assert!(write_new(&path,b"modified",&perms,&sha256_hex(b"modified")).is_err());
+        assert_eq!(fs::read(&path).unwrap(),b"keep");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn backup_and_swap_and_restore_synthetic_data() {
+        let dir=fixture_dir();
+        let exe=dir.join("SPVOODOO.EXE");
+        let input=synthetic_pe();
+        let fadelow=patch_fake(&input);
+        fs::write(&exe,&input).unwrap();
+        let perms=fs::metadata(&exe).unwrap().permissions();
+        let backup=backup_path(&exe).unwrap();
+        write_new(&backup,&input,&perms,&sha256_hex(&input)).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(),input);
+        replace_atomically(&exe,&fadelow,&perms,&sha256_hex(&fadelow)).unwrap();
+        assert_eq!(fs::read(&exe).unwrap(),fadelow);
+        replace_atomically(&exe,&input,&perms,&sha256_hex(&input)).unwrap();
+        assert_eq!(fs::read(&exe).unwrap(),input);
+        assert_eq!(fs::read(&backup).unwrap(),input);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn refusing_unknown_backup() {
+        let dir=fixture_dir();
+        let exe=dir.join("SPVOODOO.EXE");
+        fs::write(&exe,b"anything").unwrap();
+        fs::write(backup_path(&exe).unwrap(),b"corrupt").unwrap();
+        assert!(read_backup(&backup_path(&exe).unwrap()).is_err());
+        assert!(execute(Action::Status,&exe,None,false).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
