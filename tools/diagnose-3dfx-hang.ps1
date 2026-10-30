@@ -51,7 +51,7 @@ function Write-Report([string] $Message) {
     Write-Host $line
 }
 
-Write-Report "Scorched Planet — diagnostic de blocage 3dfx (fichiers originaux intacts)"
+Write-Report "Scorched Planet - diagnostic de blocage 3dfx (fichiers originaux intacts)"
 Write-Report ("Windows PowerShell : " + $PSVersionTable.PSVersion.ToString())
 Write-Report "SingleCore=$SingleCore CaptureDumps=$CaptureDumps IntervalSeconds=$IntervalSeconds"
 Write-Report "Attention : les rapports contiennent des chemins locaux ; les dumps peuvent contenir des donnees privees."
