@@ -32,6 +32,10 @@ HighQualityVideo=1
 
 Language 1 is the default for US and EN/ES/IT (Italian=4, Spanish=5); FR/DE defaults to French=2 (German=3). This example is not the FR/DE default.
 
+## Owner-validated CUE/BIN editions
+
+On 2026-10-30, the owner reported successful CUE/BIN installation and **no CD-required message** for both US 1.08 and FR/DE 1.06. The original source images are preserved. This is user-reported functional validation, not an exhaustive test of every mission or platform. EN/ES/IT CUE/BIN with the final console installer remains to be checked.
+
 ## US no-CD patch and safe upgrades
 
 The owner's fresh US 1.08 installation ran successfully through extraction,
