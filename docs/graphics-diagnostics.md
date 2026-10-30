@@ -10,42 +10,59 @@ The read-only Bash script reads the Linux process from `/proc`. It does not
 need to know `WINEPREFIX`, does not reconfigure nGlide, does not modify
 `SPVOODOO.EXE`, and never calls `wineserver -k`.
 
-Start the game normally (Wine, Lutris or the installed launcher), launch a
-mission, and while it is frozen run in another Linux terminal:
+### Capture without Alt+Tab (recommended)
+
+We observed another symptom on Wine/nGlide: after Alt+Tab, the game may
+drop from fullscreen to a 640x480 window and stop accepting input.
+This can be a separate focus/display-mode issue; do not confuse it
+with the mission-start freeze until it has been diagnosed.
+
+To avoid triggering it, **arm the monitor before starting the game**.
+Open a terminal **in the installed game's directory** and run:
 
 ```bash
-bash tools/diagnose-3dfx-hang-linux.sh
+bash ./diagnose-3dfx-hang-linux.sh --wait --delay 30 --interval 5
 ```
 
-Auto-detection searches for a Linux process whose `comm` equals
-`spvoodoo.exe` (case-insensitive). Some Wine launchers might show different
-Linux process names. To find the PID and supply it explicitly:
+The script waits for up to 120 seconds for the Linux process named
+`spvoodoo.exe`. Now launch the game normally with the same Wine prefix
+and nGlide settings (for example from Lutris). Start a mission without
+using Alt+Tab. The monitor waits 30 seconds after it finds the process,
+then takes snapshots five seconds apart. Change `--delay` as needed
+for the time it takes to reach the menu.
+
+If the game is **already running**, omit `--wait`, and use `--delay`
+to schedule the capture before making it fullscreen:
+
+```bash
+bash ./diagnose-3dfx-hang-linux.sh --delay 20
+```
+
+Automatic process detection uses the Linux `comm` name. If your Wine
+version uses another process name, find the Linux PID with:
 
 ```bash
 ps -eo pid,comm,args | grep -i '[s]pvoodoo'
-bash tools/diagnose-3dfx-hang-linux.sh --pid 12345
 ```
 
-Replace 12345 with the actual Linux PID. This is **not** the Windows PID
-reported by WineDbg. You may optionally provide `--game-dir '/path/to/game'`
-to generate SHA-256 hashes of the original game executable and local wrapper
-DLLs without copying them.
+Then pass `--pid 12345` with the actual PID. This is the **Linux**
+PID, not the PID reported by WineDbg.
 
-To capture the mission transition automatically without returning to a
-terminal at the moment of the freeze, run while still at the game menu:
-
-```bash
-bash tools/diagnose-3dfx-hang-linux.sh --delay 15 --interval 5
-```
-
-Then switch to the game and initiate the mission before the 15-second
-delay expires. Use the same nGlide settings in both tests.
-
-Default output directory:
+The **main log is written directly in the launch directory**:
 
 ```text
-~/.local/state/ScorchedPlanetFix/diagnostics/<timestamp>-pid<PID>-<scriptPID>/
+./ScorchedPlanetFix-3dfx-YYYYMMDD-HHMMSS-pidNNN-shellNNN.log
 ```
+
+Additional CSV-like text and TSV snapshots are saved in a distinct
+subdirectory with the same basename, with no overwrite of previous
+runs. This directory is created by the script; only the original game
+files are left untouched. To select a different details directory,
+use `--output`. The main log remains in the launch directory.
+
+Optionally set `--game-dir .` to include SHA-256 hashes for local
+`SPVOODOO.EXE`, `RWDLVOOD.DLL`, and Glide DLL files without copying
+their contents. The script never starts or changes Wine itself.
 
 The tool writes `summary.txt`, `process.txt`, thread/CPU snapshots,
 `thread-cpu-delta.tsv` (per-thread CPU ticks accrued during the interval)
