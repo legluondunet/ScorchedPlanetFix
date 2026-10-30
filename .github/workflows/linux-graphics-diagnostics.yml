@@ -1,0 +1,31 @@
+name: Linux Wine diagnostic smoke test
+
+on:
+  push:
+    branches: [research/3dfx-hang-diagnostics]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux-diagnostic:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Bash syntax
+        shell: bash
+        run: bash -n tools/diagnose-3dfx-hang-linux.sh
+      - name: Test process diagnostics with synthetic process (no commercial game)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sleep 30 &
+          target=$!
+          trap 'kill "$target" 2>/dev/null || true' EXIT
+          bash tools/diagnose-3dfx-hang-linux.sh --pid "$target" --interval 1 --output "$RUNNER_TEMP/scorchedplanet-linux-smoketest"
+          test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/summary.txt"
+          test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/snapshot-1-thread-ticks.tsv"
+          test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/snapshot-2-thread-ticks.tsv"
+          test -s "$RUNNER_TEMP/scorchedplanet-linux-smoketest/thread-cpu-delta.tsv"
