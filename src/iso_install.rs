@@ -733,6 +733,48 @@ mod tests {
         assert_eq!(expected.files.len(),4);
         assert!(expected.files.keys().all(|name|name==&name.to_ascii_lowercase()));
     }
+    #[test] fn ini_migration_deduplicates_controlled_keys_and_is_idempotent(){
+        let dir=std::env::temp_dir().join(format!("scorched-ini-dedupe-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        let ini=dir.join("splanet.ini");
+        fs::write(&ini,b"[scorch]\r\nvideo=c:\\old\\video\r\nvideo=other\r\nlanguage=1\r\nlanguage=5\r\nHighQualityVideo=0\r\nHighQualityVideo=1\r\nsettings=custom\r\ngamma=1.1\r\n").unwrap();
+        update_ini(&ini,4).unwrap();
+        let first=fs::read(&ini).unwrap();
+        let text=String::from_utf8_lossy(&first);
+        assert_eq!(text.matches("video=").count(),1);
+        assert_eq!(text.matches("language=").count(),1);
+        assert_eq!(text.matches("HighQualityVideo=").count(),1);
+        assert!(text.contains("video= video"));
+        assert!(text.contains("language=4"));
+        assert!(text.contains("settings=custom"));
+        assert!(text.contains("gamma=1.1"));
+        update_ini(&ini,4).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),first,"second migration must not rewrite settings");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(),1,"temporary INI must be removed");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn ini_migration_refuses_directory_target(){
+        let dir=std::env::temp_dir().join(format!("scorched-ini-dir-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("splanet.ini")).unwrap();
+        assert!(update_ini(&dir.join("splanet.ini"),1).unwrap_err().contains("regular file"));
+        assert!(dir.join("splanet.ini").is_dir());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(unix)]
+    #[test] fn ini_migration_refuses_symlink_to_user_file(){
+        use std::os::unix::fs::symlink;
+        let dir=std::env::temp_dir().join(format!("scorched-ini-symlink-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let user_file=dir.join("private.txt");
+        fs::write(&user_file,b"keep my content").unwrap();
+        symlink(&user_file,dir.join("splanet.ini")).unwrap();
+        assert!(update_ini(&dir.join("splanet.ini"),1).is_err());
+        assert_eq!(fs::read(&user_file).unwrap(),b"keep my content");
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test] fn creates_missing_ini_with_local_video_and_defaults(){
         let dir=std::env::temp_dir().join(format!("scorched-new-ini-test-{}",std::process::id()));
         fs::create_dir_all(&dir).unwrap();
