@@ -1,5 +1,14 @@
 # Scorched Planet 3dfx — native-resolution feasibility study
 
+> **PROJECT STATUS — PAUSED (2026-10-30):** The owner has explicitly
+> suspended all experimental native-resolution work. Keep this technical
+> analysis and the existing untested 800×600 experiment for possible
+> future reference; do **not** extend, test, distribute as a stable fix,
+> or merge resolution-related changes unless the owner resumes this
+> workstream. Current priority: a separate **Rust FadeLow patcher**
+> (PR #5) containing **no** graphics-resolution changes.
+
+
 Status: **read-only offline analysis, not a resolution patch** (2026-10-30).
 
 Goal: find the actual dimensions of the game render target and the interface
