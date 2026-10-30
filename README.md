@@ -1,6 +1,6 @@
 # ScorchedPlanetFix
 
-**Version 1.0.0 — Windows GUI ISO installer and FadeLow patcher for Scorched Planet (1996).**
+**Version 1.0.0 — Windows GUI ISO/CUE-BIN installer and FadeLow patcher for Scorched Planet (1996).**
 
 Rust native **Windows x64 (64-bit) only**, usable on Linux through a compatible 64-bit Wine environment.
 The patcher is 64-bit; the original Scorched Planet game remains 32-bit.
@@ -10,12 +10,25 @@ License: **GNU GPL-3.0-or-later**.
 ## How to use
 
 Put `ScorchedPlanetFix.exe` beside an existing `splanet`
-game directory, or a single supported original Windows 3dfx CD ISO.
-When an ISO is detected and `splanet` is absent, the program
+game directory, or **one** original 3dfx CD image as `.iso` or a
+`.cue` file with its referenced `.bin` file(s). For `CUE/BIN`,
+keep the `.cue` and referenced files together and select the **CUE**, not
+the BIN as a separate image. When an image is detected and `splanet`
+is absent, the program
 checks its structure, the exact original game executable and
 RenderWare DLL hashes, copies the `SPLANET/` game files and the `VOODOO/` 3dfx game components
 (with videos) into a staged `splanet` installation. The obsolete CD copies of
 `glide.dll`, `sst1init.dll` and `fxmemmap.vxd` are deliberately not installed.
+For `CUE/BIN`, the program reads the first supported data track and
+normalizes its 2048-byte sectors into a **temporary ISO** for the same
+hash-verified installer; no conversion utility, virtual CD mounting or
+extra software is required. The temporary ISO is deleted after installation.
+It handles `MODE1/2048`, `MODE1/2352`, and CD-ROM XA Form 1
+`MODE2/2352`, including a following audio track. Multi-data-track
+and unknown formats are rejected rather than guessed. Audio tracks
+are **not** installed as CD audio or made available as emulated tracks.
+For this approach, free space for the temporary data-track ISO is required.
+
 The patcher creates `splanet.ini` if absent (or updates an existing copy)
 to use local videos, enable high-quality video and select a language available
 on the detected edition. It preserves existing personal controller, gamma and
@@ -41,11 +54,11 @@ Its owner-tested **combined FadeLow + media-detection** result is
 It changes four FadeLow bytes at `0x48A6D` and two media-gate bytes at
 `0x34CBB`. This edition does not use the FadeLow-only candidate.
 
-**ISO verification limitation:** no trusted full-CD per-file reference
+**Image verification limitation:** no trusted full-CD per-file reference
 manifest is available yet. The tool checks required game files,
 structural validity, exact EXE/DLL identities and extracted hashes,
 but it cannot prove every data asset is identical to a retail master.
-The ISO workflow is experimental until tested with the owner's image.
+The ISO/CUE-BIN workflow is experimental until tested with the owner's image.
 
 ## Supported CD fingerprints
 
