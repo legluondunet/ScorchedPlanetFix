@@ -19,16 +19,16 @@ pub struct Report {
     pub executable:PathBuf,
 }
 fn regular_directory(path:&Path)->Result<(),String>{
-    let meta=fs::symlink_metadata(path).map_err(|e|format!("Dossier absent {} : {e}",path.display()))?;
+    let meta=fs::symlink_metadata(path).map_err(|e|format!("Directory missing {}: {e}",path.display()))?;
     if !meta.is_dir() || meta.file_type().is_symlink() {
-        return Err(format!("Dossier incorrect ou lien symbolique : {}",path.display()));
+        return Err(format!("Invalid directory or symlink: {}",path.display()));
     }
     Ok(())
 }
 fn regular_file(path:&Path)->Result<(),String>{
-    let meta=fs::symlink_metadata(path).map_err(|e|format!("Fichier absent {} : {e}",path.display()))?;
+    let meta=fs::symlink_metadata(path).map_err(|e|format!("File missing {}: {e}",path.display()))?;
     if !meta.is_file() || meta.file_type().is_symlink() {
-        return Err(format!("Fichier incorrect ou lien symbolique : {}",path.display()));
+        return Err(format!("Invalid file or symlink: {}",path.display()));
     }
     Ok(())
 }
@@ -36,42 +36,42 @@ fn resolve_case_fold(root:&Path,relative:&str)->Result<PathBuf,String>{
     let mut current=root.to_path_buf();
     for name in relative.split('/') {
         if name.is_empty() || name=="." || name==".." || !name.is_ascii() || name.contains(['\\',':']) {
-            return Err(format!("Chemin du manifeste invalide : {relative}"));
+            return Err(format!("Invalid manifest path: {relative}"));
         }
         regular_directory(&current)?;
         let mut found=Vec::new();
-        for entry in fs::read_dir(&current).map_err(|e|format!("Lecture {} : {e}",current.display()))?{
+        for entry in fs::read_dir(&current).map_err(|e|format!("Failed to read {}: {e}",current.display()))?{
             let entry=entry.map_err(|e|e.to_string())?;
             if entry.file_name().to_string_lossy().eq_ignore_ascii_case(name){
                 found.push(entry.path());
             }
         }
-        if found.len()!=1 {return Err(format!("Fichier absent ou ambigu : {relative}"));}
+        if found.len()!=1 {return Err(format!("File missing or ambiguous: {relative}"));}
         current=found.remove(0);
         let meta=fs::symlink_metadata(&current).map_err(|e|e.to_string())?;
-        if meta.file_type().is_symlink(){return Err(format!("Lien symbolique interdit : {}",current.display()));}
+        if meta.file_type().is_symlink(){return Err(format!("Symlink not allowed: {}",current.display()));}
     }
     regular_file(&current)?;
     Ok(current)
 }
 fn hash_file(path:&Path)->Result<(u64,String),String>{
     regular_file(path)?;
-    let mut file=File::open(path).map_err(|e|format!("Lecture {} : {e}",path.display()))?;
+    let mut file=File::open(path).map_err(|e|format!("Failed to read {}: {e}",path.display()))?;
     let mut hash=Sha256::new();
     let mut size=0u64;
     let mut buffer=[0u8;64*1024];
     loop {
         let n=file.read(&mut buffer).map_err(|e|e.to_string())?;
         if n==0 {break;}
-        size=size.checked_add(n as u64).ok_or("Taille du fichier excessive")?;
+        size=size.checked_add(n as u64).ok_or("File size too large")?;
         hash.update(&buffer[..n]);
     }
     Ok((size,format!("{:x}",hash.finalize())))
 }
 fn read_scorch_ini(path:&Path)->Result<(String,Option<u8>),String>{
     regular_file(path)?;
-    let bytes=fs::read(path).map_err(|e|format!("Lecture INI : {e}"))?;
-    if bytes.len()>256*1024{return Err("splanet.ini trop volumineux".into());}
+    let bytes=fs::read(path).map_err(|e|format!("Could not read INI: {e}"))?;
+    if bytes.len()>256*1024{return Err("splanet.ini is too large".into());}
     let mut section=false;
     let mut videos=None;
     let mut language=None;
@@ -85,23 +85,23 @@ fn read_scorch_ini(path:&Path)->Result<(String,Option<u8>),String>{
         let Some(position)=text.iter().position(|c|*c==b'=') else {continue};
         let (key,value)=text.split_at(position);
         let val=std::str::from_utf8(value[1..].trim_ascii())
-            .map_err(|_|"INI : valeur non ASCII pour paramètre requis")?;
+            .map_err(|_|"INI: non-ASCII value in required setting")?;
         if key.trim_ascii().eq_ignore_ascii_case(b"video"){
-            if videos.is_some() {return Err("INI : video défini plusieurs fois".into());}
+            if videos.is_some() {return Err("INI: video is defined more than once".into());}
             videos=Some(val.to_string());
         }else if key.trim_ascii().eq_ignore_ascii_case(b"language"){
-            if language.is_some() {return Err("INI : language défini plusieurs fois".into());}
-            language=Some(val.parse::<u8>().map_err(|_|"INI : langue incorrecte")?);
+            if language.is_some() {return Err("INI: language is defined more than once".into());}
+            language=Some(val.parse::<u8>().map_err(|_|"INI: invalid language code")?);
         }
     }
-    let video=videos.ok_or("INI : [scorch] video= manquant")?;
+    let video=videos.ok_or("INI: missing [scorch] video=")?;
     Ok((video,language))
 }
 fn allowed_language(label:&str,lang:u8)->bool{
     match label{
         "US 1.08"=>lang==1,
         "EN/ES/IT 1.06"=>matches!(lang,1|4|5),
-        "FR/DE 1.06 (FadeLow + contrôle CD)"=>matches!(lang,2|3),
+        "FR/DE 1.06 (FadeLow + CD check fix)"=>matches!(lang,2|3),
         _=>false
     }
 }
@@ -109,8 +109,8 @@ fn allowed_language(label:&str,lang:u8)->bool{
 pub fn profile_for_patched_exe(exe:&Path)->Result<scorched_planet_fix::FadeProfile,String>{
     let (_,hash)=hash_file(exe)?;
     let profile=profile_from_hash(&hash)
-        .ok_or_else(||format!("Exécutable inconnu (SHA-256 {hash})"))?;
-    if hash!=profile.patched_hash {return Err("Le fichier du jeu n'est pas encore corrigé".into());}
+        .ok_or_else(||format!("Unknown executable (SHA-256 {hash})"))?;
+    if hash!=profile.patched_hash {return Err("The game executable has not been patched yet".into());}
     Ok(profile)
 }
 /// Used only by installation/repair workflows, never by read-only
@@ -127,7 +127,7 @@ fn inspect_file(root:&Path, entry:&ReferenceFile)->Result<u64,String>{
     let path=resolve_case_fold(root,entry.path)?;
     let (size,digest)=hash_file(&path)?;
     if size!=entry.size || digest!=entry.sha256{
-        return Err(format!("Fichier du jeu altéré ou incompatible : {} (taille {}, SHA-256 {})",
+        return Err(format!("Altered or incompatible game file: {} (size {}, SHA-256 {})",
             entry.path,size,digest));
     }
     Ok(size)
@@ -140,28 +140,28 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
     let exe=scorched_planet_fix::find_installed_exe(folder)?;
     let (_,digest)=hash_file(&exe)?;
     let profile=profile_from_hash(&digest)
-        .ok_or_else(||format!("Exécutable non reconnu : SHA-256 {digest}"))?;
+        .ok_or_else(||format!("Unrecognized executable: SHA-256 {digest}"))?;
     if digest!=profile.patched_hash{
-        return Err(format!("Exécutable {} non corrigé. Lancez l'installation/--nogui pour appliquer le patch.",
+        return Err(format!("Executable {} is not patched. Run the installer/--nogui to apply the patch.",
             profile.label));
     }
     // A backup must match the exact edition: never blindly trust a .bak.
     // Construct backup from the file name to stay in its own directory.
-    let mut name=exe.file_name().ok_or("Nom d'exécutable absent")?.to_os_string();
+    let mut name=exe.file_name().ok_or("Missing executable filename")?.to_os_string();
     name.push(".bak");
     let backup=exe.with_file_name(name);
     let (_,backup_hash)=hash_file(&backup)?;
     if backup_hash!=profile.original_hash {
-        return Err(format!("Sauvegarde originale non conforme : {} (SHA-256 {backup_hash})",
+        return Err(format!("Original backup does not match expected file: {} (SHA-256 {backup_hash})",
             backup.display()));
     }
     let (video,language)=read_scorch_ini(&resolve_case_fold(folder,"splanet.ini")?)?;
     if !video.eq_ignore_ascii_case("video"){
-        return Err(format!("INI : video doit être relatif (video= video), valeur actuelle {video:?}. Corriger l'INI avant de lancer."));
+        return Err(format!("INI: video must be relative (video= video), currently {video:?}. Fix the INI before launching."));
     }
     if let Some(lang)=language {
         if !allowed_language(profile.label,lang){
-            return Err(format!("INI : language={lang} incompatible avec l'édition {}",profile.label));
+            return Err(format!("INI: language={lang} is not compatible with edition {}",profile.label));
         }
     }
     // SPLANETW.EXE is the obsolete software-renderer executable. All new
@@ -170,13 +170,13 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
     for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
         let item=item.map_err(|e|e.to_string())?;
         if item.file_name().to_string_lossy().eq_ignore_ascii_case("splanetw.exe"){
-            return Err("Fichier inutile splanetw.exe présent : relancer ScorchedPlanetFix.exe sans argument pour le supprimer si son empreinte correspond au CD original.".into());
+            return Err("Unused splanetw.exe is present: run ScorchedPlanetFix.exe without arguments to remove it if its checksum matches the original CD.".into());
         }
     }
     // nGlide is a runtime prerequisite: the check is read-only and never
     // downloads/installs the proprietary DLL.
     nglide::verify_local_glide(folder)?;
-    let data=manifest_for(profile.label).ok_or("Edition sans manifeste de vérification")?;
+    let data=manifest_for(profile.label).ok_or("Edition has no verification manifest")?;
     let mut total=0u64;
     for entry in data{
         total+=inspect_file(folder,entry)?;
@@ -200,7 +200,7 @@ pub fn launch_verified(folder:&Path,mut log:impl FnMut(&str))->Result<Child,Stri
     command.current_dir(folder);
     nglide::configure_process(&mut command,|message|log(message));
     command.spawn()
-        .map_err(|e|format!("Impossible de lancer {} : {e}",report.executable.display()))
+        .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
 #[cfg(test)]
 mod tests {
@@ -209,8 +209,8 @@ mod tests {
         for (edition,files,min) in [
             ("US 1.08",manifest_for("US 1.08").unwrap(),80usize),
             ("EN/ES/IT 1.06",manifest_for("EN/ES/IT 1.06").unwrap(),140),
-            ("FR/DE 1.06 (FadeLow + contrôle CD)",
-                manifest_for("FR/DE 1.06 (FadeLow + contrôle CD)").unwrap(),100)]{
+            ("FR/DE 1.06 (FadeLow + CD check fix)",
+                manifest_for("FR/DE 1.06 (FadeLow + CD check fix)").unwrap(),100)]{
             assert!(files.len()>min,"{edition}");
             assert!(files.iter().any(|x|x.path=="geometry.rwb"));
             assert!(files.iter().any(|x|x.path=="rwdlvood.dll"));
@@ -222,7 +222,7 @@ mod tests {
         assert!(allowed_language("US 1.08",1));
         assert!(allowed_language("EN/ES/IT 1.06",5));
         assert!(!allowed_language("EN/ES/IT 1.06",2));
-        assert!(allowed_language("FR/DE 1.06 (FadeLow + contrôle CD)",3));
+        assert!(allowed_language("FR/DE 1.06 (FadeLow + CD check fix)",3));
     }
     #[test] fn accepts_minimal_relative_video_ini(){
         let dir=std::env::temp_dir().join(format!("verify-ini-{}",std::process::id()));
