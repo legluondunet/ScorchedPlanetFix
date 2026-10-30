@@ -124,13 +124,17 @@ mod app {
             app
         }
         fn scan_start(&mut self) {
-            let image=match iso_install::find_image_and_install(&self.root){
-                Ok(image)=>image,
-                Err(e)=>{
-                    self.detect="Images ISO/CUE ambiguës ou incomplètes".into();
-                    self.stop_on_modal=true;
-                    self.info("Image du jeu non supportée",e,true);
-                    return;
+            // An existing installation takes priority over disc image discovery:
+            // multiple images cannot block the Launch button for local splanet.
+            let image=if self.install.exists() || self.install.is_symlink(){None}else{
+                match iso_install::find_image_and_install(&self.root){
+                    Ok(image)=>image,
+                    Err(e)=>{
+                        self.detect="Images ISO/CUE ambiguës ou incomplètes".into();
+                        self.stop_on_modal=true;
+                        self.info("Image du jeu non supportée",e,true);
+                        return;
+                    }
                 }
             };
             if self.install.is_symlink() {
