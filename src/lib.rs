@@ -17,6 +17,33 @@ pub const TARGET_FILE_OFFSET: usize = 0x489CD;
 pub const ORIGINAL_BYTES: [u8; 4] = [0x17, 0xB7, 0xD1, 0x38];
 pub const FADELOW_BYTES: [u8; 4] = [0xAC, 0xC5, 0x27, 0x37];
 
+/// Only exact owner-supplied and verified game binaries may be patched.
+/// US and EN/ES/IT have owner gameplay validation; FR/DE is still experimental.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FadeProfile {
+    pub label: &'static str,
+    pub original_hash: &'static str,
+    pub patched_hash: &'static str,
+    pub target_va: u32,
+    pub target_offset: usize,
+}
+pub const US_PROFILE: FadeProfile = FadeProfile {
+    label: "US 1.08", original_hash: ORIGINAL_SHA256,
+    patched_hash: FADELOW_SHA256, target_va: TARGET_VA, target_offset: TARGET_FILE_OFFSET,
+};
+pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
+    label: "EN/ES/IT 1.06",
+    original_hash: "9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f",
+    patched_hash: "dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc",
+    target_va: 0x0044_93AD, target_offset: 0x487AD,
+};
+pub const SUPPORTED_PROFILES: [FadeProfile; 2] = [US_PROFILE, EN_ES_IT_PROFILE];
+
+pub fn profile_from_hash(hash: &str) -> Option<FadeProfile> {
+    SUPPORTED_PROFILES.iter().copied().find(|profile|
+        profile.original_hash == hash || profile.patched_hash == hash)
+}
+
 type Result<T> = std::result::Result<T, String>;
 
 /// SHA-256, implemented here to keep release builds dependency-free and
@@ -99,6 +126,9 @@ fn u32_at(bytes: &[u8], pos: usize) -> Result<u32> {
 
 /// Locate the four threshold bytes through the actual PE32 section table.
 pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
+    pe_target_offset_for(data, US_PROFILE)
+}
+fn pe_target_offset_for(data: &[u8], profile: FadeProfile) -> Result<usize> {
     if data.len() < 0x100 || data.get(..2) != Some(b"MZ") {
         return Err("Not a DOS/PE executable (MZ missing)".into());
     }
@@ -118,7 +148,8 @@ pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
     if image_base != 0x0040_0000 {
         return Err(format!("Unexpected image base 0x{image_base:x}"));
     }
-    let rva = TARGET_VA - image_base;
+    let rva = profile.target_va.checked_sub(image_base)
+        .ok_or("Fade VA precedes PE image base")?;
     for index in 0..n {
         let p = sections + index * 40;
         if data.get(p..p + 5) != Some(&b".text"[..]) {
@@ -136,7 +167,7 @@ pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
         {
             let offset = (raw_ptr as usize) + (rva - section_rva) as usize;
             if data.get(offset..offset + 4).is_some() {
-                if offset != TARGET_FILE_OFFSET {
+                if offset != profile.target_offset {
                     return Err("Target file offset differs from verified retail EXE".into());
                 }
                 return Ok(offset);
@@ -148,11 +179,11 @@ pub fn pe_target_offset(data: &[u8]) -> Result<usize> {
 
 /// Only patches data matching both the exact source SHA and opcode literal.
 /// Also independently verifies full patched-file SHA-256 and length.
-fn patch_with_hashes(data: &[u8], source: &str, target: &str) -> Result<Vec<u8>> {
+fn patch_with_hashes_for(data: &[u8], source: &str, target: &str, profile: FadeProfile) -> Result<Vec<u8>> {
     if sha256_hex(data) != source {
         return Err(format!("Unsupported original executable (SHA-256: {})", sha256_hex(data)));
     }
-    let offset = pe_target_offset(data)?;
+    let offset = pe_target_offset_for(data, profile)?;
     if data[offset..offset + 4] != ORIGINAL_BYTES {
         return Err("Fade threshold instruction bytes differ from reference".into());
     }
@@ -164,7 +195,11 @@ fn patch_with_hashes(data: &[u8], source: &str, target: &str) -> Result<Vec<u8>>
     Ok(changed)
 }
 pub fn make_fadelow(data: &[u8]) -> Result<Vec<u8>> {
-    patch_with_hashes(data, ORIGINAL_SHA256, FADELOW_SHA256)
+    let hash = sha256_hex(data);
+    let profile = SUPPORTED_PROFILES.iter().copied()
+        .find(|candidate| candidate.original_hash == hash)
+        .ok_or_else(|| format!("Unsupported original FadeLow edition (SHA-256: {hash})"))?;
+    patch_with_hashes_for(data, profile.original_hash, profile.patched_hash, profile)
 }
 
 fn read_regular(path: &Path) -> Result<Vec<u8>> {
@@ -176,15 +211,15 @@ fn read_regular(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn read_backup(path: &Path) -> Result<Option<Vec<u8>>> {
+fn read_backup(path: &Path, expected_hash: Option<&str>) -> Result<Option<Vec<u8>>> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
             if !meta.is_file() || meta.file_type().is_symlink() {
                 return Err(format!("Backup is not a regular file: {}", path.display()));
             }
             let data = read_regular(path)?;
-            if sha256_hex(&data) != ORIGINAL_SHA256 {
-                return Err(format!("Backup exists but is NOT the verified original: {}", path.display()));
+            if Some(sha256_hex(&data).as_str()) != expected_hash {
+                return Err(format!("Backup does not match this exact original edition: {}", path.display()));
             }
             Ok(Some(data))
         }
@@ -261,57 +296,65 @@ pub enum Action { Status, Copy, Apply, Restore }
 pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: bool) -> Result<String> {
     let source = read_regular(exe)?;
     let hash = sha256_hex(&source);
+    let profile = profile_from_hash(&hash);
     let backup = backup_path(exe)?;
-    let backed = read_backup(&backup)?;
+    // Even unknown EXEs must not be allowed to use an unrelated existing backup.
+    let backed = read_backup(&backup, profile.map(|p| p.original_hash))?;
     let perms = fs::symlink_metadata(exe).map_err(|e| e.to_string())?.permissions();
 
     match action {
         Action::Status => {
-            let state = if hash == ORIGINAL_SHA256 {"ORIGINAL"}
-                else if hash == FADELOW_SHA256 {"FADELOW"}
-                else {"UNKNOWN/UNSUPPORTED"};
+            let state = match profile {
+                Some(p) if hash == p.original_hash => format!("ORIGINAL {}", p.label),
+                Some(p) if hash == p.patched_hash => format!("FADELOW {}", p.label),
+                _ => "UNKNOWN/UNSUPPORTED".into(),
+            };
             Ok(format!("Executable: {state}\nSHA-256: {hash}\nBackup: {} ({})",
                 if backed.is_some() {"VERIFIED ORIGINAL"} else {"ABSENT"},
                 backup.display()))
         }
         Action::Copy => {
             let destination = output.ok_or("copy requires --output FILE")?;
-            // create_new protects existing files and any same-file path, too.
-            let patch = make_fadelow(&source)?;
-            write_new(destination, &patch, &perms, FADELOW_SHA256)?;
-            Ok(format!("FadeLow copy created: {}\nSHA-256: {}\nOriginal executable unchanged.",
-                destination.display(), FADELOW_SHA256))
+            let p = profile.ok_or("Unsupported FadeLow edition")?;
+            if hash != p.original_hash { return Err("Expected original unpatched EXE".into()); }
+            let patch = patch_with_hashes_for(&source, p.original_hash, p.patched_hash, p)?;
+            write_new(destination, &patch, &perms, p.patched_hash)?;
+            Ok(format!("FadeLow {} copy created: {}\nSHA-256: {}\nOriginal unchanged.",
+                p.label, destination.display(), p.patched_hash))
         }
         Action::Apply => {
             if !confirmed { return Err("apply requires explicit --yes".into()); }
-            if hash == FADELOW_SHA256 {
+            let p = profile.ok_or("Unsupported FadeLow edition")?;
+            if hash == p.patched_hash {
                 if backed.is_none() { return Err("Already patched but verified original backup is missing".into()); }
-                return Ok("Already patched; verified backup exists. No changes.".into());
+                return Ok(format!("FadeLow {} already patched; verified backup exists.",p.label));
             }
-            let patch = make_fadelow(&source)?;
+            let patch = patch_with_hashes_for(&source, p.original_hash, p.patched_hash, p)?;
             if backed.is_none() {
-                write_new(&backup, &source, &perms, ORIGINAL_SHA256)?;
+                write_new(&backup, &source, &perms, p.original_hash)?;
             }
-            if sha256_hex(&read_regular(exe)?) != ORIGINAL_SHA256 {
+            if sha256_hex(&read_regular(exe)?) != p.original_hash {
                 return Err("EXE modified before replacement; refusing".into());
             }
-            replace_atomically(exe, &patch, &perms, FADELOW_SHA256)?;
-            Ok(format!("FadeLow applied. Verified original backup: {}\nUse restore --yes to undo.", backup.display()))
+            replace_atomically(exe, &patch, &perms, p.patched_hash)?;
+            Ok(format!("FadeLow {} applied. Verified original backup: {}\nUse restore --yes to undo.",
+                p.label, backup.display()))
         }
         Action::Restore => {
             if !confirmed { return Err("restore requires explicit --yes".into()); }
+            let p = profile.ok_or("Unsupported FadeLow edition")?;
             let original = backed.ok_or("Missing verified original backup; restore refused")?;
-            if hash == ORIGINAL_SHA256 {
-                return Ok("Original already restored. Backup preserved.".into());
+            if hash == p.original_hash {
+                return Ok(format!("Original {} already restored. Backup preserved.",p.label));
             }
-            if hash != FADELOW_SHA256 {
+            if hash != p.patched_hash {
                 return Err("Unsupported installed EXE; refusing to overwrite".into());
             }
-            if sha256_hex(&read_regular(exe)?) != FADELOW_SHA256 {
+            if sha256_hex(&read_regular(exe)?) != p.patched_hash {
                 return Err("EXE modified before restoration; refusing".into());
             }
-            replace_atomically(exe, &original, &perms, ORIGINAL_SHA256)?;
-            Ok(format!("Original EXE restored. Verified backup preserved at {}", backup.display()))
+            replace_atomically(exe, &original, &perms, p.original_hash)?;
+            Ok(format!("Original {} restored. Verified backup preserved at {}",p.label,backup.display()))
         }
     }
 }
@@ -349,9 +392,25 @@ mod tests {
     fn patch_fake(data: &[u8]) -> Vec<u8> {
         let mut expected = data.to_vec();
         expected[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET + 4].copy_from_slice(&FADELOW_BYTES);
-        patch_with_hashes(data, &sha256_hex(data), &sha256_hex(&expected)).unwrap()
+        patch_with_hashes_for(data, &sha256_hex(data), &sha256_hex(&expected), US_PROFILE).unwrap()
     }
 
+    #[test] fn only_validated_profiles_are_eligible() {
+        assert_eq!(profile_from_hash(ORIGINAL_SHA256),Some(US_PROFILE));
+        assert_eq!(profile_from_hash(FADELOW_SHA256),Some(US_PROFILE));
+        assert_eq!(profile_from_hash(EN_ES_IT_PROFILE.original_hash),Some(EN_ES_IT_PROFILE));
+        assert_eq!(profile_from_hash(EN_ES_IT_PROFILE.patched_hash),Some(EN_ES_IT_PROFILE));
+        assert!(profile_from_hash("eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72").is_none());
+    }
+    #[test] fn european_pe_offset_is_edition_specific() {
+        let mut data=synthetic_pe();
+        data[EN_ES_IT_PROFILE.target_offset..EN_ES_IT_PROFILE.target_offset+4]
+            .copy_from_slice(&ORIGINAL_BYTES);
+        assert_eq!(pe_target_offset_for(&data, EN_ES_IT_PROFILE).unwrap(),
+            EN_ES_IT_PROFILE.target_offset);
+        assert_eq!(pe_target_offset_for(&data, US_PROFILE).unwrap(),TARGET_FILE_OFFSET);
+        assert!(pe_target_offset_for(&data,FadeProfile{target_offset:0x12345,..EN_ES_IT_PROFILE}).is_err());
+    }
     #[test] fn sha256_standard_vectors() {
         assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
         assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
@@ -372,11 +431,11 @@ mod tests {
     }
     #[test] fn rejects_wrong_source_hash_and_original_bytes() {
         let mut raw = synthetic_pe();
-        assert!(patch_with_hashes(&raw, ORIGINAL_SHA256, FADELOW_SHA256).is_err());
+        assert!(patch_with_hashes_for(&raw, ORIGINAL_SHA256, FADELOW_SHA256, US_PROFILE).is_err());
         raw[TARGET_FILE_OFFSET] = 0x90;
         let mut desired=raw.clone();
         desired[TARGET_FILE_OFFSET..TARGET_FILE_OFFSET+4].copy_from_slice(&FADELOW_BYTES);
-        assert!(patch_with_hashes(&raw, &sha256_hex(&raw), &sha256_hex(&desired)).is_err());
+        assert!(patch_with_hashes_for(&raw, &sha256_hex(&raw), &sha256_hex(&desired), US_PROFILE).is_err());
     }
     #[test] fn rejects_non_pe_and_wrong_image_base() {
         let mut raw=synthetic_pe();
@@ -417,7 +476,7 @@ mod tests {
         let exe=dir.join("SPVOODOO.EXE");
         fs::write(&exe,b"anything").unwrap();
         fs::write(backup_path(&exe).unwrap(),b"corrupt").unwrap();
-        assert!(read_backup(&backup_path(&exe).unwrap()).is_err());
+        assert!(read_backup(&backup_path(&exe).unwrap(),None).is_err());
         assert!(execute(Action::Status,&exe,None,false).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
