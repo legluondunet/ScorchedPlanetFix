@@ -1,6 +1,6 @@
 # European FadeLow static research — two Scorched Planet 3dfx editions
 
-Status: **exact-original static analysis confirmed; proposed binary fixes are EXPERIMENTAL, not user-validated in gameplay**. 2026-10-30.
+Status (2026-10-30): **EN/ES/IT FadeLow prototype user-validated in gameplay**; the owner reports "le patch fonctionne". **FR/DE is still experimental and has not been gameplay-validated.** This report does not imply all missions, cinematics, or both wrappers have been tested.
 
 This analysis used the two owner-supplied original executables, without modifying them, and compares the palette-fade mechanism with the previously validated US FadeLow 4-byte patch. No original or patched commercial executable is stored in this repository.
 
@@ -26,11 +26,27 @@ Both supplied European files are PE32 i386, ImageBase `0x00400000`, Windows GUI 
 
 ## Release gate and testing
 
-- The *shipping* Windows x64 Rust GUI must **not enable FadeLow for either European executable yet**. Only the previously user-validated US exact hashes are patchable.
+- The Windows x64 Rust GUI now permits FadeLow for **US and EN/ES/IT only**, protected by exact original/patched hashes, verified per-edition backup and restore. **FR/DE remains disabled**, pending a game test.
 - Trial binaries are separate private output files, supplied only to the original owner via this conversation. **Do not add original or modified commercial EXEs to GitHub, CI, or a public release**.
 - Test using an isolated copy of each installed edition, keeping its original `SPVOODOO.EXE` untouched. Launch the alternate-name trial EXE via Lutris/Wine or Windows, repeat the previous Go/mission fade scenario and verify menu, mission transitions, playback, input and audio. Revert simply by selecting the original EXE again.
-- Only after the owner's positive gameplay validation should the project consider adding these two exact-hash variants to the Rust production patch/restore paths. Existing backup, overwrite protection, version checks and idempotence must be preserved. Until then the GUI remains deliberately nonpatching for European builds.
+- Owner validation received for EN/ES/IT on 2026-10-30: the privately supplied four-byte test copy works in the game. That edition is eligible for Rust production patch/restore, but the new Rust GUI/installer itself still requires a separate end-to-end test. FR/DE is not eligible until its own gameplay test passes.
 
 No modification to `main`; research and proposed changes are kept in draft PR #5.
 
 legluondunet assisted by ChatGPT (OpenAI).
+
+## Configuration learned from successful EN/ES/IT test (2026-10-30)
+
+The owner extracted the CD, copied `VOODOO` game files into `SPLANET` while excluding `glide.dll`, and created `splanet.ini`. Required configuration in the tested environment:
+
+- `[scorch]` `video=<absolute path to local splanet\\video>`
+- `language=4` (**Italian**) in the owner's example
+- `HighQualityVideo=1`
+
+We independently inspected the original European PE32 language-resource pointer table and x86 lookup indexed from `base + 4 * language`: `1=english.rez`, `2=french.rez`, `3=german.rez`, `4=italian.rez`, `5=spanish.rez`; index zero is null. For EN/ES/IT, only 1, 4 and 5 are actually present on the CD. For FR/DE, only 2 and 3 are present. Avoid offering missing language resources in the GUI.
+
+The owner-supplied INI also contains `keymap`, `gamma`, `joystick`, `settings`, and `name`. Whether all these are required for first launch is **not established**. The installer supplies the already established fallback `settings` and generic player name when absent; when they exist, it leaves them untouched. `keymap`, `gamma`, and `joystick` are not fabricated or reset. The user-specific absolute path, name and keymap are deliberately not copied into this public repository.
+
+The installation workflow explicitly omits obsolete original 3dfx hardware drivers `glide.dll`, `sst1init.dll`, and `fxmemmap.vxd`, rather than shipping or installing historic drivers. An external modern Glide implementation remains necessary.
+
+**Confidence boundary:** the owner's original EN/ES/IT installation was tested in-game. The fully automated new installer, GUI language selection and patch/restore integration remain subject to CI and owner tests.
