@@ -215,14 +215,15 @@ impl SetupApp {
 }
 
 impl eframe::App for SetupApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
         self.update_worker();
         if self.stage == Stage::Installing {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
-        self.refresh_artwork(ctx);
+        self.refresh_artwork(&ctx);
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             ui.add_space(10.0);
             ui.heading("SCORCHED PLANET");
             ui.label(self.tr(
