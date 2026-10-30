@@ -11,8 +11,10 @@ Usage: diagnose-3dfx-hang-linux.sh [--pid LINUX_PID] [--game-dir PATH]
 By default, launch SPVOODOO.EXE in Wine first, then run this script.
 With --wait, start the script BEFORE the game, then launch the game normally.
 This avoids using Alt+Tab once the game enters fullscreen.
-No WINEPREFIX argument is required: it inspects the running Linux process.
+Optional WINEPREFIX environment variable identifies the intended Wine prefix.
+The tool compares it with the process WINEPREFIX when available; no Wine launch.
 --pid: specify Linux PID if spvoodoo.exe is not detected automatically
+WINEPREFIX=/path/to/prefix: optional process matching and logging
 --game-dir: optionally hash the game's original EXE and local Glide DLLs
 --interval: seconds between snapshots (default 5, range 1-60)
 --delay: seconds after process detection before the first snapshot (0-600)
@@ -37,6 +39,28 @@ delay=0
 out=""
 with_gdb=0
 wait_for_game=0
+expected_prefix=""
+observed_prefix=""
+
+# The user's WINEPREFIX is optional. It is a selector, not a command to
+# launch a second Wine instance. Do not bake any private machine paths in.
+if [[ -n "${WINEPREFIX:-}" ]]; then
+  [[ -d "$WINEPREFIX" ]] || die "Le WINEPREFIX indique n'existe pas : $WINEPREFIX"
+  expected_prefix="$(realpath -- "$WINEPREFIX")"
+fi
+
+# Read just the WINEPREFIX entry from a process environment (NUL-delimited).
+# We intentionally do not log or store other environment entries.
+read_process_prefix() {
+  local item
+  [[ -r "/proc/$1/environ" ]] || return 1
+  while IFS= read -r -d '' item; do
+    case "$item" in
+      WINEPREFIX=*) printf '%s\n' "${item#WINEPREFIX=}"; return 0 ;;
+    esac
+  done < "/proc/$1/environ"
+  return 1
+}
 
 while (($# > 0)); do
   case "$1" in
@@ -71,6 +95,24 @@ if [[ -z "$pid" ]]; then
   candidates=()
   for ((attempt=0; attempt<=120; attempt++)); do
     mapfile -t candidates < <(ps -eo pid=,comm= | awk 'tolower($2) == "spvoodoo.exe" {print $1}')
+    if [[ -n "$expected_prefix" ]]; then
+      eligible=()
+      unknown=()
+      for candidate in "${candidates[@]}"; do
+        seen="$(read_process_prefix "$candidate" 2>/dev/null || true)"
+        if [[ -z "$seen" ]]; then
+          unknown+=("$candidate")
+        elif [[ "$(realpath -m -- "$seen")" == "$expected_prefix" ]]; then
+          eligible+=("$candidate")
+        fi
+      done
+      # Exact matches take priority. Do not silently accept a known mismatch.
+      if (("${#eligible[@]}" > 0)); then
+        candidates=("${eligible[@]}")
+      else
+        candidates=("${unknown[@]}")
+      fi
+    fi
     if (("${#candidates[@]}" > 0)) || (( !wait_for_game || attempt == 120 )); then
       break
     fi
@@ -87,6 +129,14 @@ fi
 [[ "$pid" =~ ^[0-9]+$ ]] || die "PID Linux invalide : $pid"
 [[ -d "/proc/$pid/task" ]] || die "Processus $pid introuvable"
 kill -0 "$pid" 2>/dev/null || die "Pas d'acces au processus $pid"
+
+if [[ -n "$expected_prefix" ]]; then
+  observed_prefix="$(read_process_prefix "$pid" 2>/dev/null || true)"
+  if [[ -n "$observed_prefix" ]]; then
+    [[ "$(realpath -m -- "$observed_prefix")" == "$expected_prefix" ]] ||
+      die "Le PID $pid appartient a un autre prefixe Wine : $observed_prefix"
+  fi
+fi
 
 if [[ -n "$game_dir" ]]; then
   [[ -d "$game_dir" ]] || die "Dossier du jeu introuvable : $game_dir"
@@ -107,6 +157,14 @@ out="$(realpath -- "$out")"
 log "Diagnostic Scorched Planet / Wine / nGlide"
 log "Fichier de log : $log_file"
 log "Linux PID=$pid interval=${interval}s delay=${delay}s GDB=$with_gdb"
+if [[ -n "$expected_prefix" ]]; then
+  log "WINEPREFIX demande=$expected_prefix"
+  if [[ -n "$observed_prefix" ]]; then
+    log "WINEPREFIX processus confirme=$(realpath -m -- "$observed_prefix")"
+  else
+    log "WINEPREFIX processus non lisible ou non exporte : appartenance non verifiee"
+  fi
+fi
 log "Les fichiers du jeu et le prefixe Wine ne seront pas modifies."
 log "Les rapports contiennent des chemins locaux : relis-les avant de les partager."
 log "CLK_TCK=$(getconf CLK_TCK 2>/dev/null || printf '?')"
