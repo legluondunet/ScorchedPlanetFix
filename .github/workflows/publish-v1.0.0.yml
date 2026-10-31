@@ -1,0 +1,120 @@
+name: Publish ScorchedPlanetFix v1.0.0
+
+# One-shot release when this workflow first reaches protected main.
+# workflow_dispatch permits a manual retry if a tag was created but the build failed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v1.0.0.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scorchedplanetfix-v1.0.0-publication
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'legluondunet/ScorchedPlanetFix'
+    name: Verify tag, build Windows x64, publish ZIP
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: v1.0.0
+      ARCHIVE: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+    steps:
+      - name: Checkout protected main at the publication commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit and reject an already-published release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA) { throw 'Unexpected release commit' }
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw 'v1.0.0 release already exists; refusing to overwrite it' }
+          Write-Host "Selected release commit: $head"
+      - name: Create or check tag and check out tagged code
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $existing = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $tag = $existing | ConvertFrom-Json
+            if ($tag.object.type -cne 'commit' -or $tag.object.sha -cne $env:GITHUB_SHA) { throw 'Existing tag points to a different commit' }
+          } else {
+            gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:GITHUB_SHA" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create release tag' }
+          }
+          git fetch origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch tag' }
+          git checkout --detach "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check out tag' }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $env:GITHUB_SHA) { throw 'Tagged source commit mismatch' }
+          Write-Host "Building exactly tag $env:RELEASE_TAG ($actual)"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare Windows x64 toolchain
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Test tagged sources using pinned dependencies
+        run: cargo test --locked --target x86_64-pc-windows-msvc --all-targets
+      - name: Build tagged Windows x64 executable
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
+      - name: Validate PE console, ZIP contents and SHA-256
+        shell: pwsh
+        run: |
+          $exe = 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe'
+          if (!(Test-Path -PathType Leaf $exe)) { throw 'Missing executable' }
+          $binary = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          $offset = [BitConverter]::ToInt32($binary, 0x3c)
+          if ($offset -lt 0 -or $offset + 96 -gt $binary.Length) { throw 'Invalid PE header' }
+          if ([BitConverter]::ToUInt16($binary, $offset + 4) -ne 0x8664) { throw 'Expected AMD64 PE' }
+          if ([BitConverter]::ToUInt16($binary, $offset + 24) -ne 0x20b) { throw 'Expected PE32+' }
+          if ([BitConverter]::ToUInt16($binary, $offset + 92) -ne 3) { throw 'Expected Windows console subsystem' }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $exe dist/ScorchedPlanetFix.exe
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item README.md dist/README.md
+          $exeHash = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$exeHash  ScorchedPlanetFix.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path dist/* -DestinationPath $env:ARCHIVE
+          Expand-Archive -Path $env:ARCHIVE -DestinationPath dist-verify
+          $expected = @('ScorchedPlanetFix.exe', 'LICENSE.txt', 'README.md', 'SHA256SUMS.txt')
+          $files = @(Get-ChildItem dist-verify -File)
+          if ($files.Count -ne $expected.Count) { throw 'Release ZIP has unexpected files' }
+          foreach ($name in $expected) {
+            if (!(Test-Path -PathType Leaf (Join-Path dist-verify $name))) { throw "Release ZIP is missing $name" }
+          }
+          $manifest = (Get-Content dist-verify/SHA256SUMS.txt -Raw).Trim()
+          if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe$') { throw 'Invalid executable checksum manifest' }
+          $packedHash = (Get-FileHash dist-verify/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($manifest.Substring(0,64) -cne $packedHash) { throw 'Packaged executable SHA-256 mismatch' }
+          $zipHash = (Get-FileHash $env:ARCHIVE -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  $env:ARCHIVE" | Set-Content "$env:ARCHIVE.sha256" -Encoding ascii
+          $notes = Get-Content docs/release-notes-v1.0.0.md -Raw
+          $notes = $notes.Replace('(../README.md)', '(https://github.com/legluondunet/ScorchedPlanetFix/blob/v1.0.0/README.md)')
+          $notes += [Environment]::NewLine + [Environment]::NewLine + '### Verified v1.0.0 checksums' + [Environment]::NewLine + 'ZIP SHA-256: ' + $zipHash + [Environment]::NewLine + 'EXE SHA-256: ' + $exeHash
+          $notes | Set-Content release-notes-published.md -Encoding utf8
+          Write-Host "Release ZIP SHA-256: $zipHash"
+          Write-Host "Executable SHA-256: $exeHash"
+      - name: Publish GitHub Release with the checked ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create $env:RELEASE_TAG $env:ARCHIVE "$env:ARCHIVE.sha256" --repo $env:GITHUB_REPOSITORY --title 'ScorchedPlanetFix v1.0.0' --notes-file release-notes-published.md --verify-tag --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
+          $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,assets,url | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.isDraft -or $release.tagName -cne $env:RELEASE_TAG) { throw 'Published release verification failed' }
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($name in @($env:ARCHIVE, "$env:ARCHIVE.sha256")) {
+            if ($assetNames -cnotcontains $name) { throw "Published release missing $name" }
+          }
+          Write-Host "Published $($release.url)"

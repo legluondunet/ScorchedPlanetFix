@@ -32,9 +32,9 @@ Edits are strictly tied to SHA-256 fingerprints of the original executable and c
 
 ### 1. Get ScorchedPlanetFix
 
-Until the first GitHub Release is published, obtain the Windows x64 ZIP from the [GitHub Actions build artifacts](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml). Select a successful workflow run and download its artifact.
+Download the **[ScorchedPlanetFix v1.0.0 Windows x64 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.0.0)** and extract `ScorchedPlanetFix-v1.0.0-Windows-x64.zip`.
 
-> GitHub Releases are **not yet published**. Workflow artifacts expire and are not permanent downloads.
+> The release includes a separate `.zip.sha256` checksum file. Verify your downloaded ZIP against it before extracting. GitHub Actions artifacts are development builds, not permanent release downloads.
 
 ### 2. Provide the disc image and nGlide
 
