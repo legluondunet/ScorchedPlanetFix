@@ -72,7 +72,17 @@ pub const FR_DE_PROFILE: FadeProfile = FadeProfile {
     target_va: 0x0044_966D, target_offset: 0x48A6D,
     media_gate: Some(MediaGate {va: 0x0043_58BB, file_offset: 0x34CBB}),
 };
-pub const SUPPORTED_PROFILES: [FadeProfile; 3] = [US_PROFILE, EN_ES_IT_PROFILE, FR_DE_PROFILE];
+/// Alternate FR/DE CD image submitted by the owner (2026-10-31).
+/// The six-byte change is verified against the exact original PE layout and
+/// digest. Runtime gameplay validation is pending; never patch unknown EXEs.
+pub const FR_DE_ALT_PROFILE: FadeProfile = FadeProfile {
+    label: "FR/DE 1.06 (alternate CD executable)",
+    original_hash: "f709021bf45c3b1d13cc89df1c987bef0260edeab1e804e74507da296ac81362",
+    patched_hash: "8bf4a328f403502495d40f9b1e8c32767b7386efddbf90d7562167f5c8267454",
+    target_va: 0x0044_93AD, target_offset: 0x487AD,
+    media_gate: Some(MediaGate {va: 0x0043_562B, file_offset: 0x34A2B}),
+};
+pub const SUPPORTED_PROFILES: [FadeProfile; 4] = [US_PROFILE, EN_ES_IT_PROFILE, FR_DE_PROFILE, FR_DE_ALT_PROFILE];
 
 fn legacy_fadelow_hash(profile: FadeProfile) -> Option<&'static str> {
     if profile.original_hash == ORIGINAL_SHA256 {
@@ -558,6 +568,30 @@ mod tests {
         raw[0x34A2B]=0x90;
         assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),
             EN_ES_IT_PROFILE).is_err());
+    }
+    #[test] fn alternate_fr_de_cd_requires_own_hash_and_exact_six_byte_sites(){
+        let variant=FR_DE_ALT_PROFILE;
+        assert_eq!(profile_from_hash(variant.original_hash),Some(variant));
+        assert_eq!(profile_from_hash(variant.patched_hash),Some(variant));
+        assert_ne!(variant.original_hash,FR_DE_PROFILE.original_hash);
+        assert_eq!(variant.target_va,EN_ES_IT_PROFILE.target_va);
+        assert_eq!(variant.target_offset,EN_ES_IT_PROFILE.target_offset);
+        assert_eq!(variant.media_gate,EN_ES_IT_PROFILE.media_gate);
+        // CD's PE32 has original bytes 17 b7 d1 38 and 33 c0 at these
+        // verified VA-to-file offsets. No third-party binary is embedded.
+        let mut raw=synthetic_pe();
+        raw[variant.target_offset..variant.target_offset+4].copy_from_slice(&ORIGINAL_BYTES);
+        raw[0x34A2B..0x34A2D].copy_from_slice(&MEDIA_GATE_ORIGINAL);
+        let mut expected=raw.clone();
+        expected[variant.target_offset..variant.target_offset+4].copy_from_slice(&FADELOW_BYTES);
+        expected[0x34A2B..0x34A2D].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+        let modified=patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),variant)
+            .expect("six-byte variant patch");
+        assert_eq!(modified,expected);
+        assert_eq!(modified.iter().zip(raw.iter()).filter(|(a,b)|a!=b).count(),6);
+        assert!(patch_with_hashes_for(&raw,FR_DE_PROFILE.original_hash,FR_DE_PROFILE.patched_hash,variant).is_err());
+        raw[0x34A2B]=0x90;
+        assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&expected),variant).is_err());
     }
     #[test] fn legacy_en_es_it_fadelow_can_only_be_upgraded_from_verified_original(){
         assert_eq!(legacy_fadelow_hash(EN_ES_IT_PROFILE),Some(EN_ES_IT_FADELOW_SHA256));

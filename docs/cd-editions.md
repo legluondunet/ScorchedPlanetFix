@@ -1,18 +1,37 @@
 # Scorched Planet — CD edition fingerprints
 
-Source: owner-supplied file inventories created from three distinct original-media file trees, recorded 2026-10-30. These are **reference fingerprints**, not independently authenticated publisher retail-master manifests. They contain file names, byte sizes and hashes, but no proprietary binaries or game assets.
+Source: owner-supplied file inventories from three original-media trees (2026-10-30) and one alternate FR/DE ISO (2026-10-31). These are **reference fingerprints**, not independently authenticated publisher retail-master manifests. They contain file names, byte sizes and hashes, but no proprietary binaries or game assets.
 
 | Edition | `autorun.inf` InstallKey suffix | Files | Directories | Total file bytes | SMK files | `VOODOO/SPVOODOO.EXE` (SHA-256) | `SPLANET/GEOMETRY.RWB` (SHA-256) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
 | US | 1.08 | 492 | 34 | 495706103 | 58 | `fc1374b82b423a9836a9dda496da9960967fd75c3d98c5a0ef39d9fa8be0f80a` | `85e153739a5c43e514e2a8146d0cdfccb2c998d73e1494cfd45e1aa05f11531e` |
 | EN/ES/IT | 1.06 | 576 | 41 | 656149792 | 116 | `9ab6442553d055a14273ee0e3c5a912986662dc0a3cc8512ac716879b5068e5f` | `29b3d8f87eed27ca933b81231b84f7e406506b498e5fc74bfee52f5b1004fb1b` |
 | FR/DE | 1.06 | 576 | 42 | 597319505 | 87 | `eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72` | `a2dc1882d66f0d7607a955c8bf9ad28282c3d1d08ca0675a90ca93ecd20f6c69` |
+| FR/DE (alternate ISO, **test candidate**) | 1.06 | 576 | 42 | 597314385 | 87 | `f709021bf45c3b1d13cc89df1c987bef0260edeab1e804e74507da296ac81362` | `a2dc1882d66f0d7607a955c8bf9ad28282c3d1d08ca0675a90ca93ecd20f6c69` |
 
-In all three editions, `VOODOO/RWDLVOOD.DLL` is **identical** (SHA-256 `1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de`). All three have no `SPLANET/SPLANET.INI`; the installer generates this configuration. The two European editions each include `INSTALL/DOS/SPLANET.INI` (a different location), which does **not** mean an installed `splanet.ini` already exists.
+In all four inventoried disc variants, `VOODOO/RWDLVOOD.DLL` is **identical** (SHA-256 `1bd95e0dfeaaa47c53d5e2d4206027968790b928949321efd1eb2bb70f9201de`). All four have no `SPLANET/SPLANET.INI`; the installer generates this configuration. The two European editions each include `INSTALL/DOS/SPLANET.INI` (a different location), which does **not** mean an installed `splanet.ini` already exists.
 
 **Important:** the numeric 1.06/1.08 values above are derived from `autorun.inf` `InstallKey`; they are not independently verified game-executable version resources. The FR/DE inventory additionally declares `FrenchInstall=1`.
 
 European editions include three legacy driver files in the `VOODOO` tree (`glide.dll`, `fxmemmap.vxd`, `sst1init.dll`); the US inventory's `VOODOO` tree does not. Presence in the original CD must not be interpreted as compatibility with current Windows or Wine. The modern installer deliberately omits these three driver files while preserving the source ISO and all actual game resources. The installation policy still needs real end-to-end tests with an external suitable Glide implementation.
+
+## Alternate FR/DE ISO — under testing
+
+The owner provided a `SPLANET.iso.7z` archive on 2026-10-31. The ISO's SHA-256 is `b90745798d517b7f69058f729d79166e3567f39623f88be1b4d7fca34d34c61a` (598329344 bytes). `AUTORUN.INF` specifies `InstallKey=...\\1.06` and `FrenchInstall=1`.
+
+The new ISO has precisely the same **576 non-directory file paths** and 42 directories as the already supported FR/DE CD. The inventory's file sizes and hashes match for **571 of 576 files**. Only five executable files differ, all smaller in the alternate image:
+
+| File | Prior FR/DE bytes | Alternate bytes | Alternate SHA-256 |
+| --- | ---: | ---: | --- |
+| `voodoo/spvoodoo.exe` | 836608 | 835584 | `f709021bf45c3b1d13cc89df1c987bef0260edeab1e804e74507da296ac81362` |
+| `splanet/splanet.exe` | 1619975 | 1619463 | `b4a0e88c900812b83ff8c5c7e160bc9d87ecab63f207f9d9de08c5029d33b550` |
+| `splanet/splanetw.exe` | 1143808 | 1141248 | `2d5ba2b9ded354729f52b46124a8fc0435128136f721854093844c168c2fcd5d` |
+| `mystique/spmyst.exe` | 848896 | 848384 | `7865e8a94a6b2b44511943a1bd2801ece302eee31444ee8a70152ec483a54748` |
+| `verite/spverite.exe` | 1475500 | 1474988 | `b389cff6590a374a8dee5955c9e4d372d27c783f51c9bcc86f0b8f2a9c490031` |
+
+The new `voodoo/spvoodoo.exe` is a 32-bit PE with eight mapped sections and no overlay. PE RVA-to-file calculations and original bytes establish two candidate patch sites: FadeLow `17 B7 D1 38` at `0x487AD` (VA `0x004493AD`) and the CD-media gate `33 C0` at `0x34A2B` (VA `0x0043562B`). The six-byte replacement yields SHA-256 `8bf4a328f403502495d40f9b1e8c32767b7386efddbf90d7562167f5c8267454`. These offsets happen to match the *EN/ES/IT executable* rather than the previously known FR/DE EXE. Runtime behavior, especially the no-CD change, **must be validated in gameplay**.
+
+Only exact original and expected patched hashes are accepted; existing supported profiles remain unchanged. The alternate release reuses the existing FR/DE immutable-data manifest, and has its own hashes for both unused software-renderer EXEs. No proprietary game binaries are committed.
 
 ## Integration and validation boundary
 

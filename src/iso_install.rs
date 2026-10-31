@@ -48,11 +48,13 @@ fn original_unused_executable_hash(edition:&str,name:&str)->Option<&'static str>
             "US 1.08"=>Some("ffd1398ccccd615541e69c898fe0b8a43caada2326d86d4cb61036c1f934dbc7"),
             "EN/ES/IT 1.06"=>Some("e652319f606abea5bf0824df6c0cc75cb09d7f95ba8b2ab2bb4512e99317b199"),
             "FR/DE 1.06 (FadeLow + CD check fix)"=>Some("c0e3d3c0dc8e87ee653f8f5ce3c2670263e907d0438d5a1d3d1021fc2e1e0b1f"),
+            "FR/DE 1.06 (alternate CD executable)"=>Some("2d5ba2b9ded354729f52b46124a8fc0435128136f721854093844c168c2fcd5d"),
             _=>None,
         },
         "splanet.exe"=>match edition{
             "EN/ES/IT 1.06"=>Some("c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"),
             "FR/DE 1.06 (FadeLow + CD check fix)"=>Some("2f26f8e845808c895797367b134fcfba408430aa6564dc402a86c6d36d16912c"),
+            "FR/DE 1.06 (alternate CD executable)"=>Some("b4a0e88c900812b83ff8c5c7e160bc9d87ecab63f207f9d9de08c5029d33b550"),
             _=>None,
         },
         _=>None,
@@ -96,7 +98,8 @@ pub fn remove_unused_executables(folder:&Path,edition:&str)->Result<Vec<&'static
     Ok(selected.into_iter().map(|(name,_)|name).collect())
 }
 
-/// Fingerprints recorded from the three owner-supplied CD file inventories.
+/// Fingerprints recorded from three original CD inventories and one
+/// alternate FR/DE image (same data files; different executable hashes).
 /// This is not a third-party authenticated retail-master database.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Edition {
@@ -105,7 +108,7 @@ struct Edition {
     exe_sha256: &'static str,
     geometry_sha256: &'static str,
 }
-const EDITIONS: [Edition; 3] = [
+const EDITIONS: [Edition; 4] = [
     Edition { label: "US", installer_key: "1.08",
         exe_sha256: ORIGINAL_SHA256,
         geometry_sha256: "85e153739a5c43e514e2a8146d0cdfccb2c998d73e1494cfd45e1aa05f11531e" },
@@ -114,6 +117,9 @@ const EDITIONS: [Edition; 3] = [
         geometry_sha256: "29b3d8f87eed27ca933b81231b84f7e406506b498e5fc74bfee52f5b1004fb1b" },
     Edition { label: "FR/DE", installer_key: "1.06",
         exe_sha256: "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72",
+        geometry_sha256: "a2dc1882d66f0d7607a955c8bf9ad28282c3d1d08ca0675a90ca93ecd20f6c69" },
+    Edition { label: "FR/DE alternate", installer_key: "1.06",
+        exe_sha256: "f709021bf45c3b1d13cc89df1c987bef0260edeab1e804e74507da296ac81362",
         geometry_sha256: "a2dc1882d66f0d7607a955c8bf9ad28282c3d1d08ca0675a90ca93ecd20f6c69" },
 ];
 
@@ -615,7 +621,7 @@ pub fn install_image(
         report(97,100,"Generating splanet.ini...");
         let ini=staging.join("splanet.ini");
         let generated_ini=!ini.exists();
-        let default_language=if edition.label=="FR/DE" {2}else{1};
+        let default_language=if edition.label.starts_with("FR/DE") {2}else{1};
         update_ini(&ini,default_language)?;
         log(&format!("INI: edition={} language={} sha256={}",
             edition.label,default_language,file_digest(&ini)?));
@@ -699,12 +705,16 @@ mod tests {
             Some("c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"));
         assert_eq!(original_unused_executable_hash("FR/DE 1.06 (FadeLow + CD check fix)","splanet.exe"),
             Some("2f26f8e845808c895797367b134fcfba408430aa6564dc402a86c6d36d16912c"));
-        for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)"]{
+        for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)","FR/DE 1.06 (alternate CD executable)"]{
             assert!(!manifest_for(edition).unwrap().iter().any(|entry|entry.path=="splanet.exe"));
         }
-        for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)"]{
+        for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)","FR/DE 1.06 (alternate CD executable)"]{
             assert!(original_unused_executable_hash(edition,"splanetw.exe").is_some());
         }
+        assert_eq!(original_unused_executable_hash("FR/DE 1.06 (alternate CD executable)","splanet.exe"),
+            Some("b4a0e88c900812b83ff8c5c7e160bc9d87ecab63f207f9d9de08c5029d33b550"));
+        assert_eq!(original_unused_executable_hash("FR/DE 1.06 (alternate CD executable)","splanetw.exe"),
+            Some("2d5ba2b9ded354729f52b46124a8fc0435128136f721854093844c168c2fcd5d"));
         assert!(original_unused_executable_hash("unknown","splanetw.exe").is_none());
     }
     #[test] fn disc_data_must_include_videos_and_exact_driver(){
@@ -838,6 +848,8 @@ mod tests {
         }
         assert!(identify_edition(EDITIONS[0].exe_sha256,EDITIONS[1].geometry_sha256).is_none());
         assert!(identify_edition("unknown",EDITIONS[0].geometry_sha256).is_none());
+        assert_eq!(identify_edition(EDITIONS[3].exe_sha256,EDITIONS[3].geometry_sha256),Some(EDITIONS[3]));
+        assert!(identify_edition(EDITIONS[3].exe_sha256,EDITIONS[1].geometry_sha256).is_none());
     }
     #[test] fn language_change_preserves_user_input_gamma_and_settings(){
         let dir=std::env::temp_dir().join(format!("scorched-ini-preserve-{}",std::process::id()));

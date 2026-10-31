@@ -25,8 +25,9 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 | US (InstallKey 1.08) | English | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | English, Spanish, Italian | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | French, German | ✅ | ✅ | ✅ |
+| Europe (alternate FR/DE ISO, InstallKey 1.06) | French, German | 🧪 | 🧪 | 🧪 |
 
-Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checks reflect owner-reported testing under Wine and native Windows 11, not every mission or hardware configuration.
+Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checkmarks reflect owner-tested editions. **🧪 means an exact-hash, six-byte patch candidate derived from an owner-supplied ISO; installation, `--verify`, No-CD gameplay and Wine/Windows compatibility are still to be tested.** The alternate FR/DE disc differs from the previously validated FR/DE CD in five executables; all other 571 original file records match. See the [CD inventory notes](docs/cd-editions.md).
 
 ## Quick start
 

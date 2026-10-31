@@ -101,7 +101,7 @@ fn allowed_language(label:&str,lang:u8)->bool{
     match label{
         "US 1.08"=>lang==1,
         "EN/ES/IT 1.06"=>matches!(lang,1|4|5),
-        "FR/DE 1.06 (FadeLow + CD check fix)"=>matches!(lang,2|3),
+        "FR/DE 1.06 (FadeLow + CD check fix)" | "FR/DE 1.06 (alternate CD executable)"=>matches!(lang,2|3),
         _=>false
     }
 }
@@ -214,7 +214,8 @@ mod tests {
             ("US 1.08",manifest_for("US 1.08").unwrap(),80usize),
             ("EN/ES/IT 1.06",manifest_for("EN/ES/IT 1.06").unwrap(),140),
             ("FR/DE 1.06 (FadeLow + CD check fix)",
-                manifest_for("FR/DE 1.06 (FadeLow + CD check fix)").unwrap(),100)]{
+                manifest_for("FR/DE 1.06 (FadeLow + CD check fix)").unwrap(),100),
+            ("FR/DE 1.06 (alternate CD executable)",manifest_for("FR/DE 1.06 (alternate CD executable)").unwrap(),100)]{
             assert!(files.len()>min,"{edition}");
             assert!(files.iter().any(|x|x.path=="geometry.rwb"));
             assert!(files.iter().any(|x|x.path=="rwdlvood.dll"));
@@ -229,6 +230,11 @@ mod tests {
         assert!(allowed_language("EN/ES/IT 1.06",5));
         assert!(!allowed_language("EN/ES/IT 1.06",2));
         assert!(allowed_language("FR/DE 1.06 (FadeLow + CD check fix)",3));
+        assert!(allowed_language("FR/DE 1.06 (alternate CD executable)",2));
+        assert!(allowed_language("FR/DE 1.06 (alternate CD executable)",3));
+        assert!(!allowed_language("FR/DE 1.06 (alternate CD executable)",1));
+        assert!(std::ptr::eq(manifest_for("FR/DE 1.06 (alternate CD executable)").unwrap(),
+            manifest_for("FR/DE 1.06 (FadeLow + CD check fix)").unwrap()));
     }
     #[test] fn accepts_minimal_relative_video_ini(){
         let dir=std::env::temp_dir().join(format!("verify-ini-{}",std::process::id()));
