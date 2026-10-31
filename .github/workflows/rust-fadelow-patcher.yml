@@ -1,4 +1,4 @@
-name: ScorchedPlanetFix Windows 1.0 CLI
+name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
@@ -27,6 +27,15 @@ jobs:
         run: cargo test --locked --target x86_64-pc-windows-msvc --all-targets
       - name: Compile release console (Windows x64 only)
         run: cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
+      - name: Verify version reported by Windows CLI
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
+          $reported = (& $exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $reported -cnotmatch '^ScorchedPlanetFix 1\.1\.0-[0-9a-f]{8}$') {
+            throw "Unexpected CLI version: $reported"
+          }
+          Write-Host "Correct CLI version: $reported"
       - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
         run: |
@@ -51,11 +60,11 @@ jobs:
           Copy-Item README.md dist/README.md
           $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
-          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+          Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.1.0-Windows-x64.zip
       - name: Verify packaged ZIP and SHA-256 manifest
         shell: pwsh
         run: |
-          $archive = "ScorchedPlanetFix-v1.0.0-Windows-x64.zip"
+          $archive = "ScorchedPlanetFix-v1.1.0-Windows-x64.zip"
           $unpacked = "dist-verify"
           Expand-Archive -Path $archive -DestinationPath $unpacked -Force
           $expectedFiles = @("ScorchedPlanetFix.exe", "LICENSE.txt", "README.md", "SHA256SUMS.txt")
@@ -80,7 +89,7 @@ jobs:
       - name: Upload verified Windows CLI archive
         uses: actions/upload-artifact@v4
         with:
-          name: ScorchedPlanetFix-v1.0.0-Windows-x64
-          path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
+          name: ScorchedPlanetFix-v1.1.0-Windows-x64
+          path: ScorchedPlanetFix-v1.1.0-Windows-x64.zip
           if-no-files-found: error
           retention-days: 30

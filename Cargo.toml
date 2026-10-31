@@ -1,6 +1,6 @@
 [package]
 name = "scorched-planet-fix"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.95"
 description = "Windows x64 command-line CD installer, verifier and game launcher for Scorched Planet (1996)"

@@ -25,15 +25,15 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 | US (InstallKey 1.08) | English | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | English, Spanish, Italian | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | French, German | ✅ | ✅ | ✅ |
-| Europe (alternate FR/DE ISO, InstallKey 1.06) | French, German | 🧪 | 🧪 | 🧪 |
+| Europe (alternate FR/DE ISO, InstallKey 1.06) | French, German | ✅ | ✅ | ✅ |
 
-Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checkmarks reflect owner-tested editions. **🧪 means an exact-hash, six-byte patch candidate derived from an owner-supplied ISO; installation, `--verify`, No-CD gameplay and Wine/Windows compatibility are still to be tested.** The alternate FR/DE disc differs from the previously validated FR/DE CD in five executables; all other 571 original file records match. See the [CD inventory notes](docs/cd-editions.md).
+Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checkmarks reflect owner-tested functionality, not exhaustive hardware or multi-mission compatibility. The alternate FR/DE ISO was validated under Wine/GE-Proton (extraction, FadeLow, No-CD, videos, menus, gameplay) on 2026-10-31. It differs from the previously supported FR/DE disc in five executables; all other 571 original file records match. See the [CD inventory notes](docs/cd-editions.md).
 
 ## Quick start
 
 ### 1. Get ScorchedPlanetFix
 
-Download the **[ScorchedPlanetFix v1.0.0 Windows x64 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.0.0)** and extract `ScorchedPlanetFix-v1.0.0-Windows-x64.zip`.
+Download the **[latest published ScorchedPlanetFix release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest)** and extract its `ScorchedPlanetFix-v<version>-Windows-x64.zip`. The published **v1.0.0** is still available while v1.1.0 is being prepared; new features will arrive with the next release.
 
 > The release includes a separate `.zip.sha256` checksum file. Verify your downloaded ZIP against it before extracting. GitHub Actions artifacts are development builds, not permanent release downloads.
 
@@ -139,7 +139,8 @@ Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the
 - [Supported editions and original media fingerprints](docs/cd-editions.md)
 - [Installation, verification and safe upgrades](docs/windows-cli-installer.md)
 - [FadeLow and CD-check reverse-engineering research](docs/european-fadelow-research.md)
-- [Draft v1.0.0 release notes](docs/release-notes-v1.0.0.md)
+- [v1.1.0 release notes](docs/release-notes-v1.1.0.md)
+- [v1.0.0 release notes](docs/release-notes-v1.0.0.md)
 
 ## License & credits
 
