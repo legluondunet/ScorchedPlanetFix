@@ -57,13 +57,10 @@ jobs:
             gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:TAG_COMMIT" | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Could not create release tag' }
           }
-          # Fetch into a real local tag ref, not only FETCH_HEAD.
-          git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch tag reference' }
-          $localTag = (git rev-parse "refs/tags/$env:RELEASE_TAG").Trim()
-          if ($LASTEXITCODE -ne 0 -or $localTag -cne $env:TAG_COMMIT) { throw 'Fetched tag target does not match the original release commit' }
-          # Preserve the already-published tag target when retrying the workflow
-          # from a newer main commit; never move the original v1.0.0 tag.
+          # The exact tag target was already checked through GitHub's Git API.
+          # With fetch-depth: 0, this commit is in the checked-out main history.
+          # Check out its immutable SHA directly: no local tag/refspec ambiguity.
+          # In particular, a workflow retry must never retarget v1.0.0 to main.
           git checkout --detach $env:TAG_COMMIT
           if ($LASTEXITCODE -ne 0) { throw 'Cannot check out tag commit' }
           $actual = (git rev-parse HEAD).Trim()
