@@ -1,6 +1,4 @@
-# ScorchedPlanetFix v1.0.0 — release notes (draft)
-
-> **Draft only.** These notes are prepared for a future GitHub Release; no tag, release or published asset exists yet. Do not publish them until the release ZIP has been built and checked from the intended tag.
+# ScorchedPlanetFix v1.0.0 — release notes
 
 ## Scorched Planet (1996), ready for modern systems
 
@@ -26,7 +24,7 @@ The game and installer have **not** been exhaustively tested on every mission, W
 
 ### Installation
 
-1. Download the Windows x64 ZIP from the eventual release assets. Extract it into a directory.
+1. Download `ScorchedPlanetFix-v1.0.0-Windows-x64.zip` from the [v1.0.0 release assets](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.0.0) and extract it into a directory.
 2. Put your original ISO image or CUE/BIN image in that directory.
 3. Install [nGlide](https://www.zeus-software.com/downloads/nglide) separately or provide your own compatible 32-bit `glide.dll` next to `ScorchedPlanetFix.exe`.
 4. Open a console in that directory and run:
@@ -39,19 +37,16 @@ The game and installer have **not** been exhaustively tested on every mission, W
 
 Read the [README](../README.md) for explicit image paths, Wine instructions and troubleshooting.
 
-### Expected release assets
+### Release assets
 
 - `ScorchedPlanetFix-v1.0.0-Windows-x64.zip`
-- ZIP includes `ScorchedPlanetFix.exe`, `LICENSE.txt`, `README.md` and `SHA256SUMS.txt`.
+- `ScorchedPlanetFix-v1.0.0-Windows-x64.zip.sha256` (SHA-256 of the full ZIP)
+- The ZIP includes `ScorchedPlanetFix.exe`, `LICENSE.txt`, `README.md` and `SHA256SUMS.txt` (SHA-256 of the executable).
 
-The exact SHA-256 of the published ZIP and executable **must be generated from the final release build**. Do not reuse a digest from a prior development artifact.
+The release workflow compiles from the exact `v1.0.0` tag using locked Cargo dependencies, verifies the executable and ZIP, and generates the SHA-256 values from the final published assets.
 
 ### Licensing
 
 ScorchedPlanetFix is licensed **GPL-3.0-or-later**. You must provide your own original *Scorched Planet* media and nGlide. No copyrighted game files, disc images, proprietary 3dfx components or nGlide DLLs are included.
 
 **Credits:** legluondunet, assisted by ChatGPT (OpenAI). Independent community project, unaffiliated with the game's and nGlide's rights holders.
-
----
-
-*Release checklist:* confirm clean CI on the intended tag, build artifacts, ZIP checksum, Windows PE console subsystem, game smoke tests, links and license text; then create the GitHub Release.
