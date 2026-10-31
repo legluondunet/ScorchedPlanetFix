@@ -23,6 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       RELEASE_TAG: v1.0.0
+      TAG_COMMIT: 37b5ac9789a661329fb95b5b302fd72a0af16a3d
       ARCHIVE: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
     steps:
       - name: Checkout protected main at the publication commit
@@ -51,17 +52,22 @@ jobs:
           $existing = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" 2>$null
           if ($LASTEXITCODE -eq 0) {
             $tag = $existing | ConvertFrom-Json
-            if ($tag.object.type -cne 'commit' -or $tag.object.sha -cne $env:GITHUB_SHA) { throw 'Existing tag points to a different commit' }
+            if ($tag.object.type -cne 'commit' -or $tag.object.sha -cne $env:TAG_COMMIT) { throw 'Existing tag points to a different commit' }
           } else {
-            gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:GITHUB_SHA" | Out-Null
+            gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$env:RELEASE_TAG" -f "sha=$env:TAG_COMMIT" | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Could not create release tag' }
           }
-          git fetch origin "refs/tags/$env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch tag' }
-          git checkout --detach "refs/tags/$env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot check out tag' }
+          # Fetch into a real local tag ref, not only FETCH_HEAD.
+          git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch tag reference' }
+          $localTag = (git rev-parse "refs/tags/$env:RELEASE_TAG").Trim()
+          if ($LASTEXITCODE -ne 0 -or $localTag -cne $env:TAG_COMMIT) { throw 'Fetched tag target does not match the original release commit' }
+          # Preserve the already-published tag target when retrying the workflow
+          # from a newer main commit; never move the original v1.0.0 tag.
+          git checkout --detach $env:TAG_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check out tag commit' }
           $actual = (git rev-parse HEAD).Trim()
-          if ($actual -cne $env:GITHUB_SHA) { throw 'Tagged source commit mismatch' }
+          if ($actual -cne $env:TAG_COMMIT) { throw 'Tagged source commit mismatch' }
           Write-Host "Building exactly tag $env:RELEASE_TAG ($actual)"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
