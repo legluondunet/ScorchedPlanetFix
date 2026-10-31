@@ -50,8 +50,11 @@ fn original_unused_executable_hash(edition:&str,name:&str)->Option<&'static str>
             "FR/DE 1.06 (FadeLow + CD check fix)"=>Some("c0e3d3c0dc8e87ee653f8f5ce3c2670263e907d0438d5a1d3d1021fc2e1e0b1f"),
             _=>None,
         },
-        "splanet.exe"=>manifest_for(edition)?
-            .iter().find(|file|file.path=="splanet.exe").map(|file|file.sha256),
+        "splanet.exe"=>match edition{
+            "EN/ES/IT 1.06"=>Some("c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"),
+            "FR/DE 1.06 (FadeLow + CD check fix)"=>Some("2f26f8e845808c895797367b134fcfba408430aa6564dc402a86c6d36d16912c"),
+            _=>None,
+        },
         _=>None,
     }
 }
@@ -692,9 +695,12 @@ mod tests {
     }
     #[test] fn original_software_renderers_have_edition_specific_fingerprints(){
         assert!(original_unused_executable_hash("US 1.08","splanet.exe").is_none());
-        for edition in ["EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)"]{
-            let entry=manifest_for(edition).unwrap().iter().find(|entry|entry.path=="splanet.exe").unwrap();
-            assert_eq!(original_unused_executable_hash(edition,"splanet.exe"),Some(entry.sha256));
+        assert_eq!(original_unused_executable_hash("EN/ES/IT 1.06","splanet.exe"),
+            Some("c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"));
+        assert_eq!(original_unused_executable_hash("FR/DE 1.06 (FadeLow + CD check fix)","splanet.exe"),
+            Some("2f26f8e845808c895797367b134fcfba408430aa6564dc402a86c6d36d16912c"));
+        for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)"]{
+            assert!(!manifest_for(edition).unwrap().iter().any(|entry|entry.path=="splanet.exe"));
         }
         for edition in ["US 1.08","EN/ES/IT 1.06","FR/DE 1.06 (FadeLow + CD check fix)"]{
             assert!(original_unused_executable_hash(edition,"splanetw.exe").is_some());
