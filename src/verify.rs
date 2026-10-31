@@ -192,13 +192,13 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
         executable:exe,
     })
 }
-pub fn launch_verified(folder:&Path,mut log:impl FnMut(&str))->Result<Child,String>{
+pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,mut log:impl FnMut(&str))->Result<Child,String>{
     let report=verify_install(folder,|message|log(message))?;
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
-    nglide::configure_process(&mut command,|message|log(message));
+    nglide::configure_process(&mut command,show_3dfx_logo,|message|log(message));
     command.spawn()
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
