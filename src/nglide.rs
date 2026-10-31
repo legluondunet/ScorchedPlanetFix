@@ -135,13 +135,21 @@ pub fn prepare_splash_plugin(game:&Path,mut log:impl FnMut(&str))->Result<(),Str
     for source in candidates{
         if !source.exists() && !source.is_symlink(){continue;}
         validate_splash_dll(&source)?;
-        // Create only, never clobber an existing file. No global registry edits.
-        fs::copy(&source,&output)
-            .map_err(|e|format!("Cannot copy local 3DfxSpl.dll from {} to {}: {e}",
-                source.display(),output.display()))?;
-        if let Err(e)=validate_splash_dll(&output){
+        // Create only: refuse to overwrite user files even in a race.
+        // Remove only an incomplete output that this operation created.
+        let mut src=fs::File::open(&source).map_err(|e|e.to_string())?;
+        let mut dest=OpenOptions::new().write(true).create_new(true).open(&output)
+            .map_err(|e|format!("Cannot create splash plugin {}: {e}",output.display()))?;
+        let result=(||{
+            std::io::copy(&mut src,&mut dest).map_err(|e|e.to_string())?;
+            dest.flush().map_err(|e|e.to_string())?;
+            dest.sync_all().map_err(|e|e.to_string())?;
+            drop(dest);
+            validate_splash_dll(&output)
+        })();
+        if let Err(e)=result{
             let _=fs::remove_file(&output);
-            return Err(e);
+            return Err(format!("Cannot install locally supplied 3DfxSpl.dll: {e}"));
         }
         log(&format!("NGLIDE: 3DfxSpl.dll copied from {} into game directory for requested logo",
             source.display()));
