@@ -38,6 +38,10 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA) { throw 'Unexpected release commit' }
           gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw 'v1.0.0 release already exists; refusing to overwrite it' }
+          # gh release view intentionally returns 1 when the release is absent.
+          # Clear the expected nonzero native exit code so the pwsh runner
+          # does not fail the step after all validation has succeeded.
+          $global:LASTEXITCODE = 0
           Write-Host "Selected release commit: $head"
       - name: Create or check tag and check out tagged code
         shell: pwsh
