@@ -33,7 +33,7 @@ Edits are strictly tied to SHA-256 fingerprints of the original executable and c
 
 ### 1. Get ScorchedPlanetFix
 
-Download the **[latest published ScorchedPlanetFix release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest)** and extract its `ScorchedPlanetFix-v<version>-Windows-x64.zip`. The published **v1.0.0** is still available while v1.1.0 is being prepared; new features will arrive with the next release.
+Download the **[latest published ScorchedPlanetFix release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest)** and extract its `ScorchedPlanetFix-v<version>-Windows-x64.zip`. Versioned downloads are listed on the Releases page; **v1.0.0** remains available for users who need the original release. The four-variant support and optional 3dfx logo are included starting with **v1.1.0**.
 
 > The release includes a separate `.zip.sha256` checksum file. Verify your downloaded ZIP against it before extracting. GitHub Actions artifacts are development builds, not permanent release downloads.
 
