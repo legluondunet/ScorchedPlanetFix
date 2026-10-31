@@ -58,7 +58,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Could not create release tag' }
           }
           # Fetch into a real local tag ref, not only FETCH_HEAD.
-          git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG"
+          $tagRef = "refs/tags/$env:RELEASE_TAG"
+          git fetch origin "${tagRef}:${tagRef}"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch tag reference' }
           $localTag = (git rev-parse "refs/tags/$env:RELEASE_TAG").Trim()
           if ($LASTEXITCODE -ne 0 -or $localTag -cne $env:TAG_COMMIT) { throw 'Fetched tag target does not match the original release commit' }
