@@ -108,7 +108,7 @@ fn has_vulkan_loader()->bool{
 /// Per-game environment overrides global nGlide configurator/registry.
 /// Vulkan is requested only when its loader can be opened, not guaranteed
 /// to have a working GPU/driver. 60Hz + vsync helps keep old games in check.
-pub fn configure_process(command:&mut Command,mut log:impl FnMut(&str)){
+pub fn configure_process(command:&mut Command,show_3dfx_logo:bool,mut log:impl FnMut(&str)){
     let backend=if has_vulkan_loader(){"2"}else{"0"};
     for (name,value) in [
         ("NGLIDE_BACKEND",backend), // Vulkan when loader present, otherwise automatic
@@ -117,13 +117,27 @@ pub fn configure_process(command:&mut Command,mut log:impl FnMut(&str)){
         ("NGLIDE_REFRESH","2"), // 60 Hz
         ("NGLIDE_VSYNC","1"), // On: minimize tearing / runaway frame rate
         ("NGLIDE_GAMMA","5"), // 1.0
-        ("NGLIDE_SPLASH","0"), // Avoid 3dfx splash; nGlide 2.10 had Scorched Planet splash bug
+        ("NGLIDE_SPLASH",if show_3dfx_logo{"1"}else{"0"}), // On only with --launch --3dfx-logo
     ]{command.env(name,value);}
-    log(&format!("NGLIDE: process-local settings (registry unchanged): backend={} (2=Vulkan loader found; 0=auto), resolution=desktop, aspect=correction, 60Hz, vsync=on, gamma=1.0, splash=off",backend));
+    log(&format!("NGLIDE: process-local settings (registry unchanged): backend={} (2=Vulkan loader found; 0=auto), resolution=desktop, aspect=correction, 60Hz, vsync=on, gamma=1.0, splash={}",backend,if show_3dfx_logo{"on"}else{"off"}));
 }
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test] fn splash_logo_is_off_by_default_and_on_only_when_requested(){
+        let mut cmd=Command::new("spvoodoo.exe");
+        configure_process(&mut cmd,false,|_|{});
+        assert_eq!(
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
+            Some(std::ffi::OsStr::new("0"))
+        );
+        let mut cmd=Command::new("spvoodoo.exe");
+        configure_process(&mut cmd,true,|_|{});
+        assert_eq!(
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
     #[test] fn no_network_or_bundled_wrapper_required(){
         assert!(OFFICIAL_URL.starts_with("https://"));
         let root=std::env::temp_dir().join(format!("nglide-test-{}",std::process::id()));

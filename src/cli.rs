@@ -110,9 +110,9 @@ pub fn verify_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<
 }
 /// --launch: verify the installation before spawning the game, then monitor
 /// the game process exit code. Never launch an unverified executable.
-pub fn launch_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
+pub fn launch_only(root:&Path,logger:&Logger,show_3dfx_logo:bool,mut sink:impl FnMut(&str))->Result<(),String>{
     emit(logger,&mut sink,"Verifying the entire splanet installation before launching...");
-    let mut child=verify::launch_verified(&root.join("splanet"),|msg|logger.write(msg))?;
+    let mut child=verify::launch_verified(&root.join("splanet"),show_3dfx_logo,|msg|logger.write(msg))?;
     emit(logger,&mut sink,&format!("Game started, PID {} (verification successful).",child.id()));
     let status=child.wait().map_err(|e|format!("Failed while monitoring the game process: {e}"))?;
     if !status.success(){
@@ -123,6 +123,16 @@ pub fn launch_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<
     Ok(())
 }
 
+/// Accept the optional splash logo flag only with --launch.
+fn requested_launch_logo(arguments:&[OsString])->Option<bool>{
+    if arguments.first().and_then(|arg|arg.to_str())!=Some("--launch"){return None;}
+    match arguments.len(){
+        1=>Some(false),
+        2 if arguments[1].to_str()==Some("--3dfx-logo")=>Some(true),
+        _=>None,
+    }
+}
+
 pub fn help(version:&str)->String{
     format!("ScorchedPlanetFix {version} - Windows x64 command-line tool
 Usage:
@@ -130,7 +140,7 @@ Usage:
   ScorchedPlanetFix.exe <image.iso>
   ScorchedPlanetFix.exe <image.cue> [track.bin]
   ScorchedPlanetFix.exe --verify
-  ScorchedPlanetFix.exe --launch
+  ScorchedPlanetFix.exe --launch [--3dfx-logo]
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
@@ -147,6 +157,7 @@ No arguments:
   TO ScorchedPlanetFix.exe. Does not modify any files.
 --launch:
   Verify the entire installation, then start the game and wait for it to exit.
+  Optional --3dfx-logo enables the 3dfx startup animation (nGlide only).
 --help:
   Display commands, file paths, and this version.
 --version:
@@ -157,7 +168,7 @@ nGlide (proprietary; download and install separately):
   A locally installed 32-bit glide.dll is required in splanet.
   Game-specific nGlide settings are applied only to the game process:
   Vulkan when available, desktop resolution, aspect-ratio correction,
-  60 Hz, VSync enabled, gamma 1.0, 3dfx splash screen disabled.
+  60 Hz, VSync enabled, gamma 1.0, 3dfx splash screen off by default.
 
 All errors are reported and written to ScorchedPlanetFix.log.
 No copyrighted game files are redistributed.",
@@ -191,7 +202,8 @@ pub fn dispatch(arguments:&[OsString],version:&str)->Result<(),String>{
     }else{
         match first{
             Some("--verify") if arguments.len()==1=>verify_only(&root,&logger,|msg|println!("{msg}")),
-            Some("--launch") if arguments.len()==1=>launch_only(&root,&logger,|msg|println!("{msg}")),
+            Some("--launch") if requested_launch_logo(arguments).is_some()=>
+                launch_only(&root,&logger,requested_launch_logo(arguments).unwrap_or(false),|msg|println!("{msg}")),
             _=>Err(format!("Unknown arguments. Use --help.\n{}",help(version))),
         }
     };
@@ -212,6 +224,15 @@ mod tests{
         }
         assert!(!h.contains("--nogui"),"obsolete GUI option must not appear in help");
         assert!(!h.contains("Launch button"));
+    }
+    #[test] fn splash_flag_only_valid_with_launch(){
+        assert_eq!(requested_launch_logo(&args(&["--launch"])),Some(false));
+        assert_eq!(requested_launch_logo(&args(&["--launch","--3dfx-logo"])),Some(true));
+        assert_eq!(requested_launch_logo(&args(&["--3dfx-logo"])),None);
+        assert_eq!(requested_launch_logo(&args(&["--verify","--3dfx-logo"])),None);
+        assert_eq!(requested_launch_logo(&args(&["--launch","--unknown"])),None);
+        assert_eq!(requested_launch_logo(&args(&["--launch","--3dfx-logo","extra"])),None);
+        assert!(help("test").contains("--launch [--3dfx-logo]"));
     }
     #[test] fn installer_uses_no_arguments_or_positional_media(){
         assert!(args(&[]).is_empty());

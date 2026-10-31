@@ -11,6 +11,7 @@ This is a **console-only** program. It has no graphical user interface. The 32-b
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --launch
+.\ScorchedPlanetFix.exe --launch --3dfx-logo
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
@@ -110,8 +111,8 @@ The launcher's per-process environment settings override **only this game's nGli
 - `NGLIDE_REFRESH=2` (60 Hz)
 - `NGLIDE_VSYNC=1` (on, initially chosen to reduce tearing/unstable speed)
 - `NGLIDE_GAMMA=5` (1.0)
-- `NGLIDE_SPLASH=0` (off)
+- `NGLIDE_SPLASH=0` (off by default; `--launch --3dfx-logo` sets it to `1` for the game process only)
 
-When the Vulkan loader is present but the driver is broken, nGlide may still fail. Test game behavior and nGlide settings in real Windows/Wine environments before final release.
+Use `ScorchedPlanetFix.exe --launch --3dfx-logo` (or `wine ScorchedPlanetFix.exe --launch --3dfx-logo`) to show the optional nGlide 3dfx startup logo. Without this flag, the logo remains off. This does not modify global nGlide registry settings. When the Vulkan loader is present but the driver is broken, nGlide may still fail. Test game behavior and nGlide settings in real Windows/Wine environments before final release.
 
 See the main [README](../README.md), [CD edition profiles](cd-editions.md) and [FadeLow research](european-fadelow-research.md). No proprietary file is committed to GitHub. No changes to `main` or merges without owner approval.

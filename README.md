@@ -117,7 +117,21 @@ The installer also:
 
 nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and `--launch`.
 
-The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and splash screen off. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and **3dfx splash screen off by default**. To enable the optional 3dfx startup logo, use `--launch --3dfx-logo`:
+
+Windows PowerShell:
+
+```powershell
+.\ScorchedPlanetFix.exe --launch --3dfx-logo
+```
+
+Linux / Wine:
+
+```bash
+wine ScorchedPlanetFix.exe --launch --3dfx-logo
+```
+
+Without `--3dfx-logo`, the splash logo remains disabled. The flag only affects the game process (`NGLIDE_SPLASH=1`); it does not modify global nGlide registry settings or the game's executable. The optional logo may not work correctly with every nGlide version or graphics setup. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
 
 ## Documentation
 
