@@ -131,7 +131,7 @@ Linux / Wine:
 wine ScorchedPlanetFix.exe --launch --3dfx-logo
 ```
 
-Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). When the flag is selected, the launcher checks for the DLL beside the game, or copies the user's locally installed DLL from beside ScorchedPlanetFix.exe or the Windows/Wine `SysWOW64`/`System32` directory. If the plugin is missing or invalid, launch stops with an explicit diagnostic instead of silently omitting the logo. It does not download or redistribute the plugin; the game files and global nGlide registry settings are otherwise unchanged. The optional logo may not work correctly with every nGlide version or graphics setup. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--launch --3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** The normal `--launch` and `--verify` commands do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
 
 ## Documentation
 

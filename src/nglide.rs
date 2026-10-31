@@ -88,7 +88,7 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
     Ok(true)
 }
 /// Check a locally supplied splash DLL's architecture and ordinary-file status
-/// without loading its code. This does not authenticate a publisher.
+/// without loading its code or writing anything. This does not authenticate a publisher.
 fn validate_splash_dll(path:&Path)->Result<(),String>{
     let meta=fs::symlink_metadata(path)
         .map_err(|e|format!("Cannot inspect 3DfxSpl.dll at {}: {e}",path.display()))?;
@@ -112,50 +112,24 @@ fn validate_splash_dll(path:&Path)->Result<(),String>{
     }
     Ok(())
 }
-/// The Glide 2.11 (glide.dll) splash animation uses 3DfxSpl.dll, not
-/// 3DfxSpl2.dll/3DfxSpl3.dll. Explicitly requested logos require that plugin.
-/// Only copy a user-installed/local DLL; never download or redistribute it.
-pub fn prepare_splash_plugin(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
-    let output=game.join("3DfxSpl.dll");
-    if output.exists() || output.is_symlink(){
-        validate_splash_dll(&output)?;
-        log(&format!("NGLIDE: 3DfxSpl.dll found in game directory: {}",output.display()));
-        return Ok(());
+/// Glide 2.x's optional splash logo uses 3DfxSpl.dll, separate from glide.dll.
+/// Read-only: never copy, download, overwrite or remove the owner's DLL.
+/// --verify intentionally ignores this optional plugin.
+pub fn check_splash_plugin(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
+    let plugin=game.join("3DfxSpl.dll");
+    if !plugin.exists() && !plugin.is_symlink(){
+        return Err(format!(
+            "3dfx logo requested with --launch --3dfx-logo, but 3DfxSpl.dll is missing. \
+Copy your own 32-bit nGlide 3DfxSpl.dll into the splanet directory \
+(next to glide.dll and spvoodoo.exe), then retry. Expected path: {}. \
+This optional DLL is not required by --verify or normal --launch.",
+            plugin.display()));
     }
-    let mut candidates=Vec::new();
-    if let Some(parent)=game.parent(){candidates.push(parent.join("3DfxSpl.dll"));}
-    for var in ["WINDIR","SystemRoot"]{
-        if let Some(windir)=std::env::var_os(var){
-            for subfolder in ["SysWOW64","System32"]{
-                let candidate=PathBuf::from(&windir).join(subfolder).join("3DfxSpl.dll");
-                if !candidates.contains(&candidate){candidates.push(candidate);}
-            }
-        }
-    }
-    for source in candidates{
-        if !source.exists() && !source.is_symlink(){continue;}
-        validate_splash_dll(&source)?;
-        // Create only: refuse to overwrite user files even in a race.
-        // Remove only an incomplete output that this operation created.
-        let mut src=fs::File::open(&source).map_err(|e|e.to_string())?;
-        let mut dest=OpenOptions::new().write(true).create_new(true).open(&output)
-            .map_err(|e|format!("Cannot create splash plugin {}: {e}",output.display()))?;
-        let result=(||{
-            std::io::copy(&mut src,&mut dest).map_err(|e|e.to_string())?;
-            dest.flush().map_err(|e|e.to_string())?;
-            dest.sync_all().map_err(|e|e.to_string())?;
-            drop(dest);
-            validate_splash_dll(&output)
-        })();
-        if let Err(e)=result{
-            let _=fs::remove_file(&output);
-            return Err(format!("Cannot install locally supplied 3DfxSpl.dll: {e}"));
-        }
-        log(&format!("NGLIDE: 3DfxSpl.dll copied from {} into game directory for requested logo",
-            source.display()));
-        return Ok(());
-    }
-    Err(format!("3dfx logo requested but 3DfxSpl.dll not found. This Glide 2.11 splash plugin is separate from glide.dll. Install nGlide in the same Windows/Wine prefix or place your own 32-bit 3DfxSpl.dll next to ScorchedPlanetFix.exe. No DLL is bundled or downloaded. Official nGlide: {OFFICIAL_URL}"))
+    validate_splash_dll(&plugin).map_err(|error|format!(
+        "3dfx logo requested, but splanet/3DfxSpl.dll is invalid: {error}. \
+Copy a valid 32-bit nGlide 3DfxSpl.dll into the splanet directory and retry."))?;
+    log(&format!("NGLIDE: optional 3DfxSpl.dll found and validated (read-only): {}",plugin.display()));
+    Ok(())
 }
 pub fn verify_local_glide(game:&Path)->Result<(),String>{
     validate_glide_dll(&game.join("glide.dll")).map_err(|e|
@@ -208,12 +182,12 @@ mod tests{
             Some(std::ffi::OsStr::new("1"))
         );
     }
-    #[test] fn user_supplied_splash_plugin_is_copied_only_on_request(){
+    #[test] fn splash_plugin_check_is_read_only_and_optional_for_verify(){
         let root=std::env::temp_dir().join(format!("nglide-splash-test-{}",std::process::id()));
         let game=root.join("splanet");
         let _=fs::remove_dir_all(&root);
         fs::create_dir_all(&game).unwrap();
-        let path=root.join("3DfxSpl.dll");
+        let plugin=root.join("3DfxSpl.dll");
         let mut dll=vec![0u8;2048];
         dll[..2].copy_from_slice(b"MZ");
         dll[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
@@ -221,14 +195,22 @@ mod tests{
         dll[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
         dll[0x96..0x98].copy_from_slice(&0x2000u16.to_le_bytes());
         dll[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
-        fs::write(&path,&dll).unwrap();
+        // A splash DLL beside the tool is not used or automatically copied.
+        fs::write(&plugin,&dll).unwrap();
+        let missing=check_splash_plugin(&game,|_|{}).unwrap_err();
+        assert!(missing.contains("Copy your own 32-bit nGlide 3DfxSpl.dll"));
+        assert!(missing.contains("splanet directory"));
         assert!(!game.join("3DfxSpl.dll").exists());
-        prepare_splash_plugin(&game,|_|{}).unwrap();
+        // Regular Glide verification does not inspect or require the splash plugin.
+        fs::write(game.join("glide.dll"),&dll).unwrap();
+        verify_local_glide(&game).unwrap();
+        fs::write(game.join("3DfxSpl.dll"),b"not a DLL").unwrap();
+        verify_local_glide(&game).unwrap();
+        assert!(check_splash_plugin(&game,|_|{}).unwrap_err().contains("invalid"));
+        // Valid module is accepted without touching its bytes.
+        fs::write(game.join("3DfxSpl.dll"),&dll).unwrap();
+        check_splash_plugin(&game,|_|{}).unwrap();
         assert_eq!(fs::read(game.join("3DfxSpl.dll")).unwrap(),dll);
-        prepare_splash_plugin(&game,|_|{}).unwrap();
-        fs::write(game.join("3DfxSpl.dll"),b"tampered").unwrap();
-        assert!(prepare_splash_plugin(&game,|_|{}).is_err());
-        assert_eq!(fs::read(game.join("3DfxSpl.dll")).unwrap(),b"tampered");
         fs::remove_dir_all(root).unwrap();
     }
     #[test] fn no_network_or_bundled_wrapper_required(){
