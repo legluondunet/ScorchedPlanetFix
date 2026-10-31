@@ -128,13 +128,13 @@ mod tests{
         let mut cmd=Command::new("spvoodoo.exe");
         configure_process(&mut cmd,false,|_|{});
         assert_eq!(
-            cmd.get_envs().find(|(key,_)|key=="NGLIDE_SPLASH").and_then(|(_,value)|value),
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
             Some(std::ffi::OsStr::new("0"))
         );
         let mut cmd=Command::new("spvoodoo.exe");
         configure_process(&mut cmd,true,|_|{});
         assert_eq!(
-            cmd.get_envs().find(|(key,_)|key=="NGLIDE_SPLASH").and_then(|(_,value)|value),
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
             Some(std::ffi::OsStr::new("1"))
         );
     }
