@@ -106,7 +106,7 @@ The installer also:
 
 - Reads supported ISO and CUE/BIN layouts; keeps your original image untouched
 - Copies the needed videos and language files and normalizes names
-- Omits the unused `splanetw.exe` software-renderer executable and obsolete 3dfx drivers
+- Omits the unused `splanet.exe` and `splanetw.exe` software-renderer executables and obsolete 3dfx drivers
 - Uses the portable `video= video` INI setting for local video playback
 - Excludes save slots and mutable settings from immutable-file hash enforcement
 - Sets nGlide options only for the launched game, never through global registry changes
@@ -117,7 +117,21 @@ The installer also:
 
 nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and `--launch`.
 
-The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and splash screen off. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and **3dfx splash screen off by default**. To enable the optional 3dfx startup logo, use `--launch --3dfx-logo`:
+
+Windows PowerShell:
+
+```powershell
+.\ScorchedPlanetFix.exe --launch --3dfx-logo
+```
+
+Linux / Wine:
+
+```bash
+wine ScorchedPlanetFix.exe --launch --3dfx-logo
+```
+
+Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--launch --3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** The normal `--launch` and `--verify` commands do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
 
 ## Documentation
 

@@ -87,6 +87,50 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
     log(&format!("NGLIDE: user-installed 32-bit glide.dll copied into game directory from {}",source.display()));
     Ok(true)
 }
+/// Check a locally supplied splash DLL's architecture and ordinary-file status
+/// without loading its code or writing anything. This does not authenticate a publisher.
+fn validate_splash_dll(path:&Path)->Result<(),String>{
+    let meta=fs::symlink_metadata(path)
+        .map_err(|e|format!("Cannot inspect 3DfxSpl.dll at {}: {e}",path.display()))?;
+    if !meta.is_file() || meta.file_type().is_symlink() ||
+       !(1024..=16*1024*1024).contains(&meta.len()){
+        return Err(format!("3DfxSpl.dll is not a regular DLL-sized file: {}",path.display()));
+    }
+    let mut f=fs::File::open(path).map_err(|e|e.to_string())?;
+    let mut header=[0u8;4096];
+    let count=f.read(&mut header).map_err(|e|e.to_string())?;
+    if count<256 || &header[..2]!=b"MZ"{
+        return Err(format!("3DfxSpl.dll lacks a PE header: {}",path.display()));
+    }
+    let offset=u32::from_le_bytes(header[0x3c..0x40].try_into().unwrap()) as usize;
+    if offset.checked_add(26).is_none_or(|p|p>count) ||
+       &header[offset..offset+4]!=b"PE\0\0" ||
+       u16::from_le_bytes(header[offset+4..offset+6].try_into().unwrap())!=0x14c ||
+       u16::from_le_bytes(header[offset+22..offset+24].try_into().unwrap())&0x2000==0 ||
+       u16::from_le_bytes(header[offset+24..offset+26].try_into().unwrap())!=0x10b{
+        return Err(format!("3DfxSpl.dll must be a 32-bit x86 Windows DLL: {}",path.display()));
+    }
+    Ok(())
+}
+/// Glide 2.x's optional splash logo uses 3DfxSpl.dll, separate from glide.dll.
+/// Read-only: never copy, download, overwrite or remove the owner's DLL.
+/// --verify intentionally ignores this optional plugin.
+pub fn check_splash_plugin(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
+    let plugin=game.join("3DfxSpl.dll");
+    if !plugin.exists() && !plugin.is_symlink(){
+        return Err(format!(
+            "3dfx logo requested with --launch --3dfx-logo, but 3DfxSpl.dll is missing. \
+Copy your own 32-bit nGlide 3DfxSpl.dll into the splanet directory \
+(next to glide.dll and spvoodoo.exe), then retry. Expected path: {}. \
+This optional DLL is not required by --verify or normal --launch.",
+            plugin.display()));
+    }
+    validate_splash_dll(&plugin).map_err(|error|format!(
+        "3dfx logo requested, but splanet/3DfxSpl.dll is invalid: {error}. \
+Copy a valid 32-bit nGlide 3DfxSpl.dll into the splanet directory and retry."))?;
+    log(&format!("NGLIDE: optional 3DfxSpl.dll found and validated (read-only): {}",plugin.display()));
+    Ok(())
+}
 pub fn verify_local_glide(game:&Path)->Result<(),String>{
     validate_glide_dll(&game.join("glide.dll")).map_err(|e|
         format!("{e}. nGlide is required in the splanet directory. Download and install it separately: {OFFICIAL_URL}. ScorchedPlanetFix does not redistribute the proprietary nGlide DLL."))
@@ -108,7 +152,7 @@ fn has_vulkan_loader()->bool{
 /// Per-game environment overrides global nGlide configurator/registry.
 /// Vulkan is requested only when its loader can be opened, not guaranteed
 /// to have a working GPU/driver. 60Hz + vsync helps keep old games in check.
-pub fn configure_process(command:&mut Command,mut log:impl FnMut(&str)){
+pub fn configure_process(command:&mut Command,show_3dfx_logo:bool,mut log:impl FnMut(&str)){
     let backend=if has_vulkan_loader(){"2"}else{"0"};
     for (name,value) in [
         ("NGLIDE_BACKEND",backend), // Vulkan when loader present, otherwise automatic
@@ -117,13 +161,58 @@ pub fn configure_process(command:&mut Command,mut log:impl FnMut(&str)){
         ("NGLIDE_REFRESH","2"), // 60 Hz
         ("NGLIDE_VSYNC","1"), // On: minimize tearing / runaway frame rate
         ("NGLIDE_GAMMA","5"), // 1.0
-        ("NGLIDE_SPLASH","0"), // Avoid 3dfx splash; nGlide 2.10 had Scorched Planet splash bug
+        ("NGLIDE_SPLASH",if show_3dfx_logo{"1"}else{"0"}), // On only with --launch --3dfx-logo
     ]{command.env(name,value);}
-    log(&format!("NGLIDE: process-local settings (registry unchanged): backend={} (2=Vulkan loader found; 0=auto), resolution=desktop, aspect=correction, 60Hz, vsync=on, gamma=1.0, splash=off",backend));
+    log(&format!("NGLIDE: process-local settings (registry unchanged): backend={} (2=Vulkan loader found; 0=auto), resolution=desktop, aspect=correction, 60Hz, vsync=on, gamma=1.0, splash={}",backend,if show_3dfx_logo{"on"}else{"off"}));
 }
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test] fn splash_logo_is_off_by_default_and_on_only_when_requested(){
+        let mut cmd=Command::new("spvoodoo.exe");
+        configure_process(&mut cmd,false,|_|{});
+        assert_eq!(
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
+            Some(std::ffi::OsStr::new("0"))
+        );
+        let mut cmd=Command::new("spvoodoo.exe");
+        configure_process(&mut cmd,true,|_|{});
+        assert_eq!(
+            cmd.get_envs().find(|(key,_)|*key==std::ffi::OsStr::new("NGLIDE_SPLASH")).and_then(|(_,value)|value),
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
+    #[test] fn splash_plugin_check_is_read_only_and_optional_for_verify(){
+        let root=std::env::temp_dir().join(format!("nglide-splash-test-{}",std::process::id()));
+        let game=root.join("splanet");
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&game).unwrap();
+        let plugin=root.join("3DfxSpl.dll");
+        let mut dll=vec![0u8;2048];
+        dll[..2].copy_from_slice(b"MZ");
+        dll[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        dll[0x80..0x84].copy_from_slice(b"PE\0\0");
+        dll[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        dll[0x96..0x98].copy_from_slice(&0x2000u16.to_le_bytes());
+        dll[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
+        // A splash DLL beside the tool is not used or automatically copied.
+        fs::write(&plugin,&dll).unwrap();
+        let missing=check_splash_plugin(&game,|_|{}).unwrap_err();
+        assert!(missing.contains("Copy your own 32-bit nGlide 3DfxSpl.dll"));
+        assert!(missing.contains("splanet directory"));
+        assert!(!game.join("3DfxSpl.dll").exists());
+        // Regular Glide verification does not inspect or require the splash plugin.
+        fs::write(game.join("glide.dll"),&dll).unwrap();
+        verify_local_glide(&game).unwrap();
+        fs::write(game.join("3DfxSpl.dll"),b"not a DLL").unwrap();
+        verify_local_glide(&game).unwrap();
+        assert!(check_splash_plugin(&game,|_|{}).unwrap_err().contains("invalid"));
+        // Valid module is accepted without touching its bytes.
+        fs::write(game.join("3DfxSpl.dll"),&dll).unwrap();
+        check_splash_plugin(&game,|_|{}).unwrap();
+        assert_eq!(fs::read(game.join("3DfxSpl.dll")).unwrap(),dll);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test] fn no_network_or_bundled_wrapper_required(){
         assert!(OFFICIAL_URL.starts_with("https://"));
         let root=std::env::temp_dir().join(format!("nglide-test-{}",std::process::id()));

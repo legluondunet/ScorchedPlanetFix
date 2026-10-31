@@ -164,13 +164,14 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
             return Err(format!("INI: language={lang} is not compatible with edition {}",profile.label));
         }
     }
-    // SPLANETW.EXE is the obsolete software-renderer executable. All new
-    // installations omit it. Warn owners of older installations to perform
-    // the safe SHA-256-gated cleanup using the normal installer command.
+    // Neither original software renderer is needed for the 3dfx edition.
+    // Reject them at verification time. The installer removes exact original
+    // files from older installations but never deletes unknown replacements.
     for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
         let item=item.map_err(|e|e.to_string())?;
-        if item.file_name().to_string_lossy().eq_ignore_ascii_case("splanetw.exe"){
-            return Err("Unused splanetw.exe is present: run ScorchedPlanetFix.exe without arguments to remove it if its checksum matches the original CD.".into());
+        let name=item.file_name().to_string_lossy().to_ascii_lowercase();
+        if matches!(name.as_str(),"splanet.exe"|"splanetw.exe"){
+            return Err(format!("Unused {name} is present: run ScorchedPlanetFix.exe without arguments to remove it if its checksum matches the original CD."));
         }
     }
     // nGlide is a runtime prerequisite: the check is read-only and never
@@ -192,13 +193,16 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
         executable:exe,
     })
 }
-pub fn launch_verified(folder:&Path,mut log:impl FnMut(&str))->Result<Child,String>{
+pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,mut log:impl FnMut(&str))->Result<Child,String>{
     let report=verify_install(folder,|message|log(message))?;
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
+    if show_3dfx_logo{
+        nglide::check_splash_plugin(folder,|message|log(message))?;
+    }
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
-    nglide::configure_process(&mut command,|message|log(message));
+    nglide::configure_process(&mut command,show_3dfx_logo,|message|log(message));
     command.spawn()
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
@@ -216,8 +220,10 @@ mod tests {
             assert!(files.iter().any(|x|x.path=="rwdlvood.dll"));
             assert!(files.iter().any(|x|x.path.starts_with("video/")));
             assert!(!files.iter().any(|x|x.path.ends_with(".sav")));
-            assert!(!files.iter().any(|x|x.path=="splanetw.exe"),
-                "obsolete software renderer must not be required for {edition}");
+            for name in ["splanet.exe","splanetw.exe"]{
+                assert!(!files.iter().any(|x|x.path==name),
+                    "unused software renderer {name} must not be required for {edition}");
+            }
         }
         assert!(allowed_language("US 1.08",1));
         assert!(allowed_language("EN/ES/IT 1.06",5));
