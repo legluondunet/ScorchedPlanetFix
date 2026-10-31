@@ -197,6 +197,9 @@ pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,mut log:impl FnMut(&str)
     let report=verify_install(folder,|message|log(message))?;
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
+    if show_3dfx_logo{
+        nglide::prepare_splash_plugin(folder,|message|log(message))?;
+    }
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
     nglide::configure_process(&mut command,show_3dfx_logo,|message|log(message));
