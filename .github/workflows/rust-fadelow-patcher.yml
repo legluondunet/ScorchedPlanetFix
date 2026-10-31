@@ -2,7 +2,8 @@ name: ScorchedPlanetFix Windows 1.0 CLI
 
 on:
   push:
-    branches: [feat/rust-fadelow-patcher]
+    branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -20,14 +21,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-      - name: Update Rust dependencies / lock file
-        run: cargo generate-lockfile
       - name: Add Windows x64 target
         run: rustup target add x86_64-pc-windows-msvc
       - name: Test all targets (includes ISO and FadeLow tests)
-        run: cargo test --target x86_64-pc-windows-msvc --all-targets
+        run: cargo test --locked --target x86_64-pc-windows-msvc --all-targets
       - name: Compile release console (Windows x64 only)
-        run: cargo build --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
       - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
         run: |
@@ -53,17 +52,35 @@ jobs:
           $digest = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  ScorchedPlanetFix.exe" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
           Compress-Archive -Path dist/* -DestinationPath ScorchedPlanetFix-v1.0.0-Windows-x64.zip
-      - name: Upload Windows CLI executable (development build)
+      - name: Verify packaged ZIP and SHA-256 manifest
+        shell: pwsh
+        run: |
+          $archive = "ScorchedPlanetFix-v1.0.0-Windows-x64.zip"
+          $unpacked = "dist-verify"
+          Expand-Archive -Path $archive -DestinationPath $unpacked -Force
+          $expectedFiles = @("ScorchedPlanetFix.exe", "LICENSE.txt", "README.md", "SHA256SUMS.txt")
+          foreach ($name in $expectedFiles) {
+            if (!(Test-Path -PathType Leaf (Join-Path $unpacked $name))) {
+              throw "Release archive is missing $name"
+            }
+          }
+          $actualFiles = @(Get-ChildItem -Path $unpacked -File)
+          if ($actualFiles.Count -ne $expectedFiles.Count) {
+            throw "Release archive contains unexpected or duplicate files"
+          }
+          $manifest = (Get-Content (Join-Path $unpacked "SHA256SUMS.txt") -Raw).Trim()
+          if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe$') {
+            throw "Invalid SHA256SUMS.txt format"
+          }
+          $actualHash = (Get-FileHash (Join-Path $unpacked "ScorchedPlanetFix.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($manifest.Substring(0,64) -cne $actualHash) {
+            throw "SHA-256 of packaged executable does not match SHA256SUMS.txt"
+          }
+          Write-Host "Release ZIP verified: four expected files, executable SHA-256 matches manifest"
+      - name: Upload verified Windows CLI archive
         uses: actions/upload-artifact@v4
         with:
           name: ScorchedPlanetFix-v1.0.0-Windows-x64
           path: ScorchedPlanetFix-v1.0.0-Windows-x64.zip
-          if-no-files-found: error
-          retention-days: 30
-      - name: Archive generated dependency lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScorchedPlanetFix-v1.0.0-Cargo-lock
-          path: Cargo.lock
           if-no-files-found: error
           retention-days: 30

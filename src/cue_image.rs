@@ -102,11 +102,11 @@ fn parse_cue(text:&str)->Result<Vec<Track>,String>{
                     number!=tracks.len() as u8+1 {
                     return Err(format!("Invalid TRACK number or order at line {}",line_number+1));
                 }
-                let (file,file_type)=current_file.clone().ok_or("TRACK avant FILE dans CUE")?;
+                let (file,file_type)=current_file.clone().ok_or("CUE: TRACK appears before FILE")?;
                 tracks.push(Track{number,file,file_type,mode,index00:None,index01:None});
             },
             "INDEX" =>{
-                let track=tracks.last_mut().ok_or("INDEX avant TRACK dans CUE")?;
+                let track=tracks.last_mut().ok_or("CUE: INDEX appears before TRACK")?;
                 let index=parts.next().ok_or("INDEX entry has no number")?
                     .parse::<u8>().map_err(|_|"Invalid INDEX number")?;
                 let time=msf_frames(parts.next().ok_or("INDEX entry has no timestamp")?)?;
@@ -172,7 +172,7 @@ fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
         return Err("CUE must be a regular file within size limits".into());
     }
     let raw=fs::read(cue).map_err(|e|format!("Failed to read CUE: {e}"))?;
-    let contents=String::from_utf8(raw).map_err(|_|"CUE : texte UTF-8 requis".to_string())?;
+    let contents=String::from_utf8(raw).map_err(|_|"CUE: input must be valid UTF-8".to_string())?;
     let tracks=parse_cue(&contents)?;
     let first=&tracks[0];
     if !matches!(first.mode,TrackMode::Mode1_2048|TrackMode::Mode1_2352|TrackMode::Mode2_2352) {

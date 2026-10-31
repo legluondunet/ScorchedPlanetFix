@@ -311,6 +311,46 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
     }
     Ok(images.pop())
 }
+/// Write a complete replacement beside the target, then rename it into place.
+/// An interrupted write cannot truncate the existing INI. Never overwrite a
+/// pre-existing scratch file, and remove only the one created by this process.
+fn write_ini_atomically(path:&Path,bytes:&[u8])->Result<(),String>{
+    let permissions=match fs::symlink_metadata(path){
+        Ok(meta)=>{
+            if !meta.is_file() || meta.file_type().is_symlink(){
+                return Err("splanet.ini is not a regular file".into());
+            }
+            Some(meta.permissions())
+        },
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
+        Err(e)=>return Err(format!("Cannot inspect splanet.ini: {e}")),
+    };
+    let mut temporary=None;
+    for nonce in 0..1000 {
+        let scratch=path.with_file_name(format!(
+            ".scorchedplanetfix-ini-{}-{nonce}.tmp",std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&scratch){
+            Ok(file)=>{temporary=Some((scratch,file));break;},
+            Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,
+            Err(e)=>return Err(format!("Cannot create temporary INI: {e}")),
+        }
+    }
+    let (scratch,mut file)=temporary.ok_or("Cannot allocate temporary INI file")?;
+    let result=(||{
+        file.write_all(bytes).map_err(|e|format!("Cannot write temporary INI: {e}"))?;
+        file.sync_all().map_err(|e|format!("Cannot sync temporary INI: {e}"))?;
+        if let Some(perms)=permissions {
+            file.set_permissions(perms).map_err(|e|format!("Cannot preserve INI permissions: {e}"))?;
+        }
+        drop(file);
+        if fs::read(&scratch).map_err(|e|e.to_string())?!=bytes {
+            return Err("Temporary INI content verification failed".into());
+        }
+        fs::rename(&scratch,path).map_err(|e|format!("Cannot replace splanet.ini: {e}"))
+    })();
+    if result.is_err(){let _=fs::remove_file(&scratch);}
+    result
+}
 /// Keep all existing user settings unmodified except video, selected language
 /// and HighQualityVideo; add conservative defaults when no INI exists.
 pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
@@ -320,10 +360,19 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     // Preserve all legacy non-UTF8 bytes in original INI lines; replace
     // video= video (working-directory-relative), plus defaults from Lutris
     // installation script without overwriting existing user settings.
-    let original=match fs::read(ini) {
-        Ok(bytes)=>bytes,
+    let original=match fs::symlink_metadata(ini) {
+        Ok(metadata)=>{
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("splanet.ini must be a regular file (symlinks refused)".into());
+            }
+            let bytes=fs::read(ini).map_err(|e|format!("Cannot read splanet.ini: {e}"))?;
+            if bytes.len()>256*1024 {
+                return Err("splanet.ini is too large (256 KiB limit)".into());
+            }
+            bytes
+        },
         Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Vec::new(),
-        Err(e)=>return Err(format!("Cannot read splanet.ini: {e}")),
+        Err(e)=>return Err(format!("Cannot inspect splanet.ini: {e}")),
     };
     // Numeric language indices come from the original game's PE32 resource
     // pointer table: 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
@@ -358,8 +407,11 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
             for i in 0..5 {
                 if trimmed.len()>=names[i].len() &&
                    trimmed[..names[i].len()].eq_ignore_ascii_case(names[i]) {
+                    // A migrated INI must contain exactly one video, language,
+                    // and HighQualityVideo entry, or --verify will reject it.
+                    // Keep all other user-defined settings unmodified.
                     if i<=2 {
-                        out.push(values[i].clone());
+                        if !seen[i] { out.push(values[i].clone()); }
                     }else{
                         out.push(line.to_vec());
                     }
@@ -384,7 +436,7 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
         bytes.extend_from_slice(&line);
         bytes.extend_from_slice(b"\r\n");
     }
-    fs::write(ini,bytes).map_err(|e|format!("INI : {e}"))
+    write_ini_atomically(ini,&bytes)
 }
 
 pub fn install_iso(
@@ -511,15 +563,20 @@ pub fn install_image(
                 output.flush().map_err(|e|e.to_string())?;
                 output.sync_all().map_err(|e|e.to_string())?;
                 drop(output);
-                if transferred!=asset.size || file_digest(&source)?!=file_digest(&target)? {
+                if transferred!=asset.size {
+                    return Err(format!("Copied file size verification failed: {key}"));
+                }
+                // Reuse the target digest for the audit log: avoid reading
+                // every staged game asset a second time just for logging.
+                let target_hash=file_digest(&target)?;
+                if file_digest(&source)?!=target_hash {
                     return Err(format!("Copied file verification failed: {key}"));
                 }
                 copied+=transferred;
                 report(58+copied.saturating_mul(35)/total,100,
                     if directory=="splanet" {"Copying game files from temp/splanet..."}
                     else {"Copying game components from temp/voodoo..."});
-                log(&format!("COPY: temp/{directory}/{key} -> splanet/{key}, sha256={}",
-                    file_digest(&target)?));
+                log(&format!("COPY: temp/{directory}/{key} -> splanet/{key}, sha256={target_hash}"));
             }
         }
         // Phase 3: patch first, exactly as requested, and ensure the original
@@ -675,6 +732,48 @@ mod tests {
         assert_eq!(expected.splanet_files.len(),2);
         assert_eq!(expected.files.len(),4);
         assert!(expected.files.keys().all(|name|name==&name.to_ascii_lowercase()));
+    }
+    #[test] fn ini_migration_deduplicates_controlled_keys_and_is_idempotent(){
+        let dir=std::env::temp_dir().join(format!("scorched-ini-dedupe-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        let ini=dir.join("splanet.ini");
+        fs::write(&ini,b"[scorch]\r\nvideo=c:\\old\\video\r\nvideo=other\r\nlanguage=1\r\nlanguage=5\r\nHighQualityVideo=0\r\nHighQualityVideo=1\r\nsettings=custom\r\ngamma=1.1\r\n").unwrap();
+        update_ini(&ini,4).unwrap();
+        let first=fs::read(&ini).unwrap();
+        let text=String::from_utf8_lossy(&first);
+        assert_eq!(text.matches("video=").count(),1);
+        assert_eq!(text.matches("language=").count(),1);
+        assert_eq!(text.matches("HighQualityVideo=").count(),1);
+        assert!(text.contains("video= video"));
+        assert!(text.contains("language=4"));
+        assert!(text.contains("settings=custom"));
+        assert!(text.contains("gamma=1.1"));
+        update_ini(&ini,4).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),first,"second migration must not rewrite settings");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(),1,"temporary INI must be removed");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test] fn ini_migration_refuses_directory_target(){
+        let dir=std::env::temp_dir().join(format!("scorched-ini-dir-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("splanet.ini")).unwrap();
+        assert!(update_ini(&dir.join("splanet.ini"),1).unwrap_err().contains("regular file"));
+        assert!(dir.join("splanet.ini").is_dir());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(unix)]
+    #[test] fn ini_migration_refuses_symlink_to_user_file(){
+        use std::os::unix::fs::symlink;
+        let dir=std::env::temp_dir().join(format!("scorched-ini-symlink-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let user_file=dir.join("private.txt");
+        fs::write(&user_file,b"keep my content").unwrap();
+        symlink(&user_file,dir.join("splanet.ini")).unwrap();
+        assert!(update_ini(&dir.join("splanet.ini"),1).is_err());
+        assert_eq!(fs::read(&user_file).unwrap(),b"keep my content");
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test] fn creates_missing_ini_with_local_video_and_defaults(){
         let dir=std::env::temp_dir().join(format!("scorched-new-ini-test-{}",std::process::id()));

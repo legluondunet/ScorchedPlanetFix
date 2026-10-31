@@ -16,7 +16,7 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 - SHA-256 checks and an original-executable backup safeguard the patches
 
 > [!IMPORTANT]
-> You need your **own copy of Scorched Planet** and **nGlide**. This project does not include the game, disc images or any nGlide binaries. Native Windows gameplay has not yet been independently validated.
+> You need your **own copy of Scorched Planet** and **nGlide**. This project does not include the game, disc images or any nGlide binaries. The owner has now tested native Windows 11 installation and gameplay; broader hardware and mission compatibility remains unverified.
 
 ## Supported CD editions
 
@@ -26,7 +26,7 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 | Europe (InstallKey 1.06) | English, Spanish, Italian | ✅ | ✅ | ✅ |
 | Europe (InstallKey 1.06) | French, German | ✅ | ✅ | ✅ |
 
-Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checks reflect owner-reported gameplay validation under Wine, not every mission or hardware configuration.
+Edits are strictly tied to SHA-256 fingerprints of the original executable and core game resources; unknown binaries are refused. The numbers above come from each disc's *InstallKey*, not independently verified executable version metadata. The checks reflect owner-reported testing under Wine and native Windows 11, not every mission or hardware configuration.
 
 ## Quick start
 
