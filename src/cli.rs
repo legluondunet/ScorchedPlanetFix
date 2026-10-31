@@ -63,8 +63,8 @@ pub fn run(arguments:&[OsString],root:&Path,
         let edition=verify::profile_for_patched_exe(&exe)?;
         let language=verify::preferred_language(&install,edition.label);
         iso_install::update_ini(&install.join("splanet.ini"),language)?;
-        if iso_install::remove_unused_splanetw(&install,edition.label)? {
-            emit(logger,&mut sink,"Unused legacy splanetw.exe removed (original CD checksum verified).");
+        for removed in iso_install::remove_unused_executables(&install,edition.label)? {
+            emit(logger,&mut sink,&format!("Unused {removed} removed (original CD checksum verified)."));
         }
         let installed=nglide::copy_installed_glide(root,&install,|message|logger.write(message))?;
         if !installed {

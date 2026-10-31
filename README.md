@@ -106,7 +106,7 @@ The installer also:
 
 - Reads supported ISO and CUE/BIN layouts; keeps your original image untouched
 - Copies the needed videos and language files and normalizes names
-- Omits the unused `splanetw.exe` software-renderer executable and obsolete 3dfx drivers
+- Omits the unused `splanet.exe` and `splanetw.exe` software-renderer executables and obsolete 3dfx drivers
 - Uses the portable `video= video` INI setting for local video playback
 - Excludes save slots and mutable settings from immutable-file hash enforcement
 - Sets nGlide options only for the launched game, never through global registry changes

@@ -2,7 +2,7 @@
 // Generated from owner-supplied data/cd-inventories/*.json (2026-10-30).
 // Only original game assets, never copyrighted bytes. Save games are mutable
 // and exempt from hash enforcement.
-// SPLANETW.EXE (legacy software renderer) is intentionally not installed.
+// SPLANET.EXE and SPLANETW.EXE (software renderers) are intentionally omitted.
 pub struct ReferenceFile { pub path:&'static str, pub size:u64, pub sha256:&'static str }
 
 pub const MANIFEST_US: &[ReferenceFile] = &[
@@ -129,7 +129,6 @@ pub const MANIFEST_EN_ES_IT: &[ReferenceFile] = &[
     ReferenceFile{path:"spanish/maps8.rwb",size:324056,sha256:"0b89d00eb652b3ff649d44b7d8db57382785fd25375e4eb865af291af29ad662"},
     ReferenceFile{path:"spanish/sound.rwb",size:662096,sha256:"9e94c3dae1d906a1e5a33509a5029c0faec346adca22d69cf94e0791ce5228bd"},
     ReferenceFile{path:"spanishw.txt",size:2326,sha256:"c8522801620bf7bfecbcfdaed4f342fe87d5ccfea9d36ce0e0e59ba1d8213829"},
-    ReferenceFile{path:"splanet.exe",size:1619463,sha256:"c390df14bba228a3481104fece4003087670bdb8bc58a29a22dffe79d8f0ac21"},
     ReferenceFile{path:"static6.rwb",size:554848,sha256:"7262c9a2fed1147adc3ddd01222b3a36f2c46f0eeabfbc3c3214d5a98cff5cc5"},
     ReferenceFile{path:"static8.rwb",size:349088,sha256:"b78cb047d0a9341cddfae2ca1be84db1aad6a4824abfeeb830abf4edf8cb95ea"},
     ReferenceFile{path:"terrain6.rwb",size:28166744,sha256:"a09a287975fe82f4ea92dd8828aac8f09c6bedae6a31b1538a74b823f49269cc"},
@@ -286,7 +285,6 @@ pub const MANIFEST_FR_DE: &[ReferenceFile] = &[
     ReferenceFile{path:"palette.rwb",size:19760,sha256:"31126579f3e3812894338c5b9300bfd92557fa4771cb2234f0308abbfc07fedb"},
     ReferenceFile{path:"smackw32.dll",size:66048,sha256:"3f21682e8b2eb3ce69f776be0ef84d8bb13c295da885d509329f4f873517ae0e"},
     ReferenceFile{path:"sound.rwb",size:2440143,sha256:"d502f8424f220253981299284c5aab10bca805371fe633383ea2a075b735a063"},
-    ReferenceFile{path:"splanet.exe",size:1619975,sha256:"2f26f8e845808c895797367b134fcfba408430aa6564dc402a86c6d36d16912c"},
     ReferenceFile{path:"static6.rwb",size:554848,sha256:"7262c9a2fed1147adc3ddd01222b3a36f2c46f0eeabfbc3c3214d5a98cff5cc5"},
     ReferenceFile{path:"static8.rwb",size:349088,sha256:"feef5dc8db73f49b63e32a2e598ca67a91d5b464abd189546f3a873e068e78f0"},
     ReferenceFile{path:"terrain6.rwb",size:28166744,sha256:"a09a287975fe82f4ea92dd8828aac8f09c6bedae6a31b1538a74b823f49269cc"},
