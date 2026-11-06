@@ -65,7 +65,7 @@ pub fn copy_installed_glide(root:&Path,game:&Path,mut log:impl FnMut(&str))->Res
         return Ok(true);
     }
     let Some(source)=find_source(root) else {
-        log(&format!("NGLIDE WARNING: no locally installed 32-bit nGlide wrapper found. Install nGlide yourself from {OFFICIAL_URL} or place your own glide.dll beside ScorchedPlanetFix.exe; --verify/--launch will refuse until game/splanet/glide.dll exists."));
+        log(&format!("NGLIDE WARNING: no locally installed 32-bit nGlide wrapper found. Install nGlide yourself from {OFFICIAL_URL} or place your own glide.dll beside ScorchedPlanetFix.exe; --verify/automatic play will refuse until game/splanet/glide.dll exists."));
         return Ok(false);
     };
     let mut src=fs::File::open(&source).map_err(|e|e.to_string())?;
@@ -119,10 +119,10 @@ pub fn check_splash_plugin(game:&Path,mut log:impl FnMut(&str))->Result<(),Strin
     let plugin=game.join("3DfxSpl.dll");
     if !plugin.exists() && !plugin.is_symlink(){
         return Err(format!(
-            "3dfx logo requested with --launch --3dfx-logo, but 3DfxSpl.dll is missing. \
+            "3dfx logo requested with --3dfx-logo, but 3DfxSpl.dll is missing. \
 Copy your own 32-bit nGlide 3DfxSpl.dll into the splanet directory \
 (next to glide.dll and spvoodoo.exe), then retry. Expected path: {}. \
-This optional DLL is not required by --verify or normal --launch.",
+This optional DLL is not required by --verify or normal play.",
             plugin.display()));
     }
     validate_splash_dll(&plugin).map_err(|error|format!(
@@ -161,7 +161,7 @@ pub fn configure_process(command:&mut Command,show_3dfx_logo:bool,mut log:impl F
         ("NGLIDE_REFRESH","2"), // 60 Hz
         ("NGLIDE_VSYNC","1"), // On: minimize tearing / runaway frame rate
         ("NGLIDE_GAMMA","5"), // 1.0
-        ("NGLIDE_SPLASH",if show_3dfx_logo{"1"}else{"0"}), // On only with --launch --3dfx-logo
+        ("NGLIDE_SPLASH",if show_3dfx_logo{"1"}else{"0"}), // On only with --3dfx-logo
     ]{command.env(name,value);}
     log(&format!("NGLIDE: process-local settings (registry unchanged): backend={} (2=Vulkan loader found; 0=auto), resolution=desktop, aspect=correction, 60Hz, vsync=on, gamma=1.0, splash={}",backend,if show_3dfx_logo{"on"}else{"off"}));
 }

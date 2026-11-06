@@ -330,7 +330,12 @@ pub fn find_image_and_install(folder: &Path) -> Result<Option<PathBuf>,String> {
         }
     }
     images.sort();
-    if images.len()>1 {return Err("Multiple ISO/CUE images found: leave only one disc image".into());}
+    if images.len()>1 {
+        let names=images.iter().map(|p|p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .collect::<Vec<_>>().join(", ");
+        return Err(format!(
+            "Multiple ISO/CUE images found beside ScorchedPlanetFix.exe: {names}. Specify one image explicitly."));
+    }
     if images.is_empty() && bare_bins>0 {
         return Err("BIN image found without a CUE file: place its .cue file in this directory".into());
     }
@@ -509,7 +514,7 @@ pub fn install_image(
     let edition=mandatory_file_hashes(&mut iso,&inventory)?;
     log(&format!("EDITION: {} (installer key {}), exact EXE + GEOMETRY + RWDLVOOD validated",
         edition.label,edition.installer_key));
-    // Signature checks identify one of the three recorded 3dfx editions. Without a
+    // Signature checks identify one of the four recorded 3dfx binary variants. Without a
     // signed full-disc reference manifest, they cannot prove that every
     // other original CD file matches a specific retail master image.
     log("ISO: edition-specific EXE/GEOMETRY and shared RWDLVOOD hashes verified; no independently authenticated all-files master yet");

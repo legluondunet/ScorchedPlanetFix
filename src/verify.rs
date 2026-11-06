@@ -142,7 +142,7 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
     let profile=profile_from_hash(&digest)
         .ok_or_else(||format!("Unrecognized executable: SHA-256 {digest}"))?;
     if digest!=profile.patched_hash{
-        return Err(format!("Executable {} is not patched. Run ScorchedPlanetFix.exe without arguments to apply the patch.",
+        return Err(format!("Executable {} is not patched. Run ScorchedPlanetFix.exe --install-only to repair a recognized older installation.",
             profile.label));
     }
     // A backup must match the exact edition: never blindly trust a .bak.
@@ -171,7 +171,7 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
         let item=item.map_err(|e|e.to_string())?;
         let name=item.file_name().to_string_lossy().to_ascii_lowercase();
         if matches!(name.as_str(),"splanet.exe"|"splanetw.exe"){
-            return Err(format!("Unused {name} is present: run ScorchedPlanetFix.exe without arguments to remove it if its checksum matches the original CD."));
+            return Err(format!("Unused {name} is present: run ScorchedPlanetFix.exe --install-only to remove it if its checksum matches the original CD."));
         }
     }
     // nGlide is a runtime prerequisite: the check is read-only and never

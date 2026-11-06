@@ -11,7 +11,7 @@ This is a **console-only** program. It has no graphical user interface. The 32-b
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --launch
-.\ScorchedPlanetFix.exe --launch --3dfx-logo
+.\ScorchedPlanetFix.exe --3dfx-logo
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
@@ -101,7 +101,7 @@ The US patch is owner-validated; the overall PR still requires final review and 
 
 Official download: https://www.zeus-software.com/downloads/nglide
 
-The user downloads and installs it separately in the same Windows/Wine environment. The tool may copy a **user-installed** `glide.dll` (32-bit PE DLL) from the patcher's folder or Windows `SysWOW64` to `splanet`. If missing, installation can finish with a warning, but `--verify` and `--launch` refuse to proceed until `splanet/glide.dll` is available. This PE check does not cryptographically authenticate the nGlide publisher.
+The user downloads and installs it separately in the same Windows/Wine environment. The tool may copy a **user-installed** `glide.dll` (32-bit PE DLL) from the patcher's folder or Windows `SysWOW64` to `splanet`. If missing, installation can finish with a warning, but `--verify` and automatic play refuse to proceed until `splanet/glide.dll` is available. This PE check does not cryptographically authenticate the nGlide publisher.
 
 The launcher's per-process environment settings override **only this game's nGlide configuration**; the system-wide registry is *not modified*. Zeus Software documents this precedence: https://www.zeus-software.com/forum/viewtopic.php?p=4254
 
@@ -113,6 +113,6 @@ The launcher's per-process environment settings override **only this game's nGli
 - `NGLIDE_GAMMA=5` (1.0)
 - `NGLIDE_SPLASH=0` (off by default; `--launch --3dfx-logo` sets it to `1` for the game process only)
 
-Use `ScorchedPlanetFix.exe --launch --3dfx-logo` (or `wine ScorchedPlanetFix.exe --launch --3dfx-logo`) to show the optional nGlide 3dfx startup logo. The separate 32-bit `3DfxSpl.dll` splash plugin is required: **manually copy your own DLL into `splanet/` beside `glide.dll` and `spvoodoo.exe`**. When the option is requested, the launcher checks this file read-only and refuses to launch with an explicit copy instruction if missing or invalid. It never copies, downloads, redistributes or changes `3DfxSpl.dll`. Without the option, the logo remains off. `--verify` never requires, hashes or validates `3DfxSpl.dll` (it is excluded from the immutable file manifest), regardless of whether it exists. Global nGlide registry settings are not modified. When the Vulkan loader is present but the driver is broken, nGlide may still fail. Test game behavior and nGlide settings in real Windows/Wine environments before final release.
+Use `ScorchedPlanetFix.exe --3dfx-logo` (or `wine ScorchedPlanetFix.exe --3dfx-logo`) to show the optional nGlide 3dfx startup logo. The separate 32-bit `3DfxSpl.dll` splash plugin is required: **manually copy your own DLL into `splanet/` beside `glide.dll` and `spvoodoo.exe`**. When the option is requested, the launcher checks this file read-only and refuses to launch with an explicit copy instruction if missing or invalid. It never copies, downloads, redistributes or changes `3DfxSpl.dll`. Without the option, the logo remains off. `--verify` never requires, hashes or validates `3DfxSpl.dll` (it is excluded from the immutable file manifest), regardless of whether it exists. Global nGlide registry settings are not modified. When the Vulkan loader is present but the driver is broken, nGlide may still fail. Test game behavior and nGlide settings in real Windows/Wine environments before final release.
 
 See the main [README](../README.md), [CD edition profiles](cd-editions.md) and [FadeLow research](european-fadelow-research.md). No proprietary file is committed to GitHub. No changes to `main` or merges without owner approval.

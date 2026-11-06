@@ -36,6 +36,25 @@ jobs:
             throw "Unexpected CLI version: $reported"
           }
           Write-Host "Correct CLI version: $reported"
+      - name: Smoke automatic first-run when no game media exists
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
+          $base = Split-Path -Parent $exe
+          if (Test-Path (Join-Path $base 'splanet')) { throw 'Unexpected preinstalled game in CI runner' }
+          $output = (& $exe 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0) { throw 'Automatic play unexpectedly succeeded without game or CD' }
+          if ($output -notmatch 'No ISO/CUE disc image found beside ScorchedPlanetFix.exe') {
+            throw "Missing explanatory first-run error: $output"
+          }
+          if (Test-Path (Join-Path $base 'splanet')) { throw 'Automatic first-run created invalid game directory' }
+          if (!(Test-Path (Join-Path $base 'ScorchedPlanetFix.log'))) { throw 'Unified log missing after first run' }
+          $legacy = (& $exe --launch 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or $legacy -notmatch 'Unknown or incompatible option') {
+            throw "Legacy --launch should be rejected: $legacy"
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host 'Automatic no-disc refusal, one log and removed --launch: PASS'
       - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
         run: |
