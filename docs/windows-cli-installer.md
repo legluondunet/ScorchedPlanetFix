@@ -10,19 +10,21 @@ This is a **console-only** program. It has no graphical user interface. The 32-b
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue"
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
-.\ScorchedPlanetFix.exe --launch
+.\ScorchedPlanetFix.exe --install-only
 .\ScorchedPlanetFix.exe --3dfx-logo
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
 
-- No arguments: extract a single ISO/CUE found in the **current working directory**; if there is already `splanet`, verify and patch its recognized EXE and normalize its INI without overwriting the game assets. To choose media explicitly, provide `<image.iso>` or `<image.cue> [track.bin]` as positional arguments. There is no GUI and no GUI-related command-line switch.
+- **No arguments:** search for `splanet/` **beside ScorchedPlanetFix.exe**. If present, perform a full, read-only SHA-256 verification and launch the game. If absent, find one ISO or CUE/BIN beside the EXE, extract, apply verified edition patches, run the full installation audit once, then launch automatically. Unknown, damaged or incomplete existing installations are **not** overwritten or launched. Relative explicit image names resolve beside the patcher, not the shell working directory. There is no GUI.
 - `--verify`: read-only check of the `splanet` directory **next to ScorchedPlanetFix.exe**; validates patch and `.bak`, all immutable files' SHA-256, `splanet.ini`, local `glide.dll`. Does not overwrite savegames or mutable configuration.
-- `--launch`: run **the same full verification first**, then launch the game from `splanet` and monitor its exit status.
+- `--install-only`: install from an original CD image without playing, or explicitly migrate an older recognized installation (including patching a legacy FadeLow-only executable and clearing known unused EXEs). Saved games remain untouched; unknown executables are refused.
+- `--3dfx-logo`: use the same automatic install/verify/play path with the nGlide startup logo; requires your own `splanet/3DfxSpl.dll`.
+- The former `--launch` option has been removed.
 - `--help`: commands and version; `--version`: version only.
 - Any failed operation emits an error and writes it to `ScorchedPlanetFix.log` (fallback logging attempted when startup fails).
 
-The installer supports four fingerprint-locked disc variants: US 1.08, European EN/ES/IT 1.06, European FR/DE 1.06, and the alternate FR/DE 1.06 ISO. It unpacks `SPLANET/` and `VOODOO/` from ISO or CUE/BIN; copies all game assets from `SPLANET/` and only `spvoodoo.exe` and `rwdlvood.dll` from `VOODOO/`, **excluding** original `glide.dll`, `sst1init.dll` and `fxmemmap.vxd`, and also **omitting unused `SPLANET/SPLANET.EXE` (European discs) and `SPLANET/SPLANETW.EXE` (all four disc variants)**. When invoked without arguments for an existing installation, the CLI removes old copies only after matching their SHA-256 to that edition's original CD inventory. It refuses to delete modified, unknown or mismatched files. `--verify` requires both unused executables to be absent. Normalizes names to lowercase, verifies copied data, saves `spvoodoo.exe.bak`, applies the edition patch, and writes:
+The installer supports four fingerprint-locked disc variants: US 1.08, European EN/ES/IT 1.06, European FR/DE 1.06, and the alternate FR/DE 1.06 ISO. It unpacks `SPLANET/` and `VOODOO/` from ISO or CUE/BIN; copies all game assets from `SPLANET/` and only `spvoodoo.exe` and `rwdlvood.dll` from `VOODOO/`, **excluding** original `glide.dll`, `sst1init.dll` and `fxmemmap.vxd`, and also **omitting unused `SPLANET/SPLANET.EXE` (European discs) and `SPLANET/SPLANETW.EXE` (all four disc variants)**. During an explicit `--install-only` migration, the CLI removes unused original executables only after matching their SHA-256 to that edition's original CD inventory. Normal play and `--verify` do not remove or change anything in an existing installation. It refuses to delete modified, unknown or mismatched files. `--verify` requires both unused executables to be absent. Normalizes names to lowercase, verifies copied data, saves `spvoodoo.exe.bak`, applies the edition patch, and writes:
 
 ```ini
 [scorch]
@@ -54,15 +56,14 @@ This is an edition-specific patch, not the US or FR/DE offsets.
 
 The old four-byte EN/ES/IT result with SHA-256
 `dec3977ff83758f3a65bc5fe96a6bafaa064bbf34ef93ee9f35593fb65e173bc`
-is recognized for safe migration. Run the installer with **no arguments**
-in the directory containing `splanet`. The six-byte candidate is
+is recognized for safe migration. Run `ScorchedPlanetFix.exe --install-only`
+with the `splanet/` folder beside the patcher. The six-byte candidate is
 reconstructed only from the **SHA-256-verified original `spvoodoo.exe.bak`**
 and replaces the old executable atomically; saves and the original backup
 are retained. Missing, corrupted or mismatched backups lead to refusal.
 
-Run `--verify` and `--launch` using the new build **without mounting a CD**,
-and confirm the menu, a mission, videos, audio, saves and game exit.
-The owner has verified this EN/ES/IT no-CD scenario; do not merge the draft PR without explicit approval.
+Then run `--verify` and start the patcher **without arguments** (no CD mounted).
+Confirm the menu, a mission, videos, audio, saves and game exit. The owner has already validated the EN/ES/IT No-CD gameplay scenario.
 
 ## US no-CD patch and safe upgrades
 
@@ -80,20 +81,19 @@ expected SHA-256 is
 
 Previously installed US executables with exact earlier FadeLow hash
 `0df67600d095e18d8b45b2714236991695011158f3bf7d424fb5185e5eccae45`
-are recognized by the patch engine. Rerun the CLI installer with no
-argument **from the directory already containing `splanet`** to migrate
-them. Migration is refused if `spvoodoo.exe.bak` is missing, corrupt,
+are recognized by the patch engine. Run `ScorchedPlanetFix.exe --install-only`
+with `splanet/` beside the EXE to migrate them. Migration is refused if `spvoodoo.exe.bak` is missing, corrupt,
 or does not match the exact original US retail hash. The new six-byte
 candidate is deterministically rebuilt from the verified original backup
 and atomically replaces the old FadeLow executable. The original backup
 and game saves are preserved. `--verify` deliberately refuses the
 previous US FadeLow-only result once the six-byte profile is selected.
 
-Test `--verify` followed by `--launch`, then ensure the menu, Go/mission,
+Test `--verify`, then launch the patcher without arguments; ensure the menu, Go/mission,
 videos, sound, save/load, and normal exit all work **without any optical
 CD image mounted**. If the game still reports NO CD, investigate file
 attributes/drive-root mapping instead of blindly applying more patches.
-The US patch is owner-validated; the overall PR still requires final review and explicit permission to merge.
+The US patch has been owner-validated. Any later changes require independent acceptance.
 
 ## nGlide dependency and GPL boundary
 
@@ -111,8 +111,8 @@ The launcher's per-process environment settings override **only this game's nGli
 - `NGLIDE_REFRESH=2` (60 Hz)
 - `NGLIDE_VSYNC=1` (on, initially chosen to reduce tearing/unstable speed)
 - `NGLIDE_GAMMA=5` (1.0)
-- `NGLIDE_SPLASH=0` (off by default; `--launch --3dfx-logo` sets it to `1` for the game process only)
+- `NGLIDE_SPLASH=0` (off by default; `--3dfx-logo` sets it to `1` for the game process only)
 
 Use `ScorchedPlanetFix.exe --3dfx-logo` (or `wine ScorchedPlanetFix.exe --3dfx-logo`) to show the optional nGlide 3dfx startup logo. The separate 32-bit `3DfxSpl.dll` splash plugin is required: **manually copy your own DLL into `splanet/` beside `glide.dll` and `spvoodoo.exe`**. When the option is requested, the launcher checks this file read-only and refuses to launch with an explicit copy instruction if missing or invalid. It never copies, downloads, redistributes or changes `3DfxSpl.dll`. Without the option, the logo remains off. `--verify` never requires, hashes or validates `3DfxSpl.dll` (it is excluded from the immutable file manifest), regardless of whether it exists. Global nGlide registry settings are not modified. When the Vulkan loader is present but the driver is broken, nGlide may still fail. Test game behavior and nGlide settings in real Windows/Wine environments before final release.
 
-See the main [README](../README.md), [CD edition profiles](cd-editions.md) and [FadeLow research](european-fadelow-research.md). No proprietary file is committed to GitHub. No changes to `main` or merges without owner approval.
+See the main [README](../README.md), [CD edition profiles](cd-editions.md) and [FadeLow research](european-fadelow-research.md). No proprietary file is committed to GitHub. The experimental auto-launch PR remains separate from protected `main` until owner acceptance.
