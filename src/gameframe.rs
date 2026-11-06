@@ -10,6 +10,91 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+#[link(name="user32")]
+extern "system" { fn GetSystemMetrics(index:i32)->i32; }
+
+// DLLs shipped only in earlier ScorchedPlanetFix GameFrame CI experiments.
+// The exact fingerprints distinguish our previous free wrapper from a user's
+// proprietary or unrelated glide.dll; those are NEVER replaced.
+const PREVIOUS_GAMEFRAME_HASHES:&[&str]=&[
+    "1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7",
+    "7b82c9831c3167a0d8ac446fc30ab973d35e9c49e566508ebd5280f3deb8e5a8",
+];
+
+fn original_gameframe(hash:&str)->bool {
+    PREVIOUS_GAMEFRAME_HASHES.contains(&hash)
+}
+
+/// Largest centered 4:3 picture fitting inside the unchanged desktop.
+fn fit_4_3(width:u32,height:u32)->(u32,u32){
+    if (width as u64)*3>(height as u64)*4 {
+        (height.saturating_mul(4)/3,height)
+    }else{
+        (width,width.saturating_mul(3)/4)
+    }
+}
+
+/// Primary desktop dimensions are read-only and are never applied as a
+/// ChangeDisplaySettings request. Wine exposes its configured current mode.
+fn desktop()->Result<(u32,u32),String>{
+    let (w,h)=unsafe{(GetSystemMetrics(0),GetSystemMetrics(1))};
+    if w<640||h<480 {
+        return Err(format!("Invalid desktop metrics {w}x{h}; refusing window resize"));
+    }
+    Ok((w as u32,h as u32))
+}
+
+fn vacant(path:&Path)->Result<(),String>{
+    match fs::symlink_metadata(path){
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_)=>Err(format!("GameFrame backup/staging path already exists: {}",path.display())),
+        Err(e)=>Err(format!("Cannot inspect {}: {e}",path.display())),
+    }
+}
+
+/// Update only a cryptographically recognized former experimental GameFrame
+/// binary. Preserve its original bytes in a hash-named backup; never touch
+/// unknown or proprietary DLLs. Caller audits all game data before invoking.
+fn upgrade_known_gameframe(game:&Path,old_hash:&str,new_hash:&str)->Result<(),String>{
+    if !original_gameframe(old_hash) {return Err("Unknown Glide DLL cannot be upgraded".into());}
+    let target=game.join("glide.dll");
+    let backup=game.join(format!("glide.dll.gameframe-{}.bak",&old_hash[..16]));
+    let stage=game.join(".glide-gameframe-update.tmp");
+    vacant(&backup)?;
+    vacant(&stage)?;
+    let mut out=OpenOptions::new().write(true).create_new(true).open(&stage)
+        .map_err(|e|format!("Cannot stage GameFrame upgrade: {e}"))?;
+    let staged=(||{
+        out.write_all(GLIDE_DLL).map_err(|e|e.to_string())?;
+        out.sync_all().map_err(|e|e.to_string())?;
+        drop(out);
+        if digest(&regular_dll(&stage)?)!=new_hash {
+            return Err("GameFrame upgrade staged DLL hash mismatch".into());
+        }
+        Ok(())
+    })();
+    if let Err(e)=staged {
+        let _=fs::remove_file(&stage);
+        return Err(e);
+    }
+    // Exact last-minute hash check prevents replacing user modifications.
+    if digest(&regular_dll(&target)?)!=old_hash {
+        let _=fs::remove_file(&stage);
+        return Err("Original GameFrame DLL changed during upgrade; refusing".into());
+    }
+    if let Err(e)=fs::rename(&target,&backup){
+        let _=fs::remove_file(&stage);
+        return Err(format!("Cannot save previous GameFrame DLL: {e}"));
+    }
+    if let Err(e)=fs::rename(&stage,&target){
+        let restore=fs::rename(&backup,&target);
+        let _=fs::remove_file(&stage);
+        return Err(format!("Cannot activate new GameFrame DLL: {e}; restore={restore:?}"));
+    }
+    Ok(())
+}
+
+
 #[cfg(gameframe_embedded)]
 pub const GLIDE_DLL: &[u8] = include_bytes!(env!("SCORCHED_GAMEFRAME_DLL_PATH"));
 #[cfg(not(gameframe_embedded))]
@@ -88,6 +173,14 @@ pub fn ensure_glide(root: &Path, game: &Path, mut log: impl FnMut(&str))
     match fs::symlink_metadata(&path) {
         Ok(_) => {
             nglide::verify_local_glide(game)?;
+            let existing=digest(&regular_dll(&path)?);
+            if let Some(expected)=validate_embedded()? {
+                if existing!=expected && original_gameframe(&existing) {
+                    upgrade_known_gameframe(game,&existing,&expected)?;
+                    log(&format!("GAMEFRAME: upgraded exact known experimental DLL old_sha256={existing} new_sha256={expected}; original backed up, other user DLLs preserved"));
+                    return Ok(true);
+                }
+            }
             let provider = if is_embedded_gameframe(game)? { "GameFrame OpenGL" } else { "existing user-provided Glide" };
             log(&format!("GLIDE: kept pre-existing 32-bit DLL provider={provider} (not overwritten)"));
             return Ok(true);
@@ -134,18 +227,23 @@ pub fn configure_process(command: &mut Command, game: &Path, show_3dfx_logo: boo
         if show_3dfx_logo {
             return Err("--3dfx-logo requires a user-provided nGlide DLL and 3DfxSpl.dll; the bundled GameFrame Glide wrapper does not implement nGlide's splash setting. The existing GameFrame DLL was preserved.".into());
         }
-        // GameFrame's neutral 2x scaling retains the original 640x480 4:3
-        // framebuffer, as a first compatibility probe (1280x960 output).
-        // Native fullscreen / aspect-correct desktop scaling is NOT claimed.
-        command.env("GLIDE_SCALE","2");
-        command.env_remove("GLIDE_SIZE");
+        // The Win32 desktop mode stays untouched. GameFrame draws in an
+        // off-screen 4:3 framebuffer and presents it centered/letterboxed
+        // within one desktop-sized borderless original game/input HWND.
+        let (dw,dh)=desktop()?;
+        let (cw,ch)=fit_4_3(dw,dh);
+        command.env("GLIDE_SIZE",format!("{cw}x{ch}"));
+        command.env_remove("GLIDE_SCALE_FILE");
         command.env("GLIDE_LFB_FILTER","nearest");
+        command.env("SCORCHED_GLIDE_DESKTOP","1");
+        command.env("SCORCHED_GLIDE_ADOPT_WINDOW","1");
+        command.env("SCORCHED_GLIDE_FPS_60","1");
         if let Some(root)=game.parent() {
             command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
         }
         let prior=std::env::var("WINEDLLOVERRIDES").unwrap_or_default();
         command.env("WINEDLLOVERRIDES",format!("glide=n;{prior}"));
-        log("GAMEFRAME: backend=OpenGL, API=Glide 2.11, 640x480 internal, initial GLIDE_SCALE=2, 4:3, per-game DLL override=glide=n; nGlide settings not applied");
+        log(&format!("GAMEFRAME: backend=OpenGL, API=Glide 2.11, original=640x480, desktop={dw}x{dh} unchanged, 4:3 content={cw}x{ch} centered, one borderless native game HWND, cap=60fps, per-game DLL override=glide=n; nGlide settings not applied"));
         Ok(())
     }else{
         if show_3dfx_logo {
@@ -170,6 +268,18 @@ mod tests{
         dir
     }
 
+    #[test]
+    fn centered_display_calculations(){
+        assert_eq!(fit_4_3(1920,1080),(1440,1080));
+        assert_eq!(fit_4_3(2560,1440),(1920,1440));
+        assert_eq!(fit_4_3(1280,1024),(1280,960));
+        assert_eq!(fit_4_3(1024,768),(1024,768));
+    }
+    #[test]
+    fn legacy_gameframe_hashes_are_exact_only(){
+        assert!(original_gameframe("1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7"));
+        assert!(!original_gameframe(&"a".repeat(64)));
+    }
     #[test]
     fn bad_pe_or_64_bit_dll_never_accepted(){
         assert!(!pe32_dll(&vec![0u8;4096]));
@@ -204,6 +314,9 @@ mod tests{
         let mut cmd=Command::new("test.exe");
         configure_process(&mut cmd,&root,false,|_|{}).unwrap();
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_60" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
         assert!(configure_process(&mut cmd,&root,true,|_|{}).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
