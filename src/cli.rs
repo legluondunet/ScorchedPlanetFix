@@ -1,264 +1,371 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! ScorchedPlanetFix Windows console installer, verifier and launcher.
-use crate::{iso_install,logger::Logger,verify,nglide};
+//! Automatic, hash-verified Scorched Planet installer and launcher.
+//! The only authority for game discovery is the executable's own folder.
+use crate::{iso_install, logger::Logger, nglide, verify};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path,PathBuf};
+use std::path::{Path, PathBuf};
 
-const USAGE:&str="Usage:\n  ScorchedPlanetFix.exe\n  ScorchedPlanetFix.exe <image.iso>\n  ScorchedPlanetFix.exe <image.cue> [track.bin]\n\nWithout an explicit image path, the current working directory is searched.\nAn existing splanet directory is never overwritten. For a new install,\nspvoodoo.exe is backed up as spvoodoo.exe.bak before patching.";
+const USAGE: &str = "Usage:
+  ScorchedPlanetFix.exe
+  ScorchedPlanetFix.exe <image.iso>
+  ScorchedPlanetFix.exe <image.cue> [track.bin]
+  ScorchedPlanetFix.exe --3dfx-logo [image.iso | image.cue [track.bin]]
+  ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
+  ScorchedPlanetFix.exe --verify
+  ScorchedPlanetFix.exe --help
+  ScorchedPlanetFix.exe --version
 
-#[derive(Debug,PartialEq,Eq)]
-struct Arguments {
-    image:Option<PathBuf>,
-    bin:Option<PathBuf>,
+The executable finds splanet/ and CD images beside itself, not in the shell's
+current directory. An existing installation is verified before every launch.
+No unknown, invalid or damaged installation is replaced automatically.";
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct Media {
+    image: Option<PathBuf>,
+    bin: Option<PathBuf>,
 }
-fn parse_args(args:&[OsString])->Result<Arguments,String>{
-    if args.len()>2 {return Err(format!("Too many arguments.\n{USAGE}"));}
-    let image=args.first().map(PathBuf::from);
-    let bin=args.get(1).map(PathBuf::from);
-    if let Some(ref source)=image {
-        let kind=source.extension().map(|e|e.to_string_lossy().to_ascii_lowercase());
-        if !matches!(kind.as_deref(),Some("iso")|Some("cue")) {
-            return Err(format!("Invalid disc image: expected an .iso or .cue file.\n{USAGE}"));
+
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    Play,
+    InstallOnly,
+    VerifyOnly,
+    Help,
+    Version,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommandLine {
+    mode: Mode,
+    media: Media,
+    splash: bool,
+}
+
+fn parse_media(args: &[OsString]) -> Result<Media, String> {
+    if args.len() > 2 {
+        return Err(format!("Too many disc image arguments.\n{USAGE}"));
+    }
+    let image = args.first().map(PathBuf::from);
+    let bin = args.get(1).map(PathBuf::from);
+    if let Some(ref source) = image {
+        let kind = source.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+        if !matches!(kind.as_deref(), Some("iso") | Some("cue")) {
+            return Err(format!("Invalid disc image: expected an .iso or a .cue file.\n{USAGE}"));
         }
-        if bin.is_some() && kind.as_deref()!=Some("cue") {
-            return Err(format!("An explicit .bin file requires a .cue file.\n{USAGE}"));
+        if bin.is_some() && kind.as_deref() != Some("cue") {
+            return Err(format!("A separate .bin file can only accompany a .cue file.\n{USAGE}"));
         }
     }
-    if let Some(ref bin)=bin {
-        if !bin.extension().is_some_and(|e|e.eq_ignore_ascii_case("bin")) {
-            return Err("The second argument must be a .bin file".into());
+    if let Some(ref track) = bin {
+        if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin")) {
+            return Err("The second disc image argument must be a .bin file".into());
         }
     }
-    Ok(Arguments{image,bin})
+    Ok(Media { image, bin })
 }
-fn regular_input(path:&Path)->Result<(),String>{
-    let meta=fs::symlink_metadata(path).map_err(|e|format!("Disc image not found {}: {e}",path.display()))?;
-    if !meta.is_file() || meta.file_type().is_symlink(){
-        return Err(format!("Disc image must be a regular file; symlinks are not allowed: {}",path.display()));
+
+fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
+    let first = args.first().and_then(|a| a.to_str());
+    let blank = Media { image: None, bin: None };
+    match first {
+        Some("--help") | Some("-h") if args.len() == 1 =>
+            Ok(CommandLine { mode: Mode::Help, media: blank, splash: false }),
+        Some("--version") if args.len() == 1 =>
+            Ok(CommandLine { mode: Mode::Version, media: blank, splash: false }),
+        Some("--verify") if args.len() == 1 =>
+            Ok(CommandLine { mode: Mode::VerifyOnly, media: blank, splash: false }),
+        Some("--install-only") =>
+            Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])?, splash: false }),
+        Some("--3dfx-logo") =>
+            Ok(CommandLine { mode: Mode::Play, media: parse_media(&args[1..])?, splash: true }),
+        Some(option) if option.starts_with('-') =>
+            Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
+        _ =>
+            Ok(CommandLine { mode: Mode::Play, media: parse_media(args)?, splash: false }),
+    }
+}
+
+fn regular_input(path: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|e| format!("Disc image not found {}: {e}", path.display()))?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(format!("Disc image must be a regular file (no symlinks): {}", path.display()));
     }
     Ok(())
 }
-/// Sends informational events to the caller's console and the file logger.
-/// No GUI is ever created by this function.
-fn emit(logger:&Logger,sink:&mut impl FnMut(&str),msg:&str){
+
+/// Resolve relative image paths against the patcher's directory, not the
+/// launcher's shell working directory. Absolute input paths remain supported.
+fn media_arguments(media: &Media, root: &Path) -> Vec<OsString> {
+    [media.image.as_deref(), media.bin.as_deref()].into_iter().flatten()
+        .map(|path| {
+            if path.is_absolute() { path.to_path_buf() } else { root.join(path) }
+                .into_os_string()
+        })
+        .collect()
+}
+
+/// One log beside ScorchedPlanetFix.exe for diagnostics, installation and play.
+fn emit(logger: &Logger, sink: &mut impl FnMut(&str), msg: &str) {
     logger.write(&format!("CLI: {msg}"));
     sink(msg);
 }
-pub fn run(arguments:&[OsString],root:&Path,
-    logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
-    let args=parse_args(arguments)?;
-    let install=root.join("splanet");
+
+/// Explicit install/repair operation. The normal startup does NOT modify
+/// already-installed game files: an invalid existing install is refused.
+/// This remains separate for --install-only and for a new CD installation.
+pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
+           mut sink: impl FnMut(&str)) -> Result<(), String> {
+    let media = parse_media(arguments)?;
+    let install = root.join("splanet");
     if install.is_symlink() {
         return Err("The splanet directory is a symlink; refusing".into());
     }
     if install.exists() {
-        if args.image.is_some() {
+        if media.image.is_some() {
             return Err("The splanet directory already exists: extraction refused; no files were overwritten".into());
         }
-        let exe=scorched_planet_fix::find_installed_exe(&install)?;
-        emit(logger,&mut sink,"Existing installation detected. Checking its patch...");
-        let outcome=scorched_planet_fix::execute(Action::Apply,&exe,None,true)?;
-        let edition=verify::profile_for_patched_exe(&exe)?;
-        let language=verify::preferred_language(&install,edition.label);
-        iso_install::update_ini(&install.join("splanet.ini"),language)?;
-        for removed in iso_install::remove_unused_executables(&install,edition.label)? {
-            emit(logger,&mut sink,&format!("Unused {removed} removed (original CD checksum verified)."));
+        let exe = scorched_planet_fix::find_installed_exe(&install)?;
+        emit(logger, &mut sink, "Existing installation detected. Performing explicitly requested safe migration.");
+        let outcome = scorched_planet_fix::execute(Action::Apply, &exe, None, true)?;
+        let edition = verify::profile_for_patched_exe(&exe)?;
+        let language = verify::preferred_language(&install, edition.label);
+        iso_install::update_ini(&install.join("splanet.ini"), language)?;
+        for removed in iso_install::remove_unused_executables(&install, edition.label)? {
+            emit(logger, &mut sink, &format!("Unused {removed} removed (original CD checksum verified)."));
         }
-        let installed=nglide::copy_installed_glide(root,&install,|message|logger.write(message))?;
+        let installed = nglide::copy_installed_glide(root, &install, |message| logger.write(message))?;
         if !installed {
-            emit(logger,&mut sink,&format!("WARNING: nGlide is missing. Install it from {}",nglide::OFFICIAL_URL));
+            emit(logger, &mut sink,
+                &format!("WARNING: nGlide is missing. Install it from {}", nglide::OFFICIAL_URL));
         }
-        emit(logger,&mut sink,&outcome);
-        emit(logger,&mut sink,&format!("Portable configuration: video= video, language={language}"));
-        emit(logger,&mut sink,&format!("Done. Original backup preserved: {}.bak",exe.display()));
+        emit(logger, &mut sink, &outcome);
+        emit(logger, &mut sink, &format!("Portable configuration: video= video, language={language}"));
+        emit(logger, &mut sink, &format!("Migration complete. Original backup preserved: {}.bak", exe.display()));
         return Ok(());
     }
-    let source=match args.image {
-        Some(p)=>p,
-        None=>iso_install::find_image_and_install(root)?
-            .ok_or("No ISO/CUE disc image found in the current working directory")?,
+
+    let source = match media.image {
+        Some(p) => p,
+        None => iso_install::find_image_and_install(root)?
+            .ok_or("No ISO/CUE disc image found beside ScorchedPlanetFix.exe")?,
     };
     regular_input(&source)?;
-    if let Some(ref b)=args.bin {regular_input(b)?;}
-    emit(logger,&mut sink,&format!("Selected disc image: {}",source.display()));
-    let report=iso_install::install_image(&source,args.bin.as_deref(),&install,
-        |done,total,status|{
-            // Progress output is intentionally throttled to avoid a line for
-            // every file-sector; log retains all detailed extraction hashes.
-            if done==0 || done==total || done%10==0 {
-                let line=format!("{done}/{total}% {status}");
-                sink(&line);
+    if let Some(ref bin) = media.bin {
+        regular_input(bin)?;
+    }
+    emit(logger, &mut sink, &format!("Selected disc image: {}", source.display()));
+    let report = iso_install::install_image(&source, media.bin.as_deref(), &install,
+        |done, total, status| {
+            if done == 0 || done == total || done % 10 == 0 {
+                sink(&format!("{done}/{total}% {status}"));
             }
         },
-        |message|logger.write(message))?;
-    emit(logger,&mut sink,&format!("Detected edition: {}. {} files, {} game data bytes.",
-        report.edition,report.files,report.bytes));
-    emit(logger,&mut sink,"Backup: splanet/spvoodoo.exe.bak");
-    emit(logger,&mut sink,&format!("Automatic patch: {}",report.patch_report));
-    emit(logger,&mut sink,"Installation and patching completed. The game was not launched.");
+        |message| logger.write(message))?;
+    emit(logger, &mut sink, &format!(
+        "Detected edition: {}. {} files, {} game data bytes.",
+        report.edition, report.files, report.bytes));
+    emit(logger, &mut sink, "Backup: splanet/spvoodoo.exe.bak");
+    emit(logger, &mut sink, &format!("Automatic patch: {}", report.patch_report));
+    emit(logger, &mut sink, "Installation and patching completed.");
     Ok(())
 }
 
-/// --verify: strict read-only verification of splanet beside the patcher.
-pub fn verify_only(root:&Path,logger:&Logger,mut sink:impl FnMut(&str))->Result<(),String>{
-    let report=verify::verify_install(&root.join("splanet"),|msg|logger.write(msg))?;
-    emit(logger,&mut sink,&format!("Verification successful: {} — {} files checked ({} bytes); original .bak backup verified.",
-        report.edition,report.checked_files,report.checked_bytes));
+/// Standalone --verify is always read-only and never launches a process.
+pub fn verify_only(root: &Path, logger: &Logger,
+                   mut sink: impl FnMut(&str)) -> Result<(), String> {
+    let report = verify::verify_install(&root.join("splanet"), |msg| logger.write(msg))?;
+    emit(logger, &mut sink, &format!(
+        "Verification successful: {} — {} files checked ({} bytes); original .bak backup verified.",
+        report.edition, report.checked_files, report.checked_bytes));
     Ok(())
 }
-/// --launch: verify the installation before spawning the game, then monitor
-/// the game process exit code. Never launch an unverified executable.
-pub fn launch_only(root:&Path,logger:&Logger,show_3dfx_logo:bool,mut sink:impl FnMut(&str))->Result<(),String>{
-    emit(logger,&mut sink,"Verifying the entire splanet installation before launching...");
-    let mut child=verify::launch_verified(&root.join("splanet"),show_3dfx_logo,|msg|logger.write(msg))?;
-    emit(logger,&mut sink,&format!("Game started, PID {} (verification successful).",child.id()));
-    let status=child.wait().map_err(|e|format!("Failed while monitoring the game process: {e}"))?;
-    if !status.success(){
-        return Err(format!("The game exited with code {}",status.code()
-            .map(|v|v.to_string()).unwrap_or_else(||"unknown".into())));
+
+/// Performs exactly ONE full read-only integrity audit, and starts the game
+/// only after success. A nonzero process exit is logged without claiming that
+/// it necessarily represents a crash.
+fn verify_and_play(root: &Path, logger: &Logger, logo: bool,
+                   mut sink: impl FnMut(&str)) -> Result<(), String> {
+    emit(logger, &mut sink, "Verifying all immutable game files before launch...");
+    let mut child = verify::launch_verified(&root.join("splanet"), logo,
+        |message| logger.write(message))?;
+    emit(logger, &mut sink, &format!(
+        "Game started, PID {} (full verification successful).", child.id()));
+    let status = child.wait()
+        .map_err(|e| format!("Failed while monitoring the game process: {e}"))?;
+    if !status.success() {
+        // Some historical games return 1 even when the player quits normally.
+        // Do not silently turn every nonzero status into success.
+        return Err(format!("The game exited with code {} (nonzero status; not proof of a crash)",
+            status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())));
     }
-    emit(logger,&mut sink,"The game exited normally.");
+    emit(logger, &mut sink, "The game exited normally.");
     Ok(())
 }
 
-/// Accept the optional splash logo flag only with --launch.
-fn requested_launch_logo(arguments:&[OsString])->Option<bool>{
-    if arguments.first().and_then(|arg|arg.to_str())!=Some("--launch"){return None;}
-    match arguments.len(){
-        1=>Some(false),
-        2 if arguments[1].to_str()==Some("--3dfx-logo")=>Some(true),
-        _=>None,
+/// Auto-start decision uses only the folder containing the launcher.
+/// An existing but invalid game folder blocks media fallback, replacement,
+/// and launch; repair requires an explicit --install-only invocation.
+fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
+           mut sink: impl FnMut(&str)) -> Result<(), String> {
+    let game = root.join("splanet");
+    if game.is_symlink() {
+        return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
     }
+    if game.exists() {
+        if cmd.media.image.is_some() {
+            return Err("splanet already exists; refusing to overwrite it with a CD image".into());
+        }
+        if cmd.mode == Mode::InstallOnly {
+            emit(logger, &mut sink, "Install-only mode: checking and migrating recognized existing files.");
+            return run(&[], root, logger, sink);
+        }
+        emit(logger, &mut sink,
+            "Existing splanet detected. No files will be modified; verifying before play.");
+    } else {
+        let images = media_arguments(&cmd.media, root);
+        run(&images, root, logger, |line| sink(line))?;
+        if cmd.mode == Mode::InstallOnly {
+            emit(logger, &mut sink, "Install-only requested: the game was not launched.");
+            return Ok(());
+        }
+    }
+    if cmd.mode == Mode::InstallOnly { return Ok(()); }
+    verify_and_play(root, logger, cmd.splash, sink)
 }
 
-pub fn help(version:&str)->String{
-    format!("ScorchedPlanetFix {version} - Windows x64 command-line tool
-Usage:
-  ScorchedPlanetFix.exe
-  ScorchedPlanetFix.exe <image.iso>
-  ScorchedPlanetFix.exe <image.cue> [track.bin]
-  ScorchedPlanetFix.exe --verify
-  ScorchedPlanetFix.exe --launch [--3dfx-logo]
-  ScorchedPlanetFix.exe --help
-  ScorchedPlanetFix.exe --version
+pub fn help(version: &str) -> String {
+    format!("ScorchedPlanetFix {version} - Windows x64 automatic installer and launcher
+{USAGE}
 
 No arguments:
-  Locate a single ISO or CUE/BIN in the current working directory, extract
-  the game to splanet, back up spvoodoo.exe.bak, and apply its patch.
-  Existing installations are preserved and can be patched automatically
-  without overwriting game data.
+  If splanet exists beside this EXE: verify the complete installation and play.
+  Otherwise, find one supported ISO or CUE/BIN beside this EXE, install,
+  verify the complete installation and play.
+  Damaged or unknown existing installs are never overwritten or launched.
 <image.iso> / <image.cue> [track.bin]:
-  Install from the specified disc image in the current working directory.
-  Refuse to overwrite an existing splanet directory.
+  Explicit original disc image; installs and plays only if splanet is absent.
+--3dfx-logo:
+  The same automatic flow, with the optional nGlide splash enabled.
+  Requires your own 32-bit splanet/3DfxSpl.dll; may precede an image path.
+--install-only:
+  Install from an image without playing, or explicitly migrate a recognized
+  older installation. It never overwrites unknown or modified executables.
+  After installing nGlide, --install-only can also copy your local Glide DLL.
 --verify:
-  Verify game files, patch, and backup in the splanet directory NEXT
-  TO ScorchedPlanetFix.exe. Does not modify any files.
---launch:
-  Verify the entire installation, then start the game and wait for it to exit.
-  Optional --3dfx-logo enables the 3dfx startup animation (nGlide only).
---help:
-  Display commands, file paths, and this version.
---version:
-  Display only the version.
+  Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
+--help / --version:
+  Show usage or executable version without running the game.
 
-nGlide (proprietary; download and install separately):
+nGlide is proprietary freeware and not bundled:
   {nglide_url}
-  A locally installed 32-bit glide.dll is required in splanet.
-  Game-specific nGlide settings are applied only to the game process:
-  Vulkan when available, desktop resolution, aspect-ratio correction,
-  60 Hz, VSync enabled, gamma 1.0, 3dfx splash screen off by default.
+  A local 32-bit glide.dll is required in splanet for --verify and play.
+  Portable nGlide options are applied to the game process only.
 
-All errors are reported and written to ScorchedPlanetFix.log.
-No copyrighted game files are redistributed.",
-    nglide_url=nglide::OFFICIAL_URL)
+All diagnostics, including hardware inventory, go to ScorchedPlanetFix.log
+beside this EXE. No proprietary game files are redistributed.",
+        nglide_url = nglide::OFFICIAL_URL)
 }
-/// Exactly one standalone console entrypoint; no GUI is linked.
-pub fn dispatch(arguments:&[OsString],version:&str)->Result<(),String>{
-    let first=arguments.first().and_then(|v|v.to_str());
-    if arguments.len()==1 && matches!(first,Some("--help")|Some("-h")) {
-        println!("{}",help(version));
-        return Ok(());
+
+pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
+    let cmd = parse_args(arguments)?;
+    match cmd.mode {
+        Mode::Help => { println!("{}", help(version)); return Ok(()); }
+        Mode::Version => { println!("ScorchedPlanetFix {version}"); return Ok(()); }
+        _ => {}
     }
-    if arguments.len()==1 && first==Some("--version") {
-        println!("ScorchedPlanetFix {version}");
-        return Ok(());
-    }
-    let exe=std::env::current_exe().map_err(|e|format!("Cannot locate the executable: {e}"))?;
-    let exe_root=exe.parent().ok_or("Cannot determine the patcher directory")?.to_path_buf();
-    // Default and positional ISO/CUE installation operate in CWD.
-    // Verification and launch always use the folder next to the executable.
-    // Unknown switches, including removed legacy GUI switches, are rejected.
-    let is_install=arguments.is_empty() || arguments.first()
-        .is_some_and(|arg|!arg.to_string_lossy().starts_with('-'));
-    let root=if is_install {
-        std::env::current_dir().map_err(|e|format!("Current working directory: {e}"))?
-    }else{exe_root};
-    let logger=Logger::new(&root,version)?;
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot locate the executable: {e}"))?;
+    let root = exe.parent()
+        .ok_or("Cannot determine the patcher directory")?.to_path_buf();
+    let logger = Logger::new(&root, version)?;
     logger.system_information();
-    let operation=if is_install {
-        run(arguments,&root,&logger,|msg|println!("{msg}"))
-    }else{
-        match first{
-            Some("--verify") if arguments.len()==1=>verify_only(&root,&logger,|msg|println!("{msg}")),
-            Some("--launch") if requested_launch_logo(arguments).is_some()=>
-                launch_only(&root,&logger,requested_launch_logo(arguments).unwrap_or(false),|msg|println!("{msg}")),
-            _=>Err(format!("Unknown arguments. Use --help.\n{}",help(version))),
-        }
+    let result = if cmd.mode == Mode::VerifyOnly {
+        verify_only(&root, &logger, |msg| println!("{msg}"))
+    } else {
+        session(&root, &cmd, &logger, |msg| println!("{msg}"))
     };
-    if let Err(ref message)=operation{logger.error(message);}
-    operation
+    if let Err(ref message) = result { logger.error(message); }
+    result
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
-    fn args(s:&[&str])->Vec<OsString>{s.iter().map(OsString::from).collect()}
-    #[test] fn help_lists_all_cli_options_and_version_without_gui(){
-        let h=help("1.0.0-test1234");
-        for literal in ["1.0.0-test1234","--verify","--launch",
-                        "--help","--version","image.iso","image.cue",
-                        "glide.dll","60 Hz"]{
-            assert!(h.contains(literal),"help missing {literal}");
+    fn args(items: &[&str]) -> Vec<OsString> {
+        items.iter().map(OsString::from).collect()
+    }
+    #[test]
+    fn command_line_modes_and_logo() {
+        for cmd in ["--help", "-h", "--version", "--verify"] {
+            assert!(parse_args(&args(&[cmd])).is_ok(), "{cmd}");
         }
-        assert!(!h.contains("--nogui"),"obsolete GUI option must not appear in help");
-        assert!(!h.contains("Launch button"));
+        assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
+        let logo = parse_args(&args(&["--3dfx-logo"])).unwrap();
+        assert!(logo.splash && logo.mode == Mode::Play);
+        assert!(parse_args(&args(&["--3dfx-logo", "disc.iso"])).unwrap().splash);
+        assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
+        assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
+            Some(PathBuf::from("DISC.BIN")));
+        for invalid in [
+            vec!["--launch"], vec!["--launch", "--3dfx-logo"],
+            vec!["--verify", "disc.iso"], vec!["--install-only", "--3dfx-logo"],
+            vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
+            vec!["--help", "anything"], vec!["--version", "extra"],
+            vec!["disc.iso", "disc.bin"], vec!["disc.cue", "bad.iso"],
+            vec!["disc.iso", "anything", "extra"]
+        ] {
+            assert!(parse_args(&args(&invalid)).is_err(), "{invalid:?}");
+        }
     }
-    #[test] fn splash_flag_only_valid_with_launch(){
-        assert_eq!(requested_launch_logo(&args(&["--launch"])),Some(false));
-        assert_eq!(requested_launch_logo(&args(&["--launch","--3dfx-logo"])),Some(true));
-        assert_eq!(requested_launch_logo(&args(&["--3dfx-logo"])),None);
-        assert_eq!(requested_launch_logo(&args(&["--verify","--3dfx-logo"])),None);
-        assert_eq!(requested_launch_logo(&args(&["--launch","--unknown"])),None);
-        assert_eq!(requested_launch_logo(&args(&["--launch","--3dfx-logo","extra"])),None);
-        assert!(help("test").contains("--launch [--3dfx-logo]"));
+    #[test]
+    fn usage_has_no_legacy_launch_option() {
+        let h = help("1.1.0-deadbeef");
+        for word in ["1.1.0-deadbeef", "--install-only", "--verify",
+                     "--3dfx-logo", "image.iso", "image.cue",
+                     "glide.dll", "ScorchedPlanetFix.log"] {
+            assert!(h.contains(word), "missing {word}");
+        }
+        assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
+        assert!(!h.contains("--nogui"));
     }
-    #[test] fn installer_uses_no_arguments_or_positional_media(){
-        assert!(args(&[]).is_empty());
-        assert!(!args(&["game.ISO"])[0].to_string_lossy().starts_with('-'));
-        assert!(!args(&["game.CUE","game.BIN"])[0].to_string_lossy().starts_with('-'));
-        assert!(args(&["--nogui"])[0].to_string_lossy().starts_with('-'));
-        assert!(help("test").contains("ScorchedPlanetFix.exe <image.iso>"));
+    #[test]
+    fn resolve_relative_images_against_exe_folder() {
+        let root = Path::new(r"C:\Games\ScorchedPlanetFix");
+        let m = Media { image: Some(PathBuf::from("disc.ISO")), bin: None };
+        assert_eq!(media_arguments(&m, root), vec![root.join("disc.ISO").into_os_string()]);
     }
-    #[test] fn supported_command_line_forms(){
-        assert_eq!(parse_args(&args(&[])).unwrap(),Arguments{image:None,bin:None});
-        assert_eq!(parse_args(&args(&["game.ISO"])).unwrap().image,Some(PathBuf::from("game.ISO")));
-        assert_eq!(parse_args(&args(&["game.CUE","game.BIN"])).unwrap(),
-            Arguments{image:Some("game.CUE".into()),bin:Some("game.BIN".into())});
-        assert!(parse_args(&args(&["game.ISO","game.BIN"])).is_err());
-        assert!(parse_args(&args(&["game.bin"])).is_err());
-        assert!(parse_args(&args(&["game.CUE","game.BIN","extra"])).is_err());
-    }
-    #[test] fn refuses_existing_install_when_explicit_image_requested(){
-        let dir=std::env::temp_dir().join(format!("scorched-cli-test-{}",std::process::id()));
-        let _=fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("splanet")).unwrap();
-        fs::write(dir.join("splanet/SPVOODOO.EXE"),b"fixture").unwrap();
-        let logger=Logger::new(&dir,"test").unwrap();
-        assert!(run(&args(&["disc.iso"]),&dir,&logger,|_|{}).unwrap_err().contains("already exists"));
-        assert_eq!(fs::read(dir.join("splanet/SPVOODOO.EXE")).unwrap(),b"fixture");
+    #[test]
+    fn existing_unverified_install_is_never_replaced_by_media() {
+        let root = std::env::temp_dir().join(format!("scorched-autostart-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("splanet")).unwrap();
+        fs::write(root.join("splanet/spvoodoo.exe"), b"unknown game exe").unwrap();
+        fs::write(root.join("DISC.ISO"), b"not-a-real-disc").unwrap();
+        let logger = Logger::new(&root, "test").unwrap();
+        let no_args = parse_args(&[]).unwrap();
+        let error = session(&root, &no_args, &logger, |_| {}).unwrap_err();
+        assert!(error.contains("Unrecognized") || error.contains("Unknown") || error.contains("invalid"), "{error}");
+        let explicit = parse_args(&args(&["DISC.ISO"])).unwrap();
+        assert!(session(&root, &explicit, &logger, |_| {}).unwrap_err().contains("refusing to overwrite"));
+        assert_eq!(fs::read(root.join("splanet/spvoodoo.exe")).unwrap(), b"unknown game exe");
+        assert!(!root.join("splanet/spvoodoo.exe.bak").exists());
+        assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(), b"not-a-real-disc");
         drop(logger);
-        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn no_media_without_install_fails_without_creating_game_dir() {
+        let root = std::env::temp_dir().join(format!("scorched-no-media-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let logger = Logger::new(&root, "test").unwrap();
+        let error = session(&root, &parse_args(&[]).unwrap(), &logger, |_| {}).unwrap_err();
+        assert!(error.contains("No ISO/CUE disc image"), "{error}");
+        assert!(!root.join("splanet").exists());
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
     }
 }
