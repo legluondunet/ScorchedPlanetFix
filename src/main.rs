@@ -9,6 +9,7 @@ compile_error!("ScorchedPlanetFix is a Windows x64 console program; run via Wine
 #[cfg(windows)] mod iso_install;
 #[cfg(windows)] mod logger;
 #[cfg(windows)] mod nglide;
+#[cfg(windows)] mod gameframe;
 #[cfg(windows)] mod verify;
 #[cfg(windows)] mod verify_manifest;
 
