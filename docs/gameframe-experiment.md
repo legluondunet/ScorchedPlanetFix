@@ -24,16 +24,33 @@ The app detects the media, extracts and patches the supported edition,
 copies the SHA-256-verified bundled GameFrame DLL to splanet/glide.dll,
 verifies all original game assets, then automatically launches the game.
 
-The game can use Wine's OpenGL implementation. Ensure 32-bit OpenGL drivers
-are installed on the Linux host. The initial compatibility experiment uses
-Glide 640x480 at 2x output (1280x960), 4:3; it does NOT yet claim seamless
-desktop fullscreen scaling or universal game compatibility.
+The game uses Wine's OpenGL implementation. Ensure 32-bit OpenGL drivers
+are installed on the Linux host. The Scorched-specific pinned GameFrame
+compatibility patch keeps the game at 640x480 internally, draws into a 4:3
+off-screen frame (for example 1440x1080 on a 1920x1080 display), then
+presents in one borderless full-desktop window with centered black side bars.
+The current display mode and monitor refresh rate MUST NOT be changed.
+The original game's own window, titled "Scorched Planet", is created after
+the first grSstOpen: the wrapper adopts that real game/input HWND on a later
+frame and hides its initial temporary OpenGL window. The game's grBufferSwap
+is capped to 60 FPS independently of 60/120/144 Hz monitor refresh.
+The 4:3 presentation and native HWND adoption require real Wine/game testing.
+Do not confuse resolution of the OpenGL renderer with the system display mode.
+
+Upgrading from the earlier ScorchedPlanetFix GameFrame experiment: the test
+launcher only upgrades a DLL whose SHA-256 matches one of our two earlier
+experimental Windows builds. The old DLL is backed up as
+splanet/glide.dll.gameframe-<first16SHA>.bak, and unknown/user-owned nGlide
+or other Glide implementations are never overwritten.
 
 Run ScorchedPlanetFix.exe a second time after removing/moving your original
 image file. The game should be detected from splanet/, verified and launched
 again. Compare menus, 3D geometry, textures, colors, 2D framebuffer, Smacker
 videos, performance, focus, input and gameplay with the known-working nGlide
-baseline.
+baseline. In particular, verify exactly ONE visible window, all keyboard
+and mouse input working in that window, 60 FPS rather than 120 FPS, and
+1920x1080 desktop unchanged with a centered 1440x1080 4:3 picture on a
+1920x1080 display. If either test fails, share the single log and screenshot.
 
 The single ScorchedPlanetFix.log beside the launcher includes GameFrame's
 native Glide diagnostics (GameFrame writes into this file in append mode).

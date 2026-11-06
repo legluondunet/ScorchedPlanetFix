@@ -34,7 +34,13 @@ jobs:
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build original GameFrame x86 Glide wrapper (no Cyber Gladiators patches)
+      - name: Apply pinned Scorched-specific native window and 60 FPS fixes
+        shell: pwsh
+        run: |
+          python tools/gameframe/patch_scorched.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned GameFrame compatibility patch failed' }
+          Write-Host 'Desktop mode preserved, native Scorched Planet HWND adopted, cap=60 FPS'
+      - name: Build GameFrame x86 Glide wrapper (Scorched-only patch; no Cyber fixes)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
