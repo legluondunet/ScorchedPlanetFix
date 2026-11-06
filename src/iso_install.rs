@@ -10,7 +10,7 @@
 //! the final INI, then atomically publish the complete installation.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
-use crate::{cue_image,nglide,verify_manifest::manifest_for};
+use crate::{cue_image,nglide,gameframe,verify_manifest::manifest_for};
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -630,10 +630,10 @@ pub fn install_image(
         update_ini(&ini,default_language)?;
         log(&format!("INI: edition={} language={} sha256={}",
             edition.label,default_language,file_digest(&ini)?));
-        // nGlide is third-party freeware, not licensed for redistribution
-        // within our GPL archive. If user has it installed already, copy their
-        // own glide.dll into the game. Never download or bundle it.
-        let has_glide=nglide::copy_installed_glide(parent,&staging,|line|log(line))?;
+        // The experimental build embeds the Apache-2.0 GameFrame wrapper,
+        // while ordinary builds retain the user's separately installed
+        // nGlide option. Proprietary DLLs are never downloaded or bundled.
+        let has_glide=gameframe::ensure_glide(parent,&staging,|line|log(line))?;
         if !has_glide {
             log(&format!("INSTALL WARNING: game cannot yet be launched without locally installed nGlide ({})",nglide::OFFICIAL_URL));
         }

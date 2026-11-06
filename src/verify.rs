@@ -4,7 +4,7 @@
 //! Save slots (*.sav) and splanet.ini are mutable, so validate structure and
 //! safety rather than requiring their original hashes.
 use crate::verify_manifest::{manifest_for, ReferenceFile};
-use crate::nglide;
+use crate::{nglide,gameframe};
 use sha2::{Digest,Sha256};
 use std::fs::{self, File};
 use std::io::Read;
@@ -134,7 +134,7 @@ fn inspect_file(root:&Path, entry:&ReferenceFile)->Result<u64,String>{
 }
 /// Verify a playable, *patched* edition. This function never modifies data.
 /// Original executable is required in its same-name .bak backup.
-pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,String>{
+fn verify_install_internal(folder:&Path,require_glide:bool,mut log:impl FnMut(&str))->Result<Report,String>{
     regular_directory(folder)?;
     log("VERIFY: starting full immutable-file SHA-256 audit");
     let exe=scorched_planet_fix::find_installed_exe(folder)?;
@@ -174,9 +174,13 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
             return Err(format!("Unused {name} is present: run ScorchedPlanetFix.exe --install-only to remove it if its checksum matches the original CD."));
         }
     }
-    // nGlide is a runtime prerequisite: the check is read-only and never
-    // downloads/installs the proprietary DLL.
-    nglide::verify_local_glide(folder)?;
+    // A full --verify checks both game assets and the local Glide DLL.
+    // Auto-play can first audit all immutable game assets in read-only mode,
+    // then provision a missing open-source GameFrame DLL without trusting an
+    // unknown, damaged or incomplete installation.
+    if require_glide {
+        nglide::verify_local_glide(folder)?;
+    }
     let data=manifest_for(profile.label).ok_or("Edition has no verification manifest")?;
     let mut total=0u64;
     for entry in data{
@@ -193,18 +197,38 @@ pub fn verify_install(folder:&Path,mut log:impl FnMut(&str))->Result<Report,Stri
         executable:exe,
     })
 }
-pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,mut log:impl FnMut(&str))->Result<Child,String>{
-    let report=verify_install(folder,|message|log(message))?;
+/// Strict user-requested read-only audit, including the installed Glide DLL.
+pub fn verify_install(folder:&Path,log:impl FnMut(&str))->Result<Report,String>{
+    verify_install_internal(folder,true,log)
+}
+
+/// Used before installing a *missing* optional Glide runtime. The game
+/// executable, original .bak and every immutable original game asset are
+/// verified once before any file in the game folder is created.
+pub fn verify_game_assets(folder:&Path,log:impl FnMut(&str))->Result<Report,String>{
+    verify_install_internal(folder,false,log)
+}
+
+/// Consume the report from an already completed, full game-data audit.
+/// The wrapper is independently validated immediately before spawning.
+pub fn launch_preverified(report:Report,folder:&Path,show_3dfx_logo:bool,
+                           mut log:impl FnMut(&str))->Result<Child,String>{
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
-    if show_3dfx_logo{
-        nglide::check_splash_plugin(folder,|message|log(message))?;
-    }
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
-    nglide::configure_process(&mut command,show_3dfx_logo,|message|log(message));
+    gameframe::configure_process(&mut command,folder,show_3dfx_logo,|message|log(message))?;
     command.spawn()
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
+}
+
+/// Backwards-compatible helper for integrations that request a read-only
+/// verification plus launch without installing an optional runtime.
+#[allow(dead_code)]
+pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,
+                       mut log:impl FnMut(&str))->Result<Child,String>{
+    let report=verify_install(folder,|message|log(message))?;
+    launch_preverified(report,folder,show_3dfx_logo,|message|log(message))
 }
 #[cfg(test)]
 mod tests {
