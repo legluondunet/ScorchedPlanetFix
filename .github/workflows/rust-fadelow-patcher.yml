@@ -105,10 +105,12 @@ jobs:
             throw "SHA-256 of packaged executable does not match SHA256SUMS.txt"
           }
           Write-Host "Release ZIP verified: four expected files, executable SHA-256 matches manifest"
-      - name: Upload verified Windows CLI archive
+      # GitHub Actions already downloads each artifact as a ZIP.
+      # Upload the verified loose files, not our release ZIP inside that ZIP.
+      - name: Upload verified Windows CLI files (no nested ZIP)
         uses: actions/upload-artifact@v4
         with:
           name: ScorchedPlanetFix-v1.1.0-Windows-x64
-          path: ScorchedPlanetFix-v1.1.0-Windows-x64.zip
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
