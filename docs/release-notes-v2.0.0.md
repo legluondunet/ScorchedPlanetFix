@@ -1,6 +1,6 @@
 # ScorchedPlanetFix v2.0.0 — Open-source GameFrame Glide
 
-**Release candidate:** v2.0.0-rc.1. These notes describe the intended stable v2.0.0 release. The published v1.1.0 tag and assets remain unchanged until a separate, explicitly authorized release.
+**Stable v2.0.0 release notes.** The historical v1.1.0 tag and assets are preserved. GameFrame is embedded in v2; no third-party Glide wrapper is required or supported.
 
 ## Major new capabilities
 
@@ -24,9 +24,9 @@
 - Windows 11 and Linux with Wine-staging / GE-Proton (previous combined GameFrame branch validated by maintainer).
 - Strict refusal of unknown discs, modified game data and unsupported DLLs. No original game or proprietary Glide drivers are distributed.
 
-## Release candidate acceptance
+## Validation
 
-The final v2-only RC must pass Windows CI, compiled Glide ABI/LoadLibrary checks, release ZIP hashes, a complete first/second-launch test on Windows and a gameplay/Alt+Tab test under Wine. Report issues with the single `ScorchedPlanetFix.log`.
+The GameFrame integration was exercised on Windows 11, Wine-staging and GE-Proton. The v2.0.0-rc.1 build was additionally tested for installation, launch and file verification on Windows 11 and Wine-staging 11.17; the existing-installation relaunch was confirmed under Wine. Windows CI checks the 32-bit Glide exports and native LoadLibrary, compiles the Windows x64 launcher, runs the Rust test suite and verifies the distributable ZIP and checksums. Report problems with the single `ScorchedPlanetFix.log`.
 
 **Licensing:** ScorchedPlanetFix GPL-3.0-or-later; embedded GameFrame Apache-2.0. Unaffiliated with Criterion or other rights holders.
 

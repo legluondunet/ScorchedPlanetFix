@@ -1,6 +1,6 @@
 # ScorchedPlanetFix 2.0.0 — Windows x64 CLI
 
-This document covers the **v2.0.0 candidate**. The published `v1.1.0` release is unchanged.
+This document covers **ScorchedPlanetFix v2.0.0**. The historical [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for nGlide users.
 
 ## Commands
 
@@ -38,6 +38,6 @@ See [supported editions](cd-editions.md) for hashes, language defaults and patch
 
 ## Validation
 
-The original GameFrame integration passed maintainer testing on Wine-staging, GE-Proton and Windows 11: initial install, second launch, videos, input, Alt+Tab and gameplay. The v2-only code removal and packaging are pending their own CI validation. The single `ScorchedPlanetFix.log` records hardware inventory, verification, GameFrame's diagnostics and game exit information.
+The GameFrame integration passed maintainer testing on Wine-staging, GE-Proton and Windows 11: initial installation, second launch, videos, input, Alt+Tab and gameplay. The v2.0.0 release candidate was also tested on Windows 11 and Wine-staging 11.17; Windows CI checks the integrated executable, GameFrame ABI and packaging. The single `ScorchedPlanetFix.log` records hardware inventory, verification, GameFrame diagnostics and game exit information.
 
-The [published v1.1.0](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available as the historical release supporting nGlide. No v2 tag or public release has been created.
+The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version 2.0.0 is a breaking change: external `glide.dll` files require manual migration to the bundled GameFrame wrapper.
