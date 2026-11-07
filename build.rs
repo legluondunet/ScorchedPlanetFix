@@ -2,11 +2,15 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
-    // A verified open-source Glide build is embedded ONLY in the dedicated
-    // GameFrame experiment. No closed-source nGlide binaries are distributed.
+    // Version 2 uses only the pinned open-source GameFrame backend.
+    // The Windows release must never ship an unbundled launcher.
     println!("cargo:rustc-check-cfg=cfg(gameframe_embedded)");
     println!("cargo:rerun-if-env-changed=SCORCHED_GAMEFRAME_DLL_PATH");
     println!("cargo:rerun-if-env-changed=SCORCHED_GAMEFRAME_SHA256");
+    if std::env::var("PROFILE").as_deref()==Ok("release")
+        && std::env::var_os("SCORCHED_GAMEFRAME_DLL_PATH").is_none() {
+        panic!("ScorchedPlanetFix v2 release must embed the audited GameFrame x86 DLL");
+    }
     if let Ok(path)=std::env::var("SCORCHED_GAMEFRAME_DLL_PATH"){
         let expected=std::env::var("SCORCHED_GAMEFRAME_SHA256")
             .expect("An embedded GameFrame x86 DLL requires its SHA-256 fingerprint");
