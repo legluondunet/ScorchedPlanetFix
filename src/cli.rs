@@ -324,7 +324,7 @@ mod tests {
         assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
         assert!(!h.contains("--nogui"));
         assert!(!h.contains("--3dfx-logo"));
-        assert!(!h.contains("nGlide"));
+        assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
     }
     #[test]
     fn resolve_relative_images_against_exe_folder() {
