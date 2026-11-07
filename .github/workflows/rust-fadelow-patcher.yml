@@ -171,14 +171,7 @@ jobs:
             if (!(Test-Path -PathType Leaf (Join-Path dist-verify $name))) { throw "Missing $name in GameFrame ZIP" }
           }
           $manifest = (Get-Content dist-verify/SHA256SUMS.txt -Raw).Trim()
-          if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScorchedPlanetFix-Windows-x64-GameFrame
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
-) { throw 'Bad SHA256SUMS format' }
+          if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe$') { throw 'Bad SHA256SUMS format' }
           $hash=(Get-FileHash dist-verify/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($manifest.Substring(0,64) -cne $hash) { throw 'GameFrame ZIP checksum mismatch' }
           Write-Host "Verified GameFrame ZIP: 6 files and SHA256=$hash"
