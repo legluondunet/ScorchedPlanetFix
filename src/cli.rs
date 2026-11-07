@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, nglide, gameframe, verify};
+use crate::{iso_install, logger::Logger, gameframe, verify};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +11,6 @@ const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe
   ScorchedPlanetFix.exe <image.iso>
   ScorchedPlanetFix.exe <image.cue> [track.bin]
-  ScorchedPlanetFix.exe --3dfx-logo [image.iso | image.cue [track.bin]]
   ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
   ScorchedPlanetFix.exe --verify
   ScorchedPlanetFix.exe --help
@@ -40,7 +39,6 @@ enum Mode {
 struct CommandLine {
     mode: Mode,
     media: Media,
-    splash: bool,
 }
 
 fn parse_media(args: &[OsString]) -> Result<Media, String> {
@@ -71,19 +69,17 @@ fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
     let blank = Media { image: None, bin: None };
     match first {
         Some("--help") | Some("-h") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Help, media: blank, splash: false }),
+            Ok(CommandLine { mode: Mode::Help, media: blank }),
         Some("--version") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Version, media: blank, splash: false }),
+            Ok(CommandLine { mode: Mode::Version, media: blank }),
         Some("--verify") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::VerifyOnly, media: blank, splash: false }),
+            Ok(CommandLine { mode: Mode::VerifyOnly, media: blank }),
         Some("--install-only") =>
-            Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])?, splash: false }),
-        Some("--3dfx-logo") =>
-            Ok(CommandLine { mode: Mode::Play, media: parse_media(&args[1..])?, splash: true }),
+            Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])? }),
         Some(option) if option.starts_with('-') =>
             Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
         _ =>
-            Ok(CommandLine { mode: Mode::Play, media: parse_media(args)?, splash: false }),
+            Ok(CommandLine { mode: Mode::Play, media: parse_media(args)? }),
     }
 }
 
@@ -136,11 +132,7 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
         for removed in iso_install::remove_unused_executables(&install, edition.label)? {
             emit(logger, &mut sink, &format!("Unused {removed} removed (original CD checksum verified)."));
         }
-        let installed = gameframe::ensure_glide(root, &install, |message| logger.write(message))?;
-        if !installed {
-            emit(logger, &mut sink,
-                &format!("WARNING: nGlide is missing. Install it from {}", nglide::OFFICIAL_URL));
-        }
+        gameframe::ensure_glide(root, &install, |message| logger.write(message))?;
         emit(logger, &mut sink, &outcome);
         emit(logger, &mut sink, &format!("Portable configuration: video= video, language={language}"));
         emit(logger, &mut sink, &format!("Migration complete. Original backup preserved: {}.bak", exe.display()));
@@ -186,7 +178,7 @@ pub fn verify_only(root: &Path, logger: &Logger,
 /// Performs exactly ONE full read-only integrity audit, and starts the game
 /// only after success. A nonzero process exit is logged without claiming that
 /// it necessarily represents a crash.
-fn verify_and_play(root: &Path, logger: &Logger, logo: bool,
+fn verify_and_play(root: &Path, logger: &Logger,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
     emit(logger, &mut sink, "Verifying all immutable game files before launch...");
     let game=root.join("splanet");
@@ -195,12 +187,8 @@ fn verify_and_play(root: &Path, logger: &Logger, logo: bool,
     // once this edition's executable, original backup, INI and game-data
     // fingerprints are all confirmed.
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
-    if !gameframe::ensure_glide(root,&game,|message|logger.write(message))? {
-        return Err(format!(
-            "No compatible Glide DLL available. Install nGlide from {} or use a GameFrame-enabled build.",
-            nglide::OFFICIAL_URL));
-    }
-    let mut child=verify::launch_preverified(report,&game,logo,
+    gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
+    let mut child=verify::launch_preverified(report,&game,
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
@@ -244,7 +232,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         }
     }
     if cmd.mode == Mode::InstallOnly { return Ok(()); }
-    verify_and_play(root, logger, cmd.splash, sink)
+    verify_and_play(root, logger, sink)
 }
 
 pub fn help(version: &str) -> String {
@@ -258,26 +246,23 @@ No arguments:
   Damaged or unknown existing installs are never overwritten or launched.
 <image.iso> / <image.cue> [track.bin]:
   Explicit original disc image; installs and plays only if splanet is absent.
---3dfx-logo:
-  The same automatic flow, with the optional nGlide splash enabled.
-  Requires your own 32-bit splanet/3DfxSpl.dll; may precede an image path.
 --install-only:
   Install from an image without playing, or explicitly migrate a recognized
   older installation. It never overwrites unknown or modified executables.
-  After installing nGlide, --install-only can also copy your local Glide DLL.
+  A missing GameFrame DLL is installed from the verified embedded binary.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
 --help / --version:
   Show usage or executable version without running the game.
 
-nGlide is proprietary freeware and not bundled:
-  {nglide_url}
-  A local 32-bit glide.dll is required in splanet for --verify and play.
-  Portable nGlide options are applied to the game process only.
+Only open-source bundled GameFrame is supported in v2.
+  External Glide wrappers are rejected without overwriting user files.
+  If upgrading an installation using nGlide, move splanet/glide.dll aside
+  manually; then run this program to provision bundled GameFrame.
+  --verify is strictly read-only, including GameFrame validation.
 
 All diagnostics, including hardware inventory, go to ScorchedPlanetFix.log
-beside this EXE. No proprietary game files are redistributed.",
-        nglide_url = nglide::OFFICIAL_URL)
+beside this EXE. No proprietary game files are redistributed.")
 }
 
 pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
@@ -309,19 +294,16 @@ mod tests {
         items.iter().map(OsString::from).collect()
     }
     #[test]
-    fn command_line_modes_and_logo() {
+    fn command_line_modes_without_legacy_wrapper_flags() {
         for cmd in ["--help", "-h", "--version", "--verify"] {
             assert!(parse_args(&args(&[cmd])).is_ok(), "{cmd}");
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
-        let logo = parse_args(&args(&["--3dfx-logo"])).unwrap();
-        assert!(logo.splash && logo.mode == Mode::Play);
-        assert!(parse_args(&args(&["--3dfx-logo", "disc.iso"])).unwrap().splash);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
         assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
         for invalid in [
-            vec!["--launch"], vec!["--launch", "--3dfx-logo"],
+            vec!["--launch"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
             vec!["--verify", "disc.iso"], vec!["--install-only", "--3dfx-logo"],
             vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
             vec!["--help", "anything"], vec!["--version", "extra"],
@@ -333,14 +315,16 @@ mod tests {
     }
     #[test]
     fn usage_has_no_legacy_launch_option() {
-        let h = help("1.1.0-deadbeef");
-        for word in ["1.1.0-deadbeef", "--install-only", "--verify",
-                     "--3dfx-logo", "image.iso", "image.cue",
+        let h = help("2.0.0-deadbeef");
+        for word in ["2.0.0-deadbeef", "--install-only", "--verify",
+                     "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
         assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
         assert!(!h.contains("--nogui"));
+        assert!(!h.contains("--3dfx-logo"));
+        assert!(!h.contains("nGlide"));
     }
     #[test]
     fn resolve_relative_images_against_exe_folder() {

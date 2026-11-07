@@ -81,11 +81,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI build failed' }
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $version = (& $exe --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 1\.1\.0-[0-9a-f]{8}$') {
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 2\.0\.0-[0-9a-f]{8}$') {
             throw "Unexpected version: $version"
           }
           Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
-          Write-Host "Experimental launcher: $version"
+          Write-Host "GameFrame-only v2 launcher: $version"
 
       - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
