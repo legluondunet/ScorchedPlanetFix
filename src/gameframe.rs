@@ -177,12 +177,30 @@ pub fn is_embedded_gameframe(game:&Path)->Result<bool,String>{
     Ok(digest(&regular_dll(&game.join("glide.dll"))?)==expected)
 }
 
+/// Read-only guard before an explicit --install-only migration can modify
+/// the original game executable or INI. No symlink/external DLL is changed.
+pub fn preflight_glide(game:&Path)->Result<(),String>{
+    let expected=validate_embedded()?
+        .ok_or("ScorchedPlanetFix v2 requires embedded GameFrame; no external fallback is supported")?;
+    let path=game.join("glide.dll");
+    match fs::symlink_metadata(&path){
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(()),
+        Ok(_)=>{
+            let actual=digest(&regular_dll(&path)?);
+            if actual==expected || original_gameframe(&actual) {return Ok(());}
+            Err(format!("Unsupported glide.dll at {} (SHA-256 {actual}). ScorchedPlanetFix v2 supports bundled GameFrame only. Move this DLL aside manually. No game data was modified.",path.display()))
+        }
+        Err(e)=>Err(format!("Cannot inspect Glide DLL: {e}")),
+    }
+}
+
 /// Only bundled GameFrame is allowed. Known older GameFrame experimental
 /// hashes can upgrade with backup; arbitrary DLLs (including nGlide) are
 /// preserved and *rejected*. Caller audits game assets before installing.
 pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<bool,String>{
     let expected=validate_embedded()?
         .ok_or("ScorchedPlanetFix v2 requires embedded GameFrame; no external fallback is supported")?;
+    preflight_glide(game)?;
     let path=game.join("glide.dll");
     match fs::symlink_metadata(&path){
         Ok(_)=>{
@@ -290,7 +308,9 @@ mod tests{
     fn installs_bundled_gameframe_once_and_keeps_exact_bytes(){
         let root=fixture();
         let expected=validate_embedded().unwrap().unwrap();
+        preflight_glide(&root).unwrap(); // absent Glide DLL is safe to provision
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
+        preflight_glide(&root).unwrap(); // exact GameFrame DLL is trusted
         let dll=root.join("glide.dll");
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
         assert!(is_embedded_gameframe(&root).unwrap());
@@ -316,7 +336,8 @@ mod tests{
         let file=root.join("glide.dll");
         fs::write(&file,&foreign).unwrap();
         assert!(verify_local_gameframe(&root).unwrap_err().contains("supports GameFrame only"));
-        assert!(ensure_glide(&root,&root,|_|{}).unwrap_err().contains("supports bundled GameFrame only"));
+        assert!(preflight_glide(&root).unwrap_err().contains("No game data was modified"));
+        assert!(ensure_glide(&root,&root,|_|{}).unwrap_err().contains("No game data was modified"));
         assert_eq!(fs::read(&file).unwrap(),foreign);
         fs::remove_dir_all(&root).unwrap();
     }
