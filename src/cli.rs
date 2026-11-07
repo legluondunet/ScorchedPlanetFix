@@ -124,6 +124,9 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
             return Err("The splanet directory already exists: extraction refused; no files were overwritten".into());
         }
         let exe = scorched_planet_fix::find_installed_exe(&install)?;
+        // --install-only must refuse an unsupported wrapper *before* any
+        // patch, INI update or legacy executable cleanup touches game files.
+        gameframe::preflight_glide(&install)?;
         emit(logger, &mut sink, "Existing installation detected. Performing explicitly requested safe migration.");
         let outcome = scorched_planet_fix::execute(Action::Apply, &exe, None, true)?;
         let edition = verify::profile_for_patched_exe(&exe)?;
@@ -183,7 +186,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
     emit(logger, &mut sink, "Verifying all immutable game files before launch...");
     let game=root.join("splanet");
     // Verify the complete game first, with no changes to any original data.
-    // Provisioning the optional embedded GameFrame DLL is permitted only
+    // Provisioning the required embedded GameFrame DLL is permitted only
     // once this edition's executable, original backup, INI and game-data
     // fingerprints are all confirmed.
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
@@ -195,12 +198,18 @@ fn verify_and_play(root: &Path, logger: &Logger,
     let status = child.wait()
         .map_err(|e| format!("Failed while monitoring the game process: {e}"))?;
     if !status.success() {
-        // Some historical games return 1 even when the player quits normally.
-        // Do not silently turn every nonzero status into success.
+        // Real Windows/Wine/Proton sessions show that this 1996 game may
+        // exit with code 1 after normal menu quit. Preserve the diagnostic,
+        // but do not claim a launcher error without independent evidence.
+        if status.code()==Some(1) {
+            emit(logger, &mut sink,
+                "Game exited with legacy code 1 (not necessarily a crash; check gameplay if unexpected).");
+            return Ok(());
+        }
         return Err(format!("The game exited with code {} (nonzero status; not proof of a crash)",
             status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())));
     }
-    emit(logger, &mut sink, "The game exited normally.");
+    emit(logger, &mut sink, "The game exited with code 0.");
     Ok(())
 }
 
@@ -283,7 +292,8 @@ pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
     } else {
         session(&root, &cmd, &logger, |msg| println!("{msg}"))
     };
-    if let Err(ref message) = result { logger.error(message); }
+    // main() writes the one final error, including early startup failures.
+    // Avoid duplicate ERROR / ERROR (startup) entries in the same log.
     result
 }
 
