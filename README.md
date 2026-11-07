@@ -21,7 +21,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
-> **Release status:** The `main` branch is preparing **v2.0.0**. The [latest published stable release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) remains **v1.1.0** until v2 is explicitly published. GitHub Actions artifacts are development builds, not official releases.
+> **Release candidate:** This branch builds **v2.0.0-rc.1** for Windows/Wine acceptance testing. The [latest published stable release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) remains **v1.1.0**. GitHub Actions RC artifacts are for testing only; no stable v2 tag or release has been published.
 
 ## Supported disc editions
 
@@ -79,4 +79,4 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
-[Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+[Final RC test plan (Windows/Wine)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
