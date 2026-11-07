@@ -8,7 +8,7 @@
 
 ScorchedPlanetFix is a **free and open-source console installer, patcher, verifier and launcher** for Criterion's *Scorched Planet* (1996).
 
-It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow** and **No-CD** fixes, and launches the game using your separately installed **nGlide** wrapper. No original game files or proprietary drivers are distributed.
+It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow** and **No-CD** fixes, and launches the game. The official v1.1.0 release uses a separately installed **nGlide** wrapper; the **experimental GameFrame build** instead embeds a free Apache-2.0 Glide-to-OpenGL implementation. No original game files or proprietary drivers are distributed.
 
 - **Windows x64** program; the original game remains **32-bit**
 - Also runs under **Wine on Linux**
@@ -16,7 +16,7 @@ It installs from your own **ISO or CUE/BIN**, applies edition-specific **FadeLow
 - SHA-256 checks and an original-executable backup safeguard the patches
 
 > [!IMPORTANT]
-> You need your **own copy of Scorched Planet** and **nGlide**. This project does not include the game, disc images or any nGlide binaries. The owner has now tested native Windows 11 installation and gameplay; broader hardware and mission compatibility remains unverified.
+> You need your **own copy of Scorched Planet**. The official v1.1.0 release requires a separate nGlide installation. The [experimental GameFrame build](docs/gameframe-experiment.md) provides a verified 32-bit open-source Glide DLL automatically, with no nGlide dependency for fresh installations. This new rendering backend has **not yet been validated in Scorched Planet gameplay**.
 
 ## Supported CD editions
 
@@ -37,10 +37,10 @@ Download the **[latest published ScorchedPlanetFix release](https://github.com/l
 
 > The release includes a separate `.zip.sha256` checksum file. Verify your downloaded ZIP against it before extracting. GitHub Actions artifacts are development builds, not permanent release downloads.
 
-### 2. Provide the disc image and nGlide
+### 2. Provide the disc image (and nGlide for the official release)
 
 1. Place `ScorchedPlanetFix.exe` in a folder with **one** supported disc image: an ISO, or a CUE and its BIN.
-2. [Install nGlide from Zeus Software](https://www.zeus-software.com/downloads/nglide) in the same Windows/Wine environment, **or** place your own 32-bit nGlide `glide.dll` next to the patcher.
+2. For the **official release only**, [install nGlide from Zeus Software](https://www.zeus-software.com/downloads/nglide) in Windows/Wine, or place your own 32-bit nGlide `glide.dll` next to the patcher. **The GameFrame experimental build** automatically provides its own open-source `glide.dll` (unless a valid DLL is already installed in `splanet/`).
 3. Open a terminal in that folder.
 
 Example:
@@ -113,11 +113,11 @@ The installer also:
 - Excludes save slots and mutable settings from immutable-file hash enforcement
 - Sets nGlide options only for the launched game, never through global registry changes
 
-## nGlide (required, separate download)
+## Glide backends — official nGlide and experimental GameFrame
 
 **[Official nGlide download — Zeus Software](https://www.zeus-software.com/downloads/nglide)**
 
-nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and automatic play. The CD can still be installed using `--install-only`, then completed once the user has installed nGlide.
+nGlide is proprietary freeware and **is never bundled or downloaded** by ScorchedPlanetFix. The experimental [GameFrame Glide OpenGL](docs/gameframe-experiment.md) build embeds a separate **Apache-2.0** x86 DLL compiled from pinned source, hashes it before writing it to a missing `splanet/glide.dll`, and preserves any pre-existing user Glide DLL. The experimental wrapper now targets the native unchanged desktop in one borderless game/input window, with an aspect-correct centered 4:3 picture and a 60 FPS cap; real gameplay confirmation is pending. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and automatic play. The CD can still be installed using `--install-only`, then completed once the user has installed nGlide.
 
 The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and **3dfx splash screen off by default**. To enable the optional 3dfx startup logo while running the automatic workflow, use `--3dfx-logo`:
 
@@ -133,13 +133,14 @@ Linux / Wine:
 wine ScorchedPlanetFix.exe --3dfx-logo
 ```
 
-Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** Normal play and `--verify` do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+Without `--3dfx-logo`, the splash logo remains disabled. **The nGlide logo flag is not supported by GameFrame**: users must use their own nGlide DLL to use this option. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** Normal play and `--verify` do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
 
 ## Documentation
 
 - [Supported editions and original media fingerprints](docs/cd-editions.md)
 - [Installation, verification and safe upgrades](docs/windows-cli-installer.md)
 - [FadeLow and CD-check reverse-engineering research](docs/european-fadelow-research.md)
+- [GameFrame embedded Glide experiment and test instructions](docs/gameframe-experiment.md)
 - [v1.1.0 release notes](docs/release-notes-v1.1.0.md)
 - [v1.0.0 release notes](docs/release-notes-v1.0.0.md)
 

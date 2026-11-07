@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, nglide, verify};
+use crate::{iso_install, logger::Logger, nglide, gameframe, verify};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -136,7 +136,7 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
         for removed in iso_install::remove_unused_executables(&install, edition.label)? {
             emit(logger, &mut sink, &format!("Unused {removed} removed (original CD checksum verified)."));
         }
-        let installed = nglide::copy_installed_glide(root, &install, |message| logger.write(message))?;
+        let installed = gameframe::ensure_glide(root, &install, |message| logger.write(message))?;
         if !installed {
             emit(logger, &mut sink,
                 &format!("WARNING: nGlide is missing. Install it from {}", nglide::OFFICIAL_URL));
@@ -189,8 +189,19 @@ pub fn verify_only(root: &Path, logger: &Logger,
 fn verify_and_play(root: &Path, logger: &Logger, logo: bool,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
     emit(logger, &mut sink, "Verifying all immutable game files before launch...");
-    let mut child = verify::launch_verified(&root.join("splanet"), logo,
-        |message| logger.write(message))?;
+    let game=root.join("splanet");
+    // Verify the complete game first, with no changes to any original data.
+    // Provisioning the optional embedded GameFrame DLL is permitted only
+    // once this edition's executable, original backup, INI and game-data
+    // fingerprints are all confirmed.
+    let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
+    if !gameframe::ensure_glide(root,&game,|message|logger.write(message))? {
+        return Err(format!(
+            "No compatible Glide DLL available. Install nGlide from {} or use a GameFrame-enabled build.",
+            nglide::OFFICIAL_URL));
+    }
+    let mut child=verify::launch_preverified(report,&game,logo,
+        |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
     let status = child.wait()
@@ -223,7 +234,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             return run(&[], root, logger, sink);
         }
         emit(logger, &mut sink,
-            "Existing splanet detected. No files will be modified; verifying before play.");
+            "Existing splanet detected. Game data will not be modified; checking all hashes before play.");
     } else {
         let images = media_arguments(&cmd.media, root);
         run(&images, root, logger, |line| sink(line))?;

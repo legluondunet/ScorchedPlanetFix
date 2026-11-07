@@ -1,0 +1,150 @@
+name: ScorchedPlanetFix - experimental GameFrame Glide
+
+on:
+  push:
+    branches: [experiment/gameframe-glide]
+  pull_request:
+    branches: [feat/automatic-install-verify-launch]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gameframe:
+    name: Windows x64 launcher + embedded x86 GameFrame
+    runs-on: windows-latest
+    steps:
+      - name: Check out ScorchedPlanetFix
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Apache-2.0 GameFrame source
+        uses: actions/checkout@v4
+        with:
+          repository: tanepiper/game-frame
+          ref: f195a074a63cc150673c38becdec696163b0b3d1
+          path: third_party/game-frame
+          persist-credentials: false
+
+      - name: Rust toolchain with Windows x86 and x64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc, x86_64-pc-windows-msvc
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Apply pinned Scorched-specific native window and 60 FPS fixes
+        shell: pwsh
+        run: |
+          python tools/gameframe/patch_scorched.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned GameFrame compatibility patch failed' }
+          Write-Host 'Desktop mode preserved, native Scorched Planet HWND adopted, cap=60 FPS'
+      - name: Build GameFrame x86 Glide wrapper (Scorched-only patch; no Cyber fixes)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = (Resolve-Path 'third_party/game-frame/wrappers/Cargo.toml').Path
+          $upstreamDef = (Resolve-Path 'third_party/game-frame/wrappers/glide/glide2x.def').Path
+          # The original .def maps decorated public stdcall exports to GNU COFF
+          # internals. For MSVC x86, the internal alias needs its leading '_'.
+          $patched = Join-Path $env:RUNNER_TEMP 'scorched-gameframe-x86.def'
+          $original = Get-Content -Raw $upstreamDef
+          $converted = [regex]::Replace($original, '(?m)^(_[A-Za-z0-9_]+@\d+)=(\w+@\d+)\r?$', '$1=_$2')
+          $count = ([regex]::Matches($converted, '(?m)^_[A-Za-z0-9_]+@\d+=_[A-Za-z0-9_]+@\d+\r?$')).Count
+          if ($count -ne 156) { throw "Expected exactly 156 adapted Glide exports, got $count" }
+          Set-Content -Path $patched -Value $converted -Encoding ascii
+          $env:RUSTFLAGS = "-C link-arg=/DEF:$patched"
+          cargo build -p glide --release --target i686-pc-windows-msvc --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { throw 'GameFrame x86 MSVC build failed' }
+
+      - name: Audit 156 exact decorated exports and Windows x86 PE
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pefile
+          if ($LASTEXITCODE -ne 0) { throw 'pefile dependency failed' }
+          $dll = 'third_party/game-frame/wrappers/target/i686-pc-windows-msvc/release/glide2x.dll'
+          python tools/gameframe/audit_exports.py $dll 'third_party/game-frame/wrappers/glide/glide2x.def'
+          if ($LASTEXITCODE -ne 0) { throw 'GameFrame Glide ABI audit failed' }
+
+      - name: Build and test Windows x64 launcher with embedded GameFrame
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = 'third_party/game-frame/wrappers/target/i686-pc-windows-msvc/release/glide2x.dll'
+          $env:SCORCHED_GAMEFRAME_DLL_PATH = (Resolve-Path $dll).Path
+          $env:SCORCHED_GAMEFRAME_SHA256 = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          cargo test --locked --target x86_64-pc-windows-msvc --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI tests failed' }
+          cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
+          if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI build failed' }
+          $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
+          $version = (& $exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 1\.1\.0-[0-9a-f]{8}$') {
+            throw "Unexpected version: $version"
+          }
+          Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
+          Write-Host "Experimental launcher: $version"
+
+      - name: Native Windows x86 LoadLibrary smoke (without changing display mode)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testFolder = Join-Path $env:RUNNER_TEMP 'scorched-glide-load'
+          New-Item -ItemType Directory -Path $testFolder -Force | Out-Null
+          Copy-Item 'third_party/game-frame/wrappers/target/i686-pc-windows-msvc/release/glide2x.dll' (Join-Path $testFolder 'glide.dll')
+          $probe = Join-Path $testFolder 'GameFrameGlideSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/gameframe/smoke_load.rs -o $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot build 32-bit GameFrame smoke' }
+          Push-Location $testFolder
+          try {
+            & '.\GameFrameGlideSmoke.exe'
+            if ($LASTEXITCODE -ne 0) { throw 'Glide LoadLibrary smoke failed' }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Smoke CLI automatic launch refusal without game media
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
+          $root = Split-Path -Parent $exe
+          if (Test-Path (Join-Path $root 'splanet')) { throw 'Unexpected game directory before smoke' }
+          $out = (& $exe 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or $out -notmatch 'No ISO/CUE disc image') {
+            throw "No-CD safe refusal failed: $out"
+          }
+          if (Test-Path (Join-Path $root 'splanet')) { throw 'An invalid game directory was created' }
+          if (!(Test-Path (Join-Path $root 'ScorchedPlanetFix.log'))) { throw 'Unified log was not created' }
+          $global:LASTEXITCODE = 0
+          Write-Host 'No-media refusal and single log: PASS'
+
+      - name: Package one launcher, source license notices, and SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe' dist/ScorchedPlanetFix.exe
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item 'third_party/game-frame/LICENSE-APACHE' dist/LICENSE-APACHE.txt
+          Copy-Item README.md dist/README.md
+          Copy-Item docs/gameframe-experiment.md dist/GAMEFRAME-TESTING.txt
+          $hash = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ScorchedPlanetFix.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          $files = @(Get-ChildItem dist -File)
+          if ($files.Count -ne 6) { throw "Expected 6 files in artifact, got $($files.Count)" }
+          if (@(Get-ChildItem dist -File | Where-Object { $_.Extension -in @('.dll','.zip') }).Count -gt 0) {
+            throw 'The distributable must have no standalone DLL and no nested ZIP'
+          }
+          $line = (Get-Content dist/SHA256SUMS.txt -Raw).Trim()
+          if ($line -cne "$hash  ScorchedPlanetFix.exe") { throw 'SHA256 manifest mismatch' }
+          Write-Host "One-file launcher + Apache license, sha256=$hash"
+
+      - name: Upload ready-to-test loose files (GitHub handles one ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScorchedPlanetFix-Windows-x64-GameFrame-EXPERIMENTAL
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
