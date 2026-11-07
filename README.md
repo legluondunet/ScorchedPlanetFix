@@ -21,7 +21,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
-> **Release candidate:** This branch builds **v2.0.0-rc.1** for Windows/Wine acceptance testing. The [latest published stable release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) remains **v1.1.0**. GitHub Actions RC artifacts are for testing only; no stable v2 tag or release has been published.
+> **Stable downloads:** Get the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) from GitHub Releases. Version **v2.0.0** includes the integrated GameFrame renderer; the historical [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) instead requires nGlide. GitHub Actions artifacts are temporary development builds, not permanent releases.
 
 ## Supported disc editions
 
@@ -36,7 +36,7 @@ All executable changes are specific to verified original SHA-256 fingerprints. S
 
 ## Installation and launch
 
-Use the **v2 development build** from [Windows CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml), or a v2 release once published. Put `ScorchedPlanetFix.exe` beside a supported ISO or CUE/BIN image, then launch it.
+Download **v2.0.0** from [GitHub Releases](https://github.com/legluondunet/ScorchedPlanetFix/releases) when available. For development testing, use a [Windows CI artifact](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml). Put `ScorchedPlanetFix.exe` beside a supported ISO or CUE/BIN image, then launch it.
 
 ```powershell
 .\ScorchedPlanetFix.exe
@@ -65,7 +65,7 @@ If an existing `splanet/glide.dll` comes from nGlide or another external wrapper
 
 ### Platforms
 
-The combined GameFrame build was validated by the maintainer on **Windows 11, Wine-staging and GE-Proton**, including installation, Alt+Tab, videos, gameplay and a second launch. The v2-only cleanup and packaging require separate CI validation.
+The combined GameFrame build was validated by the maintainer on **Windows 11, Wine-staging and GE-Proton**. The v2.0.0 release candidate was separately exercised on native Windows 11 and Wine-staging 11.17, including installation, launch and verification. CI builds and checks the Windows x64 launcher and integrated x86 Glide DLL.
 
 On Linux, use a Wine/Proton environment with working **32-bit OpenGL graphics drivers**:
 
@@ -79,4 +79,4 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
-[Final RC test plan (Windows/Wine)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+[RC acceptance checklist (historical)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)

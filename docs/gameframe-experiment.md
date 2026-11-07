@@ -8,7 +8,7 @@ The x64 launcher embeds a Windows x86 GameFrame Glide-to-OpenGL DLL compiled fro
 
 **No nGlide compatibility:** external Glide implementations are not loaded, copied, silently replaced or used as fallback. If `splanet/glide.dll` is an unknown external file, ScorchedPlanetFix refuses and asks the user to move the file aside manually. Recognized previous GameFrame experimental hashes can upgrade with backup. `--verify` never modifies anything.
 
-**Validation history:** GameFrame integration was maintainer-tested on Wine-staging, GE-Proton and native Windows 11 (installation, second launch, Alt+Tab, videos and gameplay). The v2.0.0-only cleanup must still pass its own CI validation before release.
+**Validation history:** GameFrame integration was maintainer-tested on Wine-staging, GE-Proton and native Windows 11 (installation, second launch, Alt+Tab, videos and gameplay). The v2.0.0 release candidate was separately exercised on Windows 11 and Wine-staging 11.17; CI checks the native x86 Glide ABI, launcher tests and distribution packaging.
 
 **Logging:** the single `ScorchedPlanetFix.log` beside the launcher includes the renderer's Glide API and error diagnostics.
 
