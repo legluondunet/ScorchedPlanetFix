@@ -32,12 +32,9 @@ impl Logger {
             let _=file.flush();
         }
     }
-    pub fn error(&self,message:&str){
-        self.write(&format!("ERROR: {message}"));
-    }
-    /// Fallback for an error that occurs before the regular logger is open.
-    /// Prefer the patcher's directory, then the current working directory.
-    /// This cannot write a log if all destinations are unwritable.
+    /// Record one final error, including failures before the main logger
+    /// was initialized. Prefer the EXE's directory and fall back to cwd.
+    /// If both locations are unwritable, stderr still carries the error.
     pub fn emergency_error(root:Option<&Path>,message:&str){
         let cwd=std::env::current_dir().ok();
         let candidates=[root,cwd.as_deref()];
@@ -45,7 +42,7 @@ impl Logger {
             let path=directory.join("ScorchedPlanetFix.log");
             if let Ok(mut file)=OpenOptions::new().create(true).append(true).open(&path){
                 let safe=message.replace(['\r','\n']," ");
-                let _=writeln!(file,"ERROR (startup): {safe}");
+                let _=writeln!(file,"ERROR: {safe}");
                 let _=file.flush();
                 return;
             }

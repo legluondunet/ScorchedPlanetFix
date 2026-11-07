@@ -81,11 +81,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI build failed' }
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $version = (& $exe --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 1\.1\.0-[0-9a-f]{8}$') {
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 2\.0\.0-rc\.1-[0-9a-f]{8}$') {
             throw "Unexpected version: $version"
           }
           Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
-          Write-Host "Experimental launcher: $version"
+          Write-Host "GameFrame-only v2 RC launcher: $version"
+          $help = (& $exe --help | Out-String)
+          if ($LASTEXITCODE -ne 0 -or $help -notmatch 'GameFrame' -or $help -match 'ScorchedPlanetFix.exe --3dfx-logo') {
+            throw 'RC help missing GameFrame or advertising removed nGlide option'
+          }
+          $obsolete = (& $exe --3dfx-logo 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or $obsolete -notmatch 'Unknown or incompatible option') {
+            throw "Obsolete --3dfx-logo should be refused: $obsolete"
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host 'RC help/version and removed --3dfx-logo: PASS'
 
       - name: Verify Windows x64 console subsystem and executable
         shell: pwsh
@@ -126,15 +136,21 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $root = Split-Path -Parent $exe
+          $logFile = Join-Path $root 'ScorchedPlanetFix.log'
+          $beforeErrors = if (Test-Path $logFile) { @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count } else { 0 }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'Unexpected game directory before smoke' }
           $out = (& $exe 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0 -or $out -notmatch 'No ISO/CUE disc image') {
             throw "No-CD safe refusal failed: $out"
           }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'An invalid game directory was created' }
-          if (!(Test-Path (Join-Path $root 'ScorchedPlanetFix.log'))) { throw 'Unified log was not created' }
+          if (!(Test-Path $logFile)) { throw 'Unified log was not created' }
+          $afterErrors = @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count
+          if ($afterErrors -ne ($beforeErrors + 1)) {
+            throw "Expected exactly one error line for one failed launch; before=$beforeErrors after=$afterErrors"
+          }
           $global:LASTEXITCODE = 0
-          Write-Host 'No-media refusal and single log: PASS'
+          Write-Host 'No-media refusal and exactly one error record in unified log: PASS'
 
       - name: Package GameFrame launcher, source licenses, and SHA-256
         shell: pwsh
@@ -145,11 +161,12 @@ jobs:
           Copy-Item LICENSE dist/LICENSE.txt
           Copy-Item 'third_party/game-frame/LICENSE-APACHE' dist/LICENSE-APACHE.txt
           Copy-Item README.md dist/README.md
-          Copy-Item docs/gameframe-experiment.md dist/GAMEFRAME-TESTING.txt
+          Copy-Item docs/release-notes-v2.0.0.md dist/RELEASE-NOTES.txt
+          Copy-Item docs/rc-test-plan-v2.0.0.md dist/RC-TEST-PLAN.txt
           $hash = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ScorchedPlanetFix.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
           $files = @(Get-ChildItem dist -File)
-          if ($files.Count -ne 6) { throw "Expected 6 files in artifact, got $($files.Count)" }
+          if ($files.Count -ne 7) { throw "Expected 7 files in RC artifact, got $($files.Count)" }
           if (@(Get-ChildItem dist -File | Where-Object { $_.Extension -in @('.dll','.zip') }).Count -gt 0) {
             throw 'The distributable must have no standalone DLL and no nested ZIP'
           }
@@ -161,10 +178,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = 'ScorchedPlanetFix-Windows-x64-GameFrame.zip'
+          $archive = 'ScorchedPlanetFix-v2.0.0-rc.1-Windows-x64.zip'
           Compress-Archive -Path dist/* -DestinationPath $archive
           Expand-Archive -Path $archive -DestinationPath dist-verify -Force
-          $expected = @('ScorchedPlanetFix.exe','LICENSE.txt','LICENSE-APACHE.txt','README.md','GAMEFRAME-TESTING.txt','SHA256SUMS.txt')
+          $expected = @('ScorchedPlanetFix.exe','LICENSE.txt','LICENSE-APACHE.txt','README.md','RELEASE-NOTES.txt','RC-TEST-PLAN.txt','SHA256SUMS.txt')
           $actual = @(Get-ChildItem dist-verify -File)
           if ($actual.Count -ne $expected.Count) { throw "Wrong file count in GameFrame ZIP: $($actual.Count)" }
           foreach ($name in $expected) {
@@ -174,13 +191,13 @@ jobs:
           if ($manifest -cnotmatch '^[0-9a-f]{64}  ScorchedPlanetFix\.exe$') { throw 'Bad SHA256SUMS format' }
           $hash=(Get-FileHash dist-verify/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($manifest.Substring(0,64) -cne $hash) { throw 'GameFrame ZIP checksum mismatch' }
-          Write-Host "Verified GameFrame ZIP: 6 files and SHA256=$hash"
+          Write-Host "Verified GameFrame RC ZIP: 7 files and SHA256=$hash"
 
-      # Artifacts already use ZIP internally. Upload flat six files, not ZIP-in-ZIP.
+      # Artifacts already use ZIP internally. Upload 7 flat files, not ZIP-in-ZIP.
       - name: Upload verified Windows GameFrame files
         uses: actions/upload-artifact@v4
         with:
-          name: ScorchedPlanetFix-Windows-x64-GameFrame
+          name: ScorchedPlanetFix-v2.0.0-rc.1-Windows-x64
           path: dist/*
           if-no-files-found: error
           retention-days: 14

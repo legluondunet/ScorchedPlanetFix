@@ -4,7 +4,7 @@
 //! Save slots (*.sav) and splanet.ini are mutable, so validate structure and
 //! safety rather than requiring their original hashes.
 use crate::verify_manifest::{manifest_for, ReferenceFile};
-use crate::{nglide,gameframe};
+use crate::gameframe;
 use sha2::{Digest,Sha256};
 use std::fs::{self, File};
 use std::io::Read;
@@ -179,7 +179,7 @@ fn verify_install_internal(folder:&Path,require_glide:bool,mut log:impl FnMut(&s
     // then provision a missing open-source GameFrame DLL without trusting an
     // unknown, damaged or incomplete installation.
     if require_glide {
-        nglide::verify_local_glide(folder)?;
+        gameframe::verify_local_gameframe(folder)?;
     }
     let data=manifest_for(profile.label).ok_or("Edition has no verification manifest")?;
     let mut total=0u64;
@@ -211,13 +211,13 @@ pub fn verify_game_assets(folder:&Path,log:impl FnMut(&str))->Result<Report,Stri
 
 /// Consume the report from an already completed, full game-data audit.
 /// The wrapper is independently validated immediately before spawning.
-pub fn launch_preverified(report:Report,folder:&Path,show_3dfx_logo:bool,
+pub fn launch_preverified(report:Report,folder:&Path,
                            mut log:impl FnMut(&str))->Result<Child,String>{
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
-    gameframe::configure_process(&mut command,folder,show_3dfx_logo,|message|log(message))?;
+    gameframe::configure_process(&mut command,folder,|message|log(message))?;
     command.spawn()
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
@@ -225,10 +225,10 @@ pub fn launch_preverified(report:Report,folder:&Path,show_3dfx_logo:bool,
 /// Backwards-compatible helper for integrations that request a read-only
 /// verification plus launch without installing an optional runtime.
 #[allow(dead_code)]
-pub fn launch_verified(folder:&Path,show_3dfx_logo:bool,
+pub fn launch_verified(folder:&Path,
                        mut log:impl FnMut(&str))->Result<Child,String>{
     let report=verify_install(folder,|message|log(message))?;
-    launch_preverified(report,folder,show_3dfx_logo,|message|log(message))
+    launch_preverified(report,folder,|message|log(message))
 }
 #[cfg(test)]
 mod tests {
