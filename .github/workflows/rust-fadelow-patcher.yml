@@ -136,15 +136,21 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $root = Split-Path -Parent $exe
+          $logFile = Join-Path $root 'ScorchedPlanetFix.log'
+          $beforeErrors = if (Test-Path $logFile) { @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count } else { 0 }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'Unexpected game directory before smoke' }
           $out = (& $exe 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0 -or $out -notmatch 'No ISO/CUE disc image') {
             throw "No-CD safe refusal failed: $out"
           }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'An invalid game directory was created' }
-          if (!(Test-Path (Join-Path $root 'ScorchedPlanetFix.log'))) { throw 'Unified log was not created' }
+          if (!(Test-Path $logFile)) { throw 'Unified log was not created' }
+          $afterErrors = @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count
+          if ($afterErrors -ne ($beforeErrors + 1)) {
+            throw "Expected exactly one error line for one failed launch; before=$beforeErrors after=$afterErrors"
+          }
           $global:LASTEXITCODE = 0
-          Write-Host 'No-media refusal and single log: PASS'
+          Write-Host 'No-media refusal and exactly one error record in unified log: PASS'
 
       - name: Package GameFrame launcher, source licenses, and SHA-256
         shell: pwsh
