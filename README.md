@@ -53,9 +53,9 @@ ScorchedPlanetFix/
 └── glide.dll                  # Only if supplied manually
 ```
 
-If both ISO and CUE media are present, choose the image explicitly on the command line.
+If several ISO/CUE images are present, the launcher refuses to guess. Specify the desired image explicitly on the command line. If `splanet/` already exists, it has priority over all disc images.
 
-### 3. Install
+### 3. Install, verify and play
 
 In a Windows PowerShell terminal:
 
@@ -71,30 +71,31 @@ Or specify your own disc image:
 .\ScorchedPlanetFix.exe "Scorched Planet.cue" "Scorched Planet.bin"
 ```
 
-The installer creates `splanet/`, copies game files, preserves the original `spvoodoo.exe.bak`, patches the detected edition and creates a portable `splanet.ini`. Existing game installations and save files are not overwritten.
+Running without arguments performs the complete workflow automatically: if `splanet/` already exists **beside the patcher**, it verifies the patched executable, original backup, all immutable game assets and local Glide DLL **without changing files**, then starts the game. Otherwise it searches for exactly one ISO/CUE beside the patcher, installs the game, verifies everything and starts playing. The ISO and save files are never overwritten. If an existing installation is unknown, incomplete or corrupted, the game is **not** launched and no CD fallback overwrites it. Relative explicit image paths are resolved beside the patcher, even if it was launched from another working directory.
 
-### 4. Verify and launch
+### 4. Optional diagnostics and installation-only mode
 
 ```powershell
 .\ScorchedPlanetFix.exe --verify
-.\ScorchedPlanetFix.exe --launch
+.\ScorchedPlanetFix.exe --install-only
 ```
 
-- **`--verify`** checks the patched EXE, original backup, immutable game assets, INI and local nGlide DLL.
-- **`--launch`** performs the same verification before launching the game and monitors its exit.
-- **`ScorchedPlanetFix.log`** contains diagnostic messages next to the patcher.
+- **Normal execution** installs as necessary, performs the complete SHA-256 verification once, then starts the game and waits for it to exit.
+- **`--verify`** checks the patched EXE, original backup, immutable game assets, INI and local Glide DLL without making changes or launching.
+- **`--install-only`** installs without playing, or explicitly performs a recognized legacy migration (including known unused EXE cleanup and locally available nGlide setup). It is also useful after you install nGlide to finish an installation that previously lacked `glide.dll`.
+- **`ScorchedPlanetFix.log`** records diagnostics and hardware information beside the patcher.
 
-To update a supported existing installation, run the latest patcher **without arguments** from the directory containing `splanet/`. Migration from older FadeLow-only patches requires an intact, checksum-verified original `.bak` and keeps your saves.
+For safety, normal execution **does not attempt to repair an invalid existing installation**. If a legacy FadeLow-only version needs upgrading, run `--install-only` and then run the executable normally. Migration requires the corresponding original executable fingerprint and intact matching backup; unknown or modified executables are refused. Original saves remain untouched.
 
 ### Linux / Wine
 
-Use the same working directory and Wine prefix for the patcher and nGlide:
+Use the same Wine prefix for the patcher and nGlide. You may launch the executable from another working directory; its own folder determines where `splanet/` and the ISO/CUE are searched:
 
 
 ```bash
 wine ScorchedPlanetFix.exe
 wine ScorchedPlanetFix.exe --verify
-wine ScorchedPlanetFix.exe --launch
+wine ScorchedPlanetFix.exe --install-only
 ```
 
 There is no graphical interface. Use `--help` to see all commands.
@@ -116,23 +117,23 @@ The installer also:
 
 **[Official nGlide download — Zeus Software](https://www.zeus-software.com/downloads/nglide)**
 
-nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and `--launch`.
+nGlide is proprietary freeware and **is not bundled or downloaded** by ScorchedPlanetFix. The patcher may copy your locally installed 32-bit `glide.dll` from a supported Windows/Wine location. It checks the DLL's PE32 format, which is not proof of the publisher's identity. Missing nGlide is reported by `--verify` and automatic play. The CD can still be installed using `--install-only`, then completed once the user has installed nGlide.
 
-The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and **3dfx splash screen off by default**. To enable the optional 3dfx startup logo, use `--launch --3dfx-logo`:
+The launcher applies process-local settings: Vulkan when the loader is available (otherwise auto), desktop resolution, aspect correction, 60 Hz, VSync on, gamma 1.0 and **3dfx splash screen off by default**. To enable the optional 3dfx startup logo while running the automatic workflow, use `--3dfx-logo`:
 
 Windows PowerShell:
 
 ```powershell
-.\ScorchedPlanetFix.exe --launch --3dfx-logo
+.\ScorchedPlanetFix.exe --3dfx-logo
 ```
 
 Linux / Wine:
 
 ```bash
-wine ScorchedPlanetFix.exe --launch --3dfx-logo
+wine ScorchedPlanetFix.exe --3dfx-logo
 ```
 
-Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--launch --3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** The normal `--launch` and `--verify` commands do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
+Without `--3dfx-logo`, the splash logo remains disabled. **The logo requires the separate 32-bit `3DfxSpl.dll` plugin for `glide.dll`** (not `3DfxSpl2.dll`). Copy your own nGlide `3DfxSpl.dll` manually into the game's `splanet/` directory, next to `glide.dll` and `spvoodoo.exe`. When `--3dfx-logo` is requested, the launcher checks this local file read-only; if missing or invalid, it exits with a clear message instructing you to copy it. **There is no automatic copy or download.** Normal play and `--verify` do not need or inspect this optional file, which is excluded from the immutable file manifest. Global nGlide registry settings remain unchanged. Vulkan-loader detection alone does not guarantee graphics-driver compatibility.
 
 ## Documentation
 
