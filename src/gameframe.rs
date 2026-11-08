@@ -16,6 +16,11 @@ extern "system" { fn GetSystemMetrics(index:i32)->i32; }
 // The exact fingerprints distinguish our previous free wrapper from a user's
 // proprietary or unrelated glide.dll; those are NEVER replaced.
 const PREVIOUS_GAMEFRAME_HASHES:&[&str]=&[
+    // Exact GameFrame DLL from the 2.0.0-4c1c6d59 Wine acceptance log.
+    // This is NOT an arbitrary external wrapper or an unverified DLL.
+    // The experimental overlay probe changes GameFrame's bytes, so a safe
+    // fingerprinted upgrade keeps the original in a .bak file.
+    "cdc88180416d26bd831b94bc271542b1d8e32d1eb86671d1f487ba67a42030bc",
     "1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7",
     "7b82c9831c3167a0d8ac446fc30ab973d35e9c49e566508ebd5280f3deb8e5a8",
     "37d5c107c65c3fcb2901ba1f4b073aa4dddd13ec016132f63b2fbf545717344e",
@@ -288,6 +293,7 @@ mod tests{
     #[test]
     fn legacy_gameframe_hashes_are_exact_only(){
         assert!(original_gameframe("1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7"));
+        assert!(original_gameframe("cdc88180416d26bd831b94bc271542b1d8e32d1eb86671d1f487ba67a42030bc"));
         assert!(!original_gameframe(&"a".repeat(64)));
     }
     #[test]
