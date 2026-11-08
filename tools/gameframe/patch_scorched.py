@@ -132,8 +132,8 @@ fn limit_scorched_fps() {
     super::movie::frame();""",
             """    super::lfb::finish_write();
     if let Some(hwnd)=crate::window::adopt_scorched(
-        crate::config::get().output(screen()0.0,screen()0.1)0.0,
-        crate::config::get().output(screen()0.0,screen()0.1)0.1,
+        crate::config::get().output(screen().0,screen().1).0,
+        crate::config::get().output(screen().0,screen().1).1,
     ) {
         let (w,h)=screen();
         push(Cmd::Open { width:w, height:h, out:crate::config::get().output(w,h), hwnd:hwnd as usize });
