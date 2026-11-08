@@ -372,13 +372,16 @@ impl MenuOverlay {
             (gl.Uniform1i)(lfb.loc("uImg"),0);
             (gl.Uniform1i)(lfb.loc("uChroma"),0);
             (gl.Uniform2f)(lfb.loc("uScreen"),cw as f32,ch as f32);
-            // Anchor to the bottom-right of the presentation surface, not
-            // the active 4:3 game image: preserve every original menu element.
-            // Fixed pixel margins and text size stay consistent on Wine/Windows.
-            let left=(cw-self.width-14).max(0) as f32;
-            let top=(ch-self.height-12).max(0) as f32;
+            // Draw the original pixel font at 2/3 of its previous screen size
+            // (14 px -> 9 px high) for a subtler bottom-right signature.
+            // Keep the bitmap/glyphs intact and sample with GL_NEAREST: no blur.
+            // Anchor to the presentation surface, never the original 4:3 image.
+            let small_w=(self.width*2)/3;
+            let small_h=(self.height*2)/3;
+            let left=(cw-small_w-14).max(0) as f32;
+            let top=(ch-small_h-12).max(0) as f32;
             (gl.Uniform4f)(lfb.loc("uRect"),left,top,
-                left+self.width as f32,top+self.height as f32);
+                left+small_w as f32,top+small_h as f32);
             (gl.DrawArrays)(0x0005,0,4);
             (gl.Disable)(BLEND);
         }
