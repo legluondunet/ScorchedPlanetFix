@@ -14,7 +14,9 @@ This experiment keeps the published v2.0.0 release unchanged.
   4:3 picture, so the screen resolution can vary.
 - Only when all four signs are recognized does it draw **original menu red (#980808, RGB 152/8/8)** text at the
   **bottom right of the presentation surface, without a frame**, into the final
-  OpenGL buffer. The original 5x7 bitmap text size remains unchanged.
+  OpenGL buffer. The built-in 5x7 pixel glyphs are preserved, but the on-screen
+  signature is scaled to **two-thirds** of its previous dimensions (14 px -> 9 px
+  high) using nearest-neighbor filtering, keeping the same bottom-right margins.
 - When the scene changes, recognition fails and the overlay disappears.
   Unknown menus and other game editions intentionally fail closed. It never
   changes the game's actual Glide framebuffer or original assets.
