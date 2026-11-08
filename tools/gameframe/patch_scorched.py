@@ -278,7 +278,7 @@ fn text_image(text:&str)->(i32,i32,Vec<u8>){
                 for dy in 0..2 {for dx in 0..2 {
                     let px=i*12+x*2+dx;let py=y*2+dy;
                     let at=(py*w as usize+px)*4;
-                    pixels[at..at+4].copy_from_slice(&[226,226,226,255]);
+                    pixels[at..at+4].copy_from_slice(&[247,198,43,255]);
                 }}
             }
         }
@@ -372,8 +372,11 @@ impl MenuOverlay {
             (gl.Uniform1i)(lfb.loc("uImg"),0);
             (gl.Uniform1i)(lfb.loc("uChroma"),0);
             (gl.Uniform2f)(lfb.loc("uScreen"),cw as f32,ch as f32);
-            let left=(x0+14) as f32;
-            let top=(ch-(y0+vh)+12) as f32;
+            // Anchor to the bottom-right of the presentation surface, not
+            // the active 4:3 game image: preserve every original menu element.
+            // Fixed pixel margins and text size stay consistent on Wine/Windows.
+            let left=(cw-self.width-14).max(0) as f32;
+            let top=(ch-self.height-12).max(0) as f32;
             (gl.Uniform4f)(lfb.loc("uRect"),left,top,
                 left+self.width as f32,top+self.height as f32);
             (gl.DrawArrays)(0x0005,0,4);
