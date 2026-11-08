@@ -316,6 +316,12 @@ unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32)->bool{
     let globe=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.864,0.400,Color::Blue)};
     let new_game=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.093,0.394,Color::White)};
     let quit=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.864,0.752,Color::White)};
+    // Low-frequency calibration record for color/DPI differences under Wine.
+    static SAMPLES:std::sync::atomic::AtomicU32=std::sync::atomic::AtomicU32::new(0);
+    if SAMPLES.fetch_add(1,std::sync::atomic::Ordering::Relaxed)%120==0 {
+        log!("SCORCHED_MENU_OVERLAY: scores title={:.2} globe={:.2} new={:.2} quit={:.2}",
+            yellow,globe,new_game,quit);
+    }
     yellow>0.16&&globe>0.07&&new_game>0.08&&quit>0.08
 }
 impl MenuOverlay {
