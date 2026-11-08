@@ -423,6 +423,19 @@ mod tests{
 
     #[cfg(gameframe_embedded)]
     #[test]
+    fn non_regular_glide_directory_is_never_modified(){
+        let root=fixture();
+        let invalid=root.join("glide.dll");
+        fs::create_dir(&invalid).unwrap();
+        assert!(preflight_glide(&root).is_err());
+        assert!(ensure_glide(&root,&root,|_|{}).is_err());
+        assert!(invalid.is_dir());
+        assert!(!root.join("glide.dll.bak").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(gameframe_embedded)]
+    #[test]
     fn occupied_staging_path_aborts_without_touching_original(){
         let root=fixture();
         let file=root.join("glide.dll");
