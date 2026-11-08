@@ -249,6 +249,13 @@ pub fn configure_process(command:&mut Command,game:&Path,mut log:impl FnMut(&str
     command.env("SCORCHED_GLIDE_DESKTOP","1");
     command.env("SCORCHED_GLIDE_ADOPT_WINDOW","1");
     command.env("SCORCHED_GLIDE_FPS_60","1");
+    // Carry the launcher identity into the 32-bit renderer. Do not hardcode
+    // the GameFrame source commit or an old release version as the UI identity.
+    command.env("SCORCHED_FIX_SIGNATURE",format!(
+        "ScorchedPlanetFix {}-{}",env!("CARGO_PKG_VERSION"),env!("SCORCHED_COMMIT")));
+    // Temporary diagnostics: distinguish menu, FMV, option screens and 3D scenes
+    // before adding a version overlay that must NOT appear during gameplay.
+    command.env("SCORCHED_MENU_PROBE","1");
     if let Some(root)=game.parent(){
         command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
     }
@@ -323,6 +330,9 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_60" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_MENU_PROBE" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SIGNATURE"
+            && val.is_some_and(|s|s.to_string_lossy().starts_with("ScorchedPlanetFix 2.0.0-"))));
         fs::remove_dir_all(&root).unwrap();
     }
 
