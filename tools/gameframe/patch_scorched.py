@@ -132,8 +132,8 @@ fn limit_scorched_fps() {
     super::movie::frame();""",
             """    super::lfb::finish_write();
     if let Some(hwnd)=crate::window::adopt_scorched(
-        crate::config::get().output(screen().0,screen().1).0,
-        crate::config::get().output(screen().0,screen().1).1,
+        crate::config::get().output(screen()0.0,screen()0.1)0.0,
+        crate::config::get().output(screen()0.0,screen()0.1)0.1,
     ) {
         let (w,h)=screen();
         push(Cmd::Open { width:w, height:h, out:crate::config::get().output(w,h), hwnd:hwnd as usize });
@@ -291,7 +291,7 @@ enum Color { Yellow, Blue, White }
 unsafe fn color_fraction(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32,
                          u:f32,v:f32,want:Color)->f32{
     // Four tiny color-family checks, normalized to the active centered 4:3 image.
-    let side=((vw as f32*.01).round() as i32).clamp(8,18);
+    let side=((vw as f32*0.01).round() as i32).clamp(8,18);
     let px=x0+(vw as f32*u).round() as i32;
     let py=y0+vh-(vh as f32*v).round() as i32-side;
     if px<0||py<0||px+side>cw||py+side>ch{return 0.;}
@@ -312,11 +312,11 @@ unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32)->bool{
     unsafe{(gl.BindFramebuffer)(READ_FRAMEBUFFER,0);}
     // Fingerprints from maintainer screenshot: yellow OPTIONS heading, globe,
     // New Game panel, Quit panel. All required to avoid gameplay false positives.
-    let yellow=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.290,.130,Color::Yellow)};
-    let globe=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.864,.400,Color::Blue)};
-    let new_game=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.093,.394,Color::White)};
-    let quit=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.864,.752,Color::White)};
-    yellow>.16&&globe>.07&&new_game>.08&&quit>.08
+    let yellow=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.290,0.130,Color::Yellow)};
+    let globe=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.864,0.400,Color::Blue)};
+    let new_game=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.093,0.394,Color::White)};
+    let quit=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.864,0.752,Color::White)};
+    yellow>0.16&&globe>0.07&&new_game>0.08&&quit>0.08
 }
 impl MenuOverlay {
     pub fn new()->Self{
