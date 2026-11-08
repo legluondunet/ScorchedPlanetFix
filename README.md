@@ -17,7 +17,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - Automatic ISO/CUE installation, verification, patching and launching; second launches use the existing `splanet/` directory without re-extraction.
 - Original game, disc image and saves are not modified or redistributed; previous original EXE backed up and immutable assets checked by SHA-256.
 - Single `ScorchedPlanetFix.log` next to the launcher, including GameFrame diagnostics.
-- Unknown external `glide.dll` files are **never overwritten** and are **not supported**. Recognized previous GameFrame experimental builds can be upgraded with a backup.
+- Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the file is renamed to a unique `.bak` and the verified bundled GameFrame DLL is installed automatically. The original backup is preserved and logged; symlinks/non-files are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
@@ -61,7 +61,7 @@ Additional commands:
 
 ### Moving from v1.1.0 / external Glide
 
-If an existing `splanet/glide.dll` comes from nGlide or another external wrapper, **manually move that DLL to a backup outside `splanet/` before running v2**. ScorchedPlanetFix never overwrites it. The next normal launch checks the immutable game data before installing its own bundled GameFrame. An unrecognized existing DLL results in an explicit error and no modification.
+If an existing `splanet/glide.dll` comes from nGlide, another external wrapper, or an older GameFrame build, **no manual DLL migration is necessary**. After validating the immutable game data, a normal launch automatically renames the existing regular file to `glide.dll.bak` (or a free hash-suffixed `.bak` if one exists), installs its verified bundled GameFrame and starts the game. Existing backups are never overwritten. This operation, the original and replacement SHA-256 hashes, and the backup path appear in `ScorchedPlanetFix.log`. `--verify` stays strictly read-only; symlinks and non-regular DLL paths remain unsupported.
 
 ### Platforms
 
