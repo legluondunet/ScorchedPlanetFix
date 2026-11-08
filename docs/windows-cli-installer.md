@@ -25,8 +25,9 @@ The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL b
 - nGlide and arbitrary external Glide DLLs are **unsupported**.
 - No fallback from `SysWOW64`, external launcher directory or third-party paths.
 - No `NGLIDE_*` environment variables, configurator settings or 3dfx splash DLL.
-- Unknown existing `splanet/glide.dll` files are **preserved and rejected**. The launcher instructs the user to move their DLL aside manually; it never silently replaces it.
-- Only known older GameFrame experiment fingerprints can be migrated automatically, with their original bytes preserved in a unique backup.
+- At normal launch, after the immutable game-file audit, any existing **regular** `splanet/glide.dll` whose hash differs from the bundled DLL is automatically renamed to `glide.dll.bak` (or an unused hash-suffixed `.bak` if backups already exist). The embedded GameFrame DLL is then installed and the game is launched.
+- This includes both older GameFrame experiments and unrecognized external DLLs. Originals and existing backups are never deleted or deliberately overwritten; replacement, original and new SHA-256, and the chosen backup path are recorded in `ScorchedPlanetFix.log`.
+- Symlinks, directories, unsafe backup/staging conflicts, or unsuccessful replacements abort safely instead of destroying the existing DLL. Failed activation attempts restore the original where possible.
 
 The game still renders internally at 640×480, but GameFrame shows a centered 4:3 image in a single borderless window fitted to the current desktop. It never switches the physical screen mode or refresh; Glide buffer swaps are capped to 60 FPS.
 
@@ -40,4 +41,4 @@ See [supported editions](cd-editions.md) for hashes, language defaults and patch
 
 The GameFrame integration passed maintainer testing on Wine-staging, GE-Proton and Windows 11: initial installation, second launch, videos, input, Alt+Tab and gameplay. The v2.0.0 release candidate was also tested on Windows 11 and Wine-staging 11.17; Windows CI checks the integrated executable, GameFrame ABI and packaging. The single `ScorchedPlanetFix.log` records hardware inventory, verification, GameFrame diagnostics and game exit information.
 
-The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version 2.0.0 is a breaking change: external `glide.dll` files require manual migration to the bundled GameFrame wrapper.
+The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version 2.0.0 is a breaking change: external Glide DLLs are not loaded; the normal launcher now backs them up automatically and installs its bundled GameFrame wrapper. The `--verify` command remains read-only and rejects a foreign active Glide DLL.
