@@ -15,6 +15,7 @@ This is a **release-readiness audit**, not publication approval.
 ## Corrections applied in this audit PR
 
 - Corrected `--help` to describe automatic `glide.dll` backup and replacement, existing-backup safety, and read-only verification; added a regression assertion.
+- Removed a now-obsolete fixed hash allowlist used only to label old GameFrame builds in logs. Any different regular DLL follows the same hash-recorded backup path; added a regression test that a directory named `glide.dll` cannot be replaced.
 - Aligned README, installer guide and GameFrame notes; explicitly separated the behavior of published **v2.0.0** from **post-v2.0.0 development**.
 - Preserved the original v2.0.0 release notes, tag and publication workflow as historical release artifacts.
 
