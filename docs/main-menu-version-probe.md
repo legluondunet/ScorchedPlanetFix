@@ -21,7 +21,11 @@ is not modified. This branch is intentionally experimental.
 ## One Windows or Wine observation run
 
 Use the PR's Windows CI artifact (not the official stable release). Keep
-one existing verified `splanet/` installation and its backup.
+one existing verified `splanet/` installation and its backup. This
+experimental build can upgrade the **exact GameFrame DLL hash validated
+during v2.0.0 Wine acceptance**, preserving it as a fingerprinted backup;
+unknown/proprietary DLLs are still rejected without modification. Other
+v2.0.0 builds with different DLL hashes must not be overwritten automatically.
 
 1. Launch the game and let the intro/videos complete.
 2. Stay on the **main menu** for at least 8 seconds without input.
