@@ -15,8 +15,9 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - One borderless window using the **existing desktop resolution** (no display-mode switching), with 4:3 image centered and not stretched.
 - 60 FPS limiter and keyboard/mouse input in the same game window.
 - Automatic ISO/CUE installation, verification, patching and launching; second launches use the existing `splanet/` directory without re-extraction.
-- Original game, disc image and saves are not modified or redistributed; previous original EXE backed up and immutable assets checked by SHA-256.
+- Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Single `ScorchedPlanetFix.log` next to the launcher, including GameFrame diagnostics.
+- Post-v2.0.0 development adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu; the signature disappears on other screens.
 - Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the file is renamed to a unique `.bak` and the verified bundled GameFrame DLL is installed automatically. The original backup is preserved and logged; symlinks/non-files are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
@@ -79,4 +80,4 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
-[Next-release readiness checklist](docs/pre-release-audit-post24.md) · [RC acceptance checklist (historical)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+[Next-release readiness checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [RC acceptance checklist (historical)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
