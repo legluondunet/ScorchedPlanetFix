@@ -12,8 +12,9 @@ This experiment keeps the published v2.0.0 release unchanged.
   white Quit panels in the original *root menu* shown by the maintainer's
   1920x1200 screenshot. The positions are normalized within the centered
   4:3 picture, so the screen resolution can vary.
-- Only when all four signs are recognized does it draw light gray text at the
-  **top left, without a frame**, into the final OpenGL presentation buffer.
+- Only when all four signs are recognized does it draw **golden yellow** text at the
+  **bottom right of the presentation surface, without a frame**, into the final
+  OpenGL buffer. The original 5x7 bitmap text size remains unchanged.
 - When the scene changes, recognition fails and the overlay disappears.
   Unknown menus and other game editions intentionally fail closed. It never
   changes the game's actual Glide framebuffer or original assets.
@@ -38,10 +39,12 @@ Use the newest CI artifact from this PR. It is not an official release.
 
 1. Launch the game normally; with an existing verified installation,
    a known older GameFrame DLL hash is backed up before upgrading.
-   Unknown/proprietary DLLs are **not** overwritten.
+   Unknown/proprietary DLLs are **not** overwritten. The two exact
+   experimental GameFrame hashes observed in the maintainer's latest Wine log
+   are explicitly recognized for safe upgrades.
 2. Stay at the original 8-button root menu (the screen titled OPTIONS)
    for at least 8 seconds. Expect `ScorchedPlanetFix 2.0.0-<commit>` in the
-   top-left area, without background or frame.
+   bottom-right area in golden yellow, without background or frame.
 3. Open a submenu for 5 seconds, then return to root menu.
 4. Start a mission for at least 8 seconds; verify the label does not
    remain visible in the gameplay or any videos.
