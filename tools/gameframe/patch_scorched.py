@@ -278,7 +278,7 @@ fn text_image(text:&str)->(i32,i32,Vec<u8>){
                 for dy in 0..2 {for dx in 0..2 {
                     let px=i*12+x*2+dx;let py=y*2+dy;
                     let at=(py*w as usize+px)*4;
-                    pixels[at..at+4].copy_from_slice(&[247,198,43,255]);
+                    pixels[at..at+4].copy_from_slice(&[152,8,8,255]); // Menu red #980808
                 }}
             }
         }
