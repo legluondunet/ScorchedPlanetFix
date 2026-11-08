@@ -12,31 +12,6 @@ use std::process::Command;
 #[link(name="user32")]
 extern "system" { fn GetSystemMetrics(index:i32)->i32; }
 
-// Fingerprints distinguish previous experimental GameFrame wrappers from
-// unknown external DLLs in diagnostics. Both are now backed up before replacement.
-const PREVIOUS_GAMEFRAME_HASHES:&[&str]=&[
-    // Exact SHA-256 values for bundled experimental DLLs recovered from
-    // the maintainer's 2026-11-08 Wine log (installed by ScorchedPlanetFix).
-    // Keep prior identities for accurate logs and regression coverage.
-    "739513dd8ff764f7ff5a88c76f1ac4cc6deb5632eb48f30eed578d31a95fbc9b", // Pre-overlay GameFrame
-    "95869c915399651dd192bb8660315869fd4c293c9eef218c2f627415559e3d8d", // Working overlay GameFrame
-    "2682b5995994d843d376b8f17115c3b011ca61a3d9e4318d54e9f06040c0747e", // Maintainer-validated former experimental GameFrame; backup before update
-    "95f1af3a7f5fc0aa9695b5c8620ac0e24385535d3700259139a2082bcfac219f", // Maintainer-validated former experimental GameFrame; backup before update
-    // Exact GameFrame DLL from the 2.0.0-4c1c6d59 Wine acceptance log.
-    // This is NOT an arbitrary external wrapper or an unverified DLL.
-    // The experimental overlay probe changes GameFrame's bytes, so a safe
-    // fingerprinted upgrade keeps the original in a .bak file.
-    "cdc88180416d26bd831b94bc271542b1d8e32d1eb86671d1f487ba67a42030bc",
-    "1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7",
-    "7b82c9831c3167a0d8ac446fc30ab973d35e9c49e566508ebd5280f3deb8e5a8",
-    "37d5c107c65c3fcb2901ba1f4b073aa4dddd13ec016132f63b2fbf545717344e",
-    "302dbb2b0c9dbaca0555d6193e2d1629a0254ea93e7acee6687dae2db3181eb1",
-];
-
-fn original_gameframe(hash:&str)->bool {
-    PREVIOUS_GAMEFRAME_HASHES.contains(&hash)
-}
-
 /// Largest centered 4:3 picture fitting inside the unchanged desktop.
 fn fit_4_3(width:u32,height:u32)->(u32,u32){
     if (width as u64)*3>(height as u64)*4 {
@@ -251,9 +226,11 @@ pub fn preflight_glide(game:&Path)->Result<(),String>{
     }
 }
 
-/// After a complete immutable-game-file audit, install the embedded GameFrame.
-/// Any prior regular glide.dll (older GameFrame, foreign, or unrecognized) is
-/// moved to a unique .bak first. Symlinks and directories are never replaced.
+/// Install the embedded GameFrame. During normal gameplay the caller first
+/// audits all immutable game assets; explicit --install-only and first-time
+/// staged installation use their own validation procedures.
+/// Any different regular glide.dll (older GameFrame or external) is moved to
+/// a unique .bak first. Symlinks and directories are never replaced.
 pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<bool,String>{
     let expected=validate_embedded()?
         .ok_or("ScorchedPlanetFix v2 requires embedded GameFrame; no external fallback is supported")?;
@@ -266,10 +243,11 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
                 log("GAMEFRAME: installed glide.dll already matches bundled GameFrame; no replacement");
                 return Ok(true);
             }
-            let kind=if original_gameframe(&actual){"older-GameFrame"}else{"unknown-or-external"};
-            log(&format!("GAMEFRAME: existing glide.dll status={kind} old_sha256={actual}; starting protected backup and replacement"));
+            // No obsolete fingerprint allowlist: the same safe replacement
+            // applies to every different regular DLL. Its identity is the hash.
+            log(&format!("GAMEFRAME: existing glide.dll status=nonmatching old_sha256={actual}; starting protected backup and replacement"));
             let backup=replace_with_backup(game,&actual,&expected)?;
-            log(&format!("GAMEFRAME: backup saved original={} backup={} old_sha256={actual} status={kind}",path.display(),backup.display()));
+            log(&format!("GAMEFRAME: backup saved original={} backup={} old_sha256={actual} status=nonmatching",path.display(),backup.display()));
             log(&format!("GAMEFRAME: installed bundled Glide DLL new_sha256={expected} source={SOURCE_COMMIT}; replacement successful; proceeding to game launch"));
             return Ok(true);
         }
@@ -340,14 +318,6 @@ mod tests{
         assert_eq!(fit_4_3(2560,1440),(1920,1440));
         assert_eq!(fit_4_3(1280,1024),(1280,960));
         assert_eq!(fit_4_3(1024,768),(1024,768));
-    }
-    #[test]
-    fn legacy_gameframe_hashes_are_exact_only(){
-        assert!(original_gameframe("1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7"));
-        assert!(original_gameframe("cdc88180416d26bd831b94bc271542b1d8e32d1eb86671d1f487ba67a42030bc"));
-        assert!(original_gameframe("739513dd8ff764f7ff5a88c76f1ac4cc6deb5632eb48f30eed578d31a95fbc9b"));
-        assert!(original_gameframe("95869c915399651dd192bb8660315869fd4c293c9eef218c2f627415559e3d8d"));
-        assert!(!original_gameframe(&"a".repeat(64)));
     }
     #[test]
     fn bad_pe_or_64_bit_dll_never_accepted(){
