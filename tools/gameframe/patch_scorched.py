@@ -232,7 +232,186 @@ struct Renderer {""")
             "            unsafe { r.exec(c) };",
             "            r.scorched_menu_probe.record(&c);\n            unsafe { r.exec(c) };")
 
-    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS + menu telemetry")
+
+    # Bitmap text and conservative four-region visual fingerprint for the
+    # original OPTIONS root menu. The supplied screenshot is the calibration
+    # image, but no game artwork is copied into distributed artifacts.
+    (ROOT / "render" / "menu_overlay.rs").write_text(r'''//! Menu-only presentation overlay. Nothing written into original game buffers.
+//! Color-shape detection is specific to the verified original 4:3 root menu.
+use crate::gl::*;
+use crate::render::shaders::Program;
+use crate::log::log;
+
+pub struct MenuOverlay {
+    tex: u32, bitmap: Vec<u8>, width:i32, height:i32,
+    ticks:u32, hits:u32, visible:bool,
+}
+fn glyph(c:char)->[u8;7]{
+    match c {
+        'S'=>[14,17,16,14,1,17,14], 'P'=>[30,17,17,30,16,16,16],
+        'F'=>[31,16,16,30,16,16,16],
+        'c'=>[0,0,14,17,16,17,14], 'o'=>[0,0,14,17,17,17,14],
+        'r'=>[0,0,22,25,16,16,16], 'h'=>[16,16,30,17,17,17,17],
+        'e'=>[0,0,14,17,31,16,14], 'd'=>[1,1,15,17,17,17,15],
+        'l'=>[12,4,4,4,4,4,14], 'a'=>[0,0,14,1,15,17,15],
+        'n'=>[0,0,30,17,17,17,17], 't'=>[8,8,28,8,8,9,6],
+        'i'=>[4,0,12,4,4,4,14], 'x'=>[0,0,17,10,4,10,17],
+        'f'=>[6,9,8,28,8,8,8], 'b'=>[16,16,30,17,17,17,30],
+        '0'=>[14,17,19,21,25,17,14], '1'=>[4,12,4,4,4,4,14],
+        '2'=>[14,17,1,2,4,8,31], '3'=>[30,1,1,14,1,1,30],
+        '4'=>[2,6,10,18,31,2,2], '5'=>[31,16,30,1,1,17,14],
+        '6'=>[6,8,16,30,17,17,14], '7'=>[31,1,2,4,8,8,8],
+        '8'=>[14,17,17,14,17,17,14], '9'=>[14,17,17,15,1,2,12],
+        '-'=>[0,0,0,31,0,0,0], '.'=>[0,0,0,0,0,12,12],
+        ' '=>[0;7], _=>[31,17,2,4,4,0,4],
+    }
+}
+fn text_image(text:&str)->(i32,i32,Vec<u8>){
+    let chars:Vec<char>=text.chars().take(72).collect();
+    let w=chars.len() as i32*12;
+    let h=14;
+    let mut pixels=vec![0u8;w as usize*h as usize*4];
+    for (i,c) in chars.iter().enumerate(){
+        for (y,mask) in glyph(*c).iter().enumerate(){
+            for x in 0..5usize {
+                if (mask&(1<<(4-x)))==0 {continue;}
+                for dy in 0..2 {for dx in 0..2 {
+                    let px=i*12+x*2+dx;let py=y*2+dy;
+                    let at=(py*w as usize+px)*4;
+                    pixels[at..at+4].copy_from_slice(&[226,226,226,255]);
+                }}
+            }
+        }
+    }
+    (w,h,pixels)
+}
+
+#[derive(Clone,Copy)]
+enum Color { Yellow, Blue, White }
+unsafe fn color_fraction(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32,
+                         u:f32,v:f32,want:Color)->f32{
+    // Four tiny color-family checks, normalized to the active centered 4:3 image.
+    let side=((vw as f32*.01).round() as i32).clamp(8,18);
+    let px=x0+(vw as f32*u).round() as i32;
+    let py=y0+vh-(vh as f32*v).round() as i32-side;
+    if px<0||py<0||px+side>cw||py+side>ch{return 0.;}
+    let mut rgba=vec![0u8;(side*side*4) as usize];
+    unsafe{(gl.ReadPixels)(px,py,side,side,RGBA,UNSIGNED_BYTE,rgba.as_mut_ptr().cast());}
+    let hits=rgba.chunks_exact(4).filter(|c|{
+        let (r,g,b)=(c[0] as u32,c[1] as u32,c[2] as u32);
+        match want {
+            Color::Yellow=>r>140&&g>75&&b<80,
+            Color::Blue=>b>85&&b*5>r*6&&g>15,
+            Color::White=>r>165&&g>150&&b>130,
+        }
+    }).count();
+    hits as f32/(side*side) as f32
+}
+unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32)->bool{
+    if vw<640||vh<480{return false;}
+    unsafe{(gl.BindFramebuffer)(READ_FRAMEBUFFER,0);}
+    // Fingerprints from maintainer screenshot: yellow OPTIONS heading, globe,
+    // New Game panel, Quit panel. All required to avoid gameplay false positives.
+    let yellow=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.290,.130,Color::Yellow)};
+    let globe=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.864,.400,Color::Blue)};
+    let new_game=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.093,.394,Color::White)};
+    let quit=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,.864,.752,Color::White)};
+    yellow>.16&&globe>.07&&new_game>.08&&quit>.08
+}
+impl MenuOverlay {
+    pub fn new()->Self{
+        let signature=std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_default();
+        let (width,height,bitmap)=text_image(&signature);
+        log!("SCORCHED_MENU_OVERLAY: label={} root-menu recognition enabled (fail-closed)",signature);
+        Self{tex:0,bitmap,width,height,ticks:0,hits:0,visible:false}
+    }
+    pub unsafe fn draw(&mut self,gl:&Gl,lfb:&Program,
+                       cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32){
+        if self.bitmap.is_empty()||self.width<=0||cw<=0||ch<=0{return;}
+        self.ticks=self.ticks.wrapping_add(1);
+        // Hidden: sample every 3 frames. Visible: sample each frame to hide
+        // immediately on scene changes.
+        if self.visible||self.ticks%3==0 {
+            let is_menu=unsafe{root_menu(gl,cw,ch,x0,y0,vw,vh)};
+            self.hits=if is_menu {self.hits.saturating_add(1)} else {0};
+            let now=self.hits>=2;
+            if now!=self.visible {
+                self.visible=now;
+                log!("SCORCHED_MENU_OVERLAY: visible={now}");
+            }
+        }
+        if !self.visible{return;}
+        unsafe {
+            if self.tex==0 {
+                (gl.GenTextures)(1,&mut self.tex);
+                (gl.BindTexture)(TEXTURE_2D,self.tex);
+                (gl.TexImage2D)(TEXTURE_2D,0,RGBA8 as i32,self.width,self.height,
+                    0,RGBA,UNSIGNED_BYTE,self.bitmap.as_ptr().cast());
+                (gl.TexParameteri)(TEXTURE_2D,TEXTURE_MIN_FILTER,NEAREST);
+                (gl.TexParameteri)(TEXTURE_2D,TEXTURE_MAG_FILTER,NEAREST);
+                (gl.TexParameteri)(TEXTURE_2D,TEXTURE_WRAP_S,CLAMP_TO_EDGE);
+                (gl.TexParameteri)(TEXTURE_2D,TEXTURE_WRAP_T,CLAMP_TO_EDGE);
+            }
+            (gl.BindFramebuffer)(FRAMEBUFFER,0);
+            (gl.Disable)(SCISSOR_TEST);
+            (gl.Disable)(DEPTH_TEST);
+            (gl.DepthMask)(0);
+            (gl.ColorMask)(1,1,1,1);
+            (gl.Enable)(BLEND);
+            (gl.BlendFuncSeparate)(0x0302,0x0303,1,0x0303);
+            (gl.Viewport)(0,0,cw,ch);
+            (gl.UseProgram)(lfb.id);
+            (gl.ActiveTexture)(TEXTURE0);
+            (gl.BindTexture)(TEXTURE_2D,self.tex);
+            (gl.Uniform1i)(lfb.loc("uImg"),0);
+            (gl.Uniform1i)(lfb.loc("uChroma"),0);
+            (gl.Uniform2f)(lfb.loc("uScreen"),cw as f32,ch as f32);
+            let left=(x0+14) as f32;
+            let top=(ch-(y0+vh)+12) as f32;
+            (gl.Uniform4f)(lfb.loc("uRect"),left,top,
+                left+self.width as f32,top+self.height as f32);
+            (gl.DrawArrays)(0x0005,0,4);
+            (gl.Disable)(BLEND);
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test] fn embedded_glyphs_not_game_images() {
+        let (w,h,b)=text_image("ScorchedPlanetFix 2.0.0-deadbeef");
+        assert!(w>0&&h==14&&b.len()==(w*h*4) as usize);
+        assert!(b.chunks_exact(4).any(|p|p[3]==255));
+    }
+}
+''', encoding="utf-8")
+    replace("render/mod.rs", "mod frame;", "mod frame;\nmod menu_overlay;")
+    replace("render/mod.rs",
+            "    spent: [std::time::Duration; 5],",
+            "    spent: [std::time::Duration; 5],\n    menu_overlay: menu_overlay::MenuOverlay,")
+    replace("render/mod.rs",
+            "        spent: [std::time::Duration::ZERO; 5],",
+            "        spent: [std::time::Duration::ZERO; 5],\n        menu_overlay: menu_overlay::MenuOverlay::new(),")
+    replace("render/mod.rs",
+            "unsafe { g.frame.present(&g.gl, &g.programs.present, self.state.gamma, cw, ch, g.dc) };",
+            "unsafe { g.frame.present(&g.gl, &g.programs.present, &g.programs.lfb, &mut self.menu_overlay, self.state.gamma, cw, ch, g.dc) };")
+    replace("render/mod.rs",
+            "g.frame.show(&g.gl, &g.programs.present, self.state.gamma, cw, ch, g.dc, g.frame.back ^ 1)",
+            "g.frame.show(&g.gl, &g.programs.present, &g.programs.lfb, &mut self.menu_overlay, self.state.gamma, cw, ch, g.dc, g.frame.back ^ 1)")
+    replace("render/frame.rs",
+            "pub unsafe fn present(&mut self, gl: &Gl, p: &Program, gamma: f32, cw: i32, ch: i32, dc: crate::win32::HDC)",
+            "pub unsafe fn present(&mut self, gl: &Gl, p: &Program, lfb: &Program, overlay: &mut crate::render::menu_overlay::MenuOverlay, gamma: f32, cw: i32, ch: i32, dc: crate::win32::HDC)")
+    replace("render/frame.rs",
+            "self.show(gl, p, gamma, cw, ch, dc, self.back);",
+            "self.show(gl, p, lfb, overlay, gamma, cw, ch, dc, self.back);")
+    replace("render/frame.rs",
+            "pub unsafe fn show(&self, gl: &Gl, p: &Program, gamma: f32, cw: i32, ch: i32, dc: crate::win32::HDC, which: usize)",
+            "pub unsafe fn show(&self, gl: &Gl, p: &Program, lfb: &Program, overlay: &mut crate::render::menu_overlay::MenuOverlay, gamma: f32, cw: i32, ch: i32, dc: crate::win32::HDC, which: usize)")
+    replace("render/frame.rs",
+            '            crate::gl::check(gl, "in the frame");',
+            '            overlay.draw(gl, lfb, cw, ch, x0, y0, vw, vh);\n            crate::gl::check(gl, "in the frame");')
+
+    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS + menu telemetry + root-menu version overlay")
     for file in ["window.rs","win32.rs","api/sst.rs"]:
         text=(ROOT/file).read_text()
         if "ChangeDisplaySettings" in text:
