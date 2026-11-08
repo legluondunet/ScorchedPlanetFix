@@ -33,7 +33,7 @@ The game still renders internally at 640×480, but GameFrame shows a centered 4:
 
 ## Disc edition and integrity rules
 
-Four exact-fingerprint editions are accepted: US 1.08, Europe EN/ES/IT 1.06, Europe FR/DE 1.06, and alternate Europe FR/DE 1.06. Extraction uses the original ISO/CUE-BIN without modifying it and stages `SPLANET/` + required `VOODOO/` assets; obsolete 3dfx drivers and unused software executables are excluded. Patch and original `spvoodoo.exe.bak` are SHA-256 checked. Unknown executables are refused. Saves remain writable.
+Four exact-fingerprint editions are accepted: US 1.08, Europe EN/ES/IT 1.06, Europe FR/DE 1.06, and alternate Europe FR/DE 1.06. Extraction uses the original ISO/CUE-BIN without modifying it and stages `SPLANET/` + required `VOODOO/` assets; obsolete 3dfx drivers and unused software executables are excluded. The complete staged installation (game manifest, patched executable, original `spvoodoo.exe.bak`, INI and bundled GameFrame) is SHA-256/structure checked **before** the `splanet/` directory is published. A failed audit cleans up staging and does not create an unusable installed game folder. Unknown executables are refused. Saves remain writable.
 
 See [supported editions](cd-editions.md) for hashes, language defaults and patch details.
 
