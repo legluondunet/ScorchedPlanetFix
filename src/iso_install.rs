@@ -7,7 +7,8 @@
 //! copy temp/splanet to staged splanet (canonical lowercase names), then copy
 //! the two playable VOODOO game components, excluding obsolete 3dfx drivers.
 //! Verify SHA-256 for both extraction and staged copies, patch before writing
-//! the final INI, then atomically publish the complete installation.
+//! the final INI, then fully verify the staged installed-game manifest and
+//! bundled GameFrame before atomically publishing the complete installation.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
 use crate::{cue_image,gameframe,verify,verify_manifest::manifest_for};
