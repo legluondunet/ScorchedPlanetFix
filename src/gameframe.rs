@@ -16,6 +16,11 @@ extern "system" { fn GetSystemMetrics(index:i32)->i32; }
 // The exact fingerprints distinguish our previous free wrapper from a user's
 // proprietary or unrelated glide.dll; those are NEVER replaced.
 const PREVIOUS_GAMEFRAME_HASHES:&[&str]=&[
+    // Exact SHA-256 values for bundled experimental DLLs recovered from
+    // the maintainer's 2026-11-08 Wine log (installed by ScorchedPlanetFix).
+    // Permit one-time backup/upgrades; never accept unknown Glide binaries.
+    "739513dd8ff764f7ff5a88c76f1ac4cc6deb5632eb48f30eed578d31a95fbc9b", // Pre-overlay GameFrame
+    "95869c915399651dd192bb8660315869fd4c293c9eef218c2f627415559e3d8d", // Working overlay GameFrame
     "2682b5995994d843d376b8f17115c3b011ca61a3d9e4318d54e9f06040c0747e", // Maintainer-validated former experimental GameFrame; backup before update
     "95f1af3a7f5fc0aa9695b5c8620ac0e24385535d3700259139a2082bcfac219f", // Maintainer-validated former experimental GameFrame; backup before update
     // Exact GameFrame DLL from the 2.0.0-4c1c6d59 Wine acceptance log.
@@ -296,6 +301,8 @@ mod tests{
     fn legacy_gameframe_hashes_are_exact_only(){
         assert!(original_gameframe("1150aebea617cbbd568b92be7f7b1abd3820e510b45c1a24df0a5508960868f7"));
         assert!(original_gameframe("cdc88180416d26bd831b94bc271542b1d8e32d1eb86671d1f487ba67a42030bc"));
+        assert!(original_gameframe("739513dd8ff764f7ff5a88c76f1ac4cc6deb5632eb48f30eed578d31a95fbc9b"));
+        assert!(original_gameframe("95869c915399651dd192bb8660315869fd4c293c9eef218c2f627415559e3d8d"));
         assert!(!original_gameframe(&"a".repeat(64)));
     }
     #[test]
