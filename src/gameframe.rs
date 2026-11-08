@@ -16,6 +16,8 @@ extern "system" { fn GetSystemMetrics(index:i32)->i32; }
 // The exact fingerprints distinguish our previous free wrapper from a user's
 // proprietary or unrelated glide.dll; those are NEVER replaced.
 const PREVIOUS_GAMEFRAME_HASHES:&[&str]=&[
+    "2682b5995994d843d376b8f17115c3b011ca61a3d9e4318d54e9f06040c0747e", // Maintainer-validated former experimental GameFrame; backup before update
+    "95f1af3a7f5fc0aa9695b5c8620ac0e24385535d3700259139a2082bcfac219f", // Maintainer-validated former experimental GameFrame; backup before update
     // Exact GameFrame DLL from the 2.0.0-4c1c6d59 Wine acceptance log.
     // This is NOT an arbitrary external wrapper or an unverified DLL.
     // The experimental overlay probe changes GameFrame's bytes, so a safe
