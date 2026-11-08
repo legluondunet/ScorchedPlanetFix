@@ -145,7 +145,94 @@ fn limit_scorched_fps() {
     super::movie::frame();""")
     # The existing source has a unitary render thread, limiting game-frame
     # callbacks limits both rendering and original-game simulation speed.
-    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS")
+
+    # The menu itself is not identified yet. Capture a low-overhead, opt-in
+    # Glide-frame profile first; never infer "menu" from frame rate alone.
+    # Profiles go to the existing unified launcher log through GLIDE_LOG.
+    replace("api/sst.rs",
+            "static WIDTH: AtomicU32 = AtomicU32::new(640);",
+            """static WIDTH: AtomicU32 = AtomicU32::new(640);
+static SCORCHED_PASSTHRU: AtomicU32 = AtomicU32::new(0);
+pub fn scorched_passthru() -> u32 {
+    SCORCHED_PASSTHRU.load(Ordering::Relaxed)
+}""")
+    replace("api/sst.rs",
+            '    log!("grSstPassthruMode {mode}");',
+            '    SCORCHED_PASSTHRU.store(mode, Ordering::Relaxed);\n    log!("grSstPassthruMode {mode}");')
+
+    replace("render/mod.rs", "struct Renderer {", """/// Temporary frame-type probe. It makes NO assertion that 'idle' means menu.
+struct ScorchedMenuProbe {
+    enabled: bool,
+    since: std::time::Instant,
+    frames: u32,
+    kinds: [u32; 3], // frames containing 3D, LFB-only, or neither
+    totals: [u64; 3], // 3D primitives, LFB images, clears
+    current: [u32; 3],
+    last_kind: &'static str,
+}
+
+impl ScorchedMenuProbe {
+    fn new() -> Self {
+        let enabled=std::env::var_os("SCORCHED_MENU_PROBE").is_some();
+        if enabled {
+            log!("SCORCHED_MENU_PROBE: begin signature={} (telemetry only; no automatic menu classification)",
+                std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_else(|_| "unknown".into()));
+        }
+        Self {
+            enabled, since: std::time::Instant::now(), frames: 0,
+            kinds: [0;3], totals: [0;3], current: [0;3], last_kind: "unknown",
+        }
+    }
+
+    fn record(&mut self, cmd: &Cmd) {
+        if !self.enabled { return; }
+        match cmd {
+            Cmd::Triangle(_) | Cmd::Line(_) | Cmd::Point(_) => self.current[0]+=1,
+            Cmd::Lfb(_) => self.current[1]+=1,
+            Cmd::Clear { .. } => self.current[2]+=1,
+            Cmd::Swap => {
+                self.frames+=1;
+                let kind=if self.current[0]>0 {"3d"}
+                    else if self.current[1]>0 {"lfb-only"} else {"no-primitives"};
+                let index=if kind=="3d" {0} else if kind=="lfb-only" {1} else {2};
+                self.kinds[index]+=1;
+                for (i,v) in self.current.iter().enumerate() { self.totals[i]+=*v as u64; }
+                if kind!=self.last_kind {
+                    log!("SCORCHED_MENU_PROBE: transition={} passthru={} frame_calls=3d:{},lfb:{},clear:{}",
+                        kind,crate::api::sst::scorched_passthru(),
+                        self.current[0],self.current[1],self.current[2]);
+                    self.last_kind=kind;
+                }
+                self.current=[0;3];
+                let elapsed=self.since.elapsed();
+                if elapsed>=std::time::Duration::from_secs(2) {
+                    log!("SCORCHED_MENU_PROBE: interval_ms={} frames={} passthru={} kinds=3d:{},lfb-only:{},no-primitives:{} commands=3d:{},lfb:{},clear:{}",
+                        elapsed.as_millis(),self.frames,crate::api::sst::scorched_passthru(),
+                        self.kinds[0],self.kinds[1],self.kinds[2],
+                        self.totals[0],self.totals[1],self.totals[2]);
+                    self.since=std::time::Instant::now();
+                    self.frames=0;
+                    self.kinds=[0;3];
+                    self.totals=[0;3];
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+struct Renderer {""")
+    replace("render/mod.rs",
+            "    spent: [std::time::Duration; 5],",
+            "    spent: [std::time::Duration; 5],\n    scorched_menu_probe: ScorchedMenuProbe,")
+    replace("render/mod.rs",
+            "        spent: [std::time::Duration::ZERO; 5],",
+            "        spent: [std::time::Duration::ZERO; 5],\n        scorched_menu_probe: ScorchedMenuProbe::new(),")
+    replace("render/mod.rs",
+            "            unsafe { r.exec(c) };",
+            "            r.scorched_menu_probe.record(&c);\n            unsafe { r.exec(c) };")
+
+    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS + menu telemetry")
     for file in ["window.rs","win32.rs","api/sst.rs"]:
         text=(ROOT/file).read_text()
         if "ChangeDisplaySettings" in text:
