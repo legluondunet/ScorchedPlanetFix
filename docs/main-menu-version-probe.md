@@ -1,8 +1,8 @@
 # Version-commit overlay on the original root menu (PR #24)
 
-This experiment keeps the published v2.0.0 release unchanged.
+This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlanetFix/pull/24) for **post-v2.0.0 development builds**. It is not included in the already published v2.0.0 tag.
 
-## What the next Windows/Wine build does
+## How it works
 
 - The x64 launcher passes `ScorchedPlanetFix <version>-<commit>` to its embedded
   x86 GameFrame Glide renderer. The text is generated with built-in 5x7 glyphs,
@@ -29,15 +29,17 @@ This is deliberately **not** a universal engine-state hook. The screenshot
 provides visual evidence for the original root menu of the tested
 EN/ES/IT edition, but does not establish that the colors and positions are
 identical for every supported ISO or every video rendering path. Recognition
-may require further adjustment after testing on Wine, Windows and other
-editions. The build is experimental; do not merge before validation.
+may require further adjustment when the final release candidate is tested on
+Wine, Windows and other editions. The existing logic intentionally hides the
+signature when recognition is inconclusive.
 
 The title in the supplied screenshot reads `OPTIONS`, but that screen also
 contains New Game, Load Game and Quit buttons: this is the targeted root menu.
 
-## Focused acceptance test (one run)
+## Focused regression test (one run)
 
-Use the newest CI artifact from this PR. It is not an official release.
+Use the newest post-PR24 CI artifact from `main` or a follow-up release candidate.
+The already published v2.0.0 release does not contain this overlay.
 
 1. Launch the game normally. After a successful immutable-file audit, any
    existing regular `glide.dll` differing from the bundled GameFrame is
@@ -46,7 +48,7 @@ Use the newest CI artifact from this PR. It is not an official release.
    experimental builds. Existing backups are left untouched; symlinks and
    non-regular paths are rejected. Check the `GAMEFRAME:` backup entries in the log.
 2. Stay at the original 8-button root menu (the screen titled OPTIONS)
-   for at least 8 seconds. Expect `ScorchedPlanetFix 2.0.0-<commit>` in the
+   for at least 8 seconds. Expect `ScorchedPlanetFix <version>-<commit>` in the
    bottom-right area in original menu red (#980808), without background or frame.
 3. Open a submenu for 5 seconds, then return to root menu.
 4. Start a mission for at least 8 seconds; verify the label does not
@@ -56,5 +58,7 @@ Use the newest CI artifact from this PR. It is not an official release.
 
 If the label does not appear, look for `SCORCHED_MENU_OVERLAY:` records;
 if there are no `visible=true` transitions, the root-screen recognition
-must be adjusted. If it persists outside the root menu, the experiment must
-not be merged.
+must be adjusted. A label that persists outside the root menu blocks publication
+of the next release. The original PR #24 was merged after visual maintainer
+approval; see the [release-readiness checklist](pre-release-audit-post24.md) for
+remaining platform/edition regression requirements.
