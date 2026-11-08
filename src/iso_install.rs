@@ -10,7 +10,7 @@
 //! the final INI, then atomically publish the complete installation.
 //! Never delete the user's ISO, existing install, or overwrite a destination.
 use scorched_planet_fix::{self,Action,ORIGINAL_SHA256};
-use crate::{cue_image,gameframe,verify_manifest::manifest_for};
+use crate::{cue_image,gameframe,verify,verify_manifest::manifest_for};
 use isomage::{cat_node, detect_and_parse_filesystem, TreeNode};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -633,8 +633,19 @@ pub fn install_image(
         // ScorchedPlanetFix v2 installs only its exact bundled GameFrame DLL.
         // No proprietary wrapper is discovered, copied or supported.
         gameframe::ensure_glide(parent,&staging,|line|log(line))?;
-        // Publish only after every validation, copy, backup, patch and INI
-        // step has succeeded. Never expose a half-installed destination.
+        // Validate the complete SHA-256 manifest, original EXE backup, INI,
+        // and exact bundled GameFrame *before* the directory is made visible.
+        // Otherwise a corrupt but edition-identifiable CD could leave a
+        // partial/unlaunchable splanet/ that blocks subsequent installs.
+        report(98,100,"Verifying the complete staged installation...");
+        log("INSTALL-PREFLIGHT: validating staged game assets before publication");
+        let staged_report=verify::verify_install(&staging,|line|log(line))
+            .map_err(|e|format!("Staged installation verification failed: {e}"))?;
+        log(&format!("INSTALL-PREFLIGHT OK: edition={} immutable_files={} bytes={}",
+            staged_report.edition,staged_report.checked_files,staged_report.checked_bytes));
+        // Publish only after every validation, copy, backup, patch, INI and
+        // complete immutable-file audit has succeeded. Failed staging is
+        // cleaned up, leaving the destination absent.
         if destination.exists() || destination.is_symlink() {
             return Err("splanet directory created during installation: operation cancelled".into());
         }
