@@ -258,16 +258,21 @@ No arguments:
 --install-only:
   Install from an image without playing, or explicitly migrate a recognized
   older installation. It never overwrites unknown or modified executables.
-  A missing GameFrame DLL is installed from the verified embedded binary.
+  A missing or different regular Glide DLL is replaced from the verified
+  embedded GameFrame after moving the old DLL to glide.dll.bak.
+  An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
 --help / --version:
   Show usage or executable version without running the game.
 
 Only open-source bundled GameFrame is supported in v2.
-  External Glide wrappers are rejected without overwriting user files.
-  If upgrading an installation using nGlide, move splanet/glide.dll aside
-  manually; then run this program to provision bundled GameFrame.
+  At normal launch, after verifying immutable game files, an older or
+  unknown regular splanet/glide.dll is moved to glide.dll.bak,
+  replacing any previous regular backup rather than adding more files.
+  The embedded GameFrame DLL is installed and verified before play.
+  This backup replacement and both DLL hashes are logged.
+  Non-regular files and symlinks are refused for safety.
   --verify is strictly read-only, including GameFrame validation.
 
 All diagnostics, including hardware inventory, go to ScorchedPlanetFix.log
@@ -335,6 +340,14 @@ mod tests {
         assert!(!h.contains("--nogui"));
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
+        // Regression: CLI help must match the current automatic migration path.
+        assert!(h.contains("moved to glide.dll.bak"));
+        assert!(h.contains("glide.dll.bak"));
+        assert!(h.contains("An existing regular glide.dll.bak is replaced"));
+        assert!(!h.contains("unique .bak name"));
+        assert!(!h.contains("Existing backups are never overwritten"));
+        assert!(h.contains("--verify is strictly read-only"));
+        assert!(!h.contains("move splanet/glide.dll aside"));
     }
     #[test]
     fn resolve_relative_images_against_exe_folder() {
