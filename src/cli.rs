@@ -259,7 +259,8 @@ No arguments:
   Install from an image without playing, or explicitly migrate a recognized
   older installation. It never overwrites unknown or modified executables.
   A missing or different regular Glide DLL is replaced from the verified
-  embedded GameFrame after preserving any old DLL as a unique .bak backup.
+  embedded GameFrame after moving the old DLL to glide.dll.bak.
+  An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
 --help / --version:
@@ -267,10 +268,10 @@ No arguments:
 
 Only open-source bundled GameFrame is supported in v2.
   At normal launch, after verifying immutable game files, an older or
-  unknown regular splanet/glide.dll is automatically backed up to
-  glide.dll.bak (or a unique .bak name if one already exists).
+  unknown regular splanet/glide.dll is moved to glide.dll.bak,
+  replacing any previous regular backup rather than adding more files.
   The embedded GameFrame DLL is installed and verified before play.
-  Existing backups are never overwritten; all changes are logged.
+  This backup replacement and both DLL hashes are logged.
   Non-regular files and symlinks are refused for safety.
   --verify is strictly read-only, including GameFrame validation.
 
@@ -342,7 +343,9 @@ mod tests {
         // Regression: CLI help must match the current automatic migration path.
         assert!(h.contains("automatically backed up"));
         assert!(h.contains("glide.dll.bak"));
-        assert!(h.contains("Existing backups are never overwritten"));
+        assert!(h.contains("An existing regular glide.dll.bak is replaced"));
+        assert!(!h.contains("unique .bak name"));
+        assert!(!h.contains("Existing backups are never overwritten"));
         assert!(h.contains("--verify is strictly read-only"));
         assert!(!h.contains("move splanet/glide.dll aside"));
     }
