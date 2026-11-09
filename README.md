@@ -18,7 +18,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Single `ScorchedPlanetFix.log` next to the launcher, including GameFrame diagnostics.
 - Post-v2.0.0 development adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu; the signature disappears on other screens.
-- Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the file is renamed to a unique `.bak` and the verified bundled GameFrame DLL is installed automatically. The original backup is preserved and logged; symlinks/non-files are rejected.
+- Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the original file is renamed to `glide.dll.bak` (replacing an existing regular `.bak`) and the verified bundled GameFrame DLL is installed automatically. Only one managed backup is kept; the replacement and hashes are logged. Symlinks/non-files are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
@@ -62,7 +62,7 @@ Additional commands:
 
 ### Moving from v1.1.0 / external Glide
 
-If an existing `splanet/glide.dll` comes from nGlide, another external wrapper, or an older GameFrame build, **no manual DLL migration is necessary**. After validating the immutable game data, a normal launch automatically renames the existing regular file to `glide.dll.bak` (or a free hash-suffixed `.bak` if one exists), installs its verified bundled GameFrame and starts the game. Existing backups are never overwritten. This operation, the original and replacement SHA-256 hashes, and the backup path appear in `ScorchedPlanetFix.log`. `--verify` stays strictly read-only; symlinks and non-regular DLL paths remain unsupported.
+If an existing `splanet/glide.dll` comes from nGlide, another external wrapper, or an older GameFrame build, **no manual DLL migration is necessary**. After validating the immutable game data, a normal launch renames that regular file to the fixed `glide.dll.bak`, **replacing any existing regular backup**, installs the verified bundled GameFrame and starts the game. It never creates new numbered/hash-suffixed backups. The previous backup's contents are intentionally discarded during replacement; the latest original DLL and both SHA-256 hashes are recorded in `ScorchedPlanetFix.log`. `--verify` stays strictly read-only; symlinks and non-regular DLL/backup paths remain unsupported.
 
 ### Platforms
 
