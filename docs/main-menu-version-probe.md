@@ -1,6 +1,6 @@
 # Version-commit overlay on the original root menu (PR #24)
 
-This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlanetFix/pull/24) for **post-v2.0.0 development builds**. It is not included in the already published v2.0.0 tag.
+This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlanetFix/pull/24) and refined in [PR #25](https://github.com/legluondunet/ScorchedPlanetFix/pull/25). It ships in **v2.0.1**, not the historical v2.0.0 release.
 
 ## How it works
 
@@ -16,7 +16,7 @@ This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlan
   three-frame detection dropout prevents flicker during hover transitions.
   The sampling coordinates are normalized to the centered original picture,
   so the resolution can vary.
-- Only when all four signs are recognized does it draw **original menu red (#980808, RGB 152/8/8)** text at the
+- When the stable heading and sufficient corner-icon evidence are recognized, it draws **original menu red (#980808, RGB 152/8/8)** text at the
   **bottom right of the presentation surface, without a frame**, into the final
   OpenGL buffer. The built-in 5x7 pixel glyphs are preserved, but the on-screen
   signature is scaled to **two-thirds** of its previous dimensions (14 px -> 9 px
@@ -45,8 +45,7 @@ contains New Game, Load Game and Quit buttons: this is the targeted root menu.
 
 ## Focused regression test (one run)
 
-Use the newest post-PR24 CI artifact from `main` or a follow-up release candidate.
-The already published v2.0.0 release does not contain this overlay.
+Use v2.0.1 or a CI artifact built from its release preparation branch. The historical v2.0.0 release does not contain this overlay.
 
 1. Launch the game normally. After a successful immutable-file audit, any
    existing regular `glide.dll` differing from the bundled GameFrame is
