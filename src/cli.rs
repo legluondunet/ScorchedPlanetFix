@@ -330,8 +330,8 @@ mod tests {
     }
     #[test]
     fn usage_has_no_legacy_launch_option() {
-        let h = help("2.0.1-deadbeef");
-        for word in ["2.0.1-deadbeef", "--install-only", "--verify",
+        let h = help("2.0.0-deadbeef");
+        for word in ["2.0.0-deadbeef", "--install-only", "--verify",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
