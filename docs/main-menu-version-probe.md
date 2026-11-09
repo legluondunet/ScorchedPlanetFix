@@ -43,10 +43,10 @@ The already published v2.0.0 release does not contain this overlay.
 
 1. Launch the game normally. After a successful immutable-file audit, any
    existing regular `glide.dll` differing from the bundled GameFrame is
-   preserved as `glide.dll.bak` (or an unused suffixed `.bak`) before installing
-   the embedded DLL. This includes unrecognized external wrappers and older
-   experimental builds. Existing backups are left untouched; symlinks and
-   non-regular paths are rejected. Check the `GAMEFRAME:` backup entries in the log.
+   moved to `glide.dll.bak`, replacing any existing regular backup, before
+   installing the embedded DLL. This includes unrecognized external wrappers
+   and older experimental builds. No new suffixed backups are created;
+   symlinks and non-regular paths are rejected. Check the `GAMEFRAME:` entries in the log.
 2. Stay at the original 8-button root menu (the screen titled OPTIONS)
    for at least 8 seconds. Expect `ScorchedPlanetFix <version>-<commit>` in the
    bottom-right area in original menu red (#980808), without background or frame.
