@@ -244,7 +244,7 @@ use crate::log::log;
 
 pub struct MenuOverlay {
     tex: u32, bitmap: Vec<u8>, width:i32, height:i32,
-    ticks:u32, hits:u32, visible:bool,
+    ticks:u32, hits:u32, misses:u32, visible:bool,
 }
 fn glyph(c:char)->[u8;7]{
     match c {
@@ -307,11 +307,19 @@ unsafe fn color_fraction(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32,
     }).count();
     hits as f32/(side*side) as f32
 }
-unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32)->bool{
+/// The heading stays visible while popups cover individual menu buttons.
+/// A new recognition needs two independent corner icons; while already in
+/// the root menu, one surviving icon plus the title maintains recognition.
+fn matches_menu(title:f32,globe:f32,new_game:f32,quit:f32,already_visible:bool)->bool{
+    if title<=0.16{return false;}
+    let corners=(globe>0.07) as u8+(new_game>0.08) as u8+(quit>0.08) as u8;
+    corners>=if already_visible {1}else{2}
+}
+unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32,already_visible:bool)->bool{
     if vw<640||vh<480{return false;}
     unsafe{(gl.BindFramebuffer)(READ_FRAMEBUFFER,0);}
-    // Fingerprints from maintainer screenshot: yellow OPTIONS heading, globe,
-    // New Game panel, Quit panel. All required to avoid gameplay false positives.
+    // Stable title plus surviving corner icons: popups and hovered buttons
+    // can obscure the globe, New Game or Quit individually.
     let yellow=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.290,0.130,Color::Yellow)};
     let globe=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.864,0.400,Color::Blue)};
     let new_game=unsafe{color_fraction(gl,cw,ch,x0,y0,vw,vh,0.093,0.394,Color::White)};
@@ -322,25 +330,33 @@ unsafe fn root_menu(gl:&Gl,cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32)->bool{
         log!("SCORCHED_MENU_OVERLAY: scores title={:.2} globe={:.2} new={:.2} quit={:.2}",
             yellow,globe,new_game,quit);
     }
-    yellow>0.16&&globe>0.07&&new_game>0.08&&quit>0.08
+    matches_menu(yellow,globe,new_game,quit,already_visible)
 }
 impl MenuOverlay {
     pub fn new()->Self{
         let signature=std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_default();
         let (width,height,bitmap)=text_image(&signature);
         log!("SCORCHED_MENU_OVERLAY: label={} root-menu recognition enabled (fail-closed)",signature);
-        Self{tex:0,bitmap,width,height,ticks:0,hits:0,visible:false}
+        Self{tex:0,bitmap,width,height,ticks:0,hits:0,misses:0,visible:false}
     }
     pub unsafe fn draw(&mut self,gl:&Gl,lfb:&Program,
                        cw:i32,ch:i32,x0:i32,y0:i32,vw:i32,vh:i32){
         if self.bitmap.is_empty()||self.width<=0||cw<=0||ch<=0{return;}
         self.ticks=self.ticks.wrapping_add(1);
-        // Hidden: sample every 3 frames. Visible: sample each frame to hide
-        // immediately on scene changes.
+        // Hidden: sample every 3 frames; visible: sample every frame.
+        // Short hover/transition flickers are ignored for up to 3 frames.
+        // Loss of the title and menu anchors for 4 frames hides the label
+        // well before a video or mission is meaningfully visible.
         if self.visible||self.ticks%3==0 {
-            let is_menu=unsafe{root_menu(gl,cw,ch,x0,y0,vw,vh)};
-            self.hits=if is_menu {self.hits.saturating_add(1)} else {0};
-            let now=self.hits>=2;
+            let is_menu=unsafe{root_menu(gl,cw,ch,x0,y0,vw,vh,self.visible)};
+            if is_menu {
+                self.hits=self.hits.saturating_add(1);
+                self.misses=0;
+            }else{
+                self.hits=0;
+                self.misses=self.misses.saturating_add(1);
+            }
+            let now=if self.visible {self.misses<4}else{self.hits>=2};
             if now!=self.visible {
                 self.visible=now;
                 log!("SCORCHED_MENU_OVERLAY: visible={now}");
@@ -394,6 +410,25 @@ mod tests {
         let (w,h,b)=text_image("ScorchedPlanetFix 2.0.0-deadbeef");
         assert!(w>0&&h==14&&b.len()==(w*h*4) as usize);
         assert!(b.chunks_exact(4).any(|p|p[3]==255));
+    }
+    #[test] fn submenu_overlays_keep_signature_with_surviving_menu_icons() {
+        // Approximate color scores from the four supplied 1920x1080 Wine
+        // screenshots, including hovered Quit, Language, Quit and New Game
+        // popup states. Each hides a different icon, never the title.
+        for scores in [
+            (0.98,0.14,0.94,1.00), // hovered Quit
+            (0.98,0.00,0.94,1.00), // Language
+            (0.98,0.14,0.94,0.00), // Quit confirmation
+            (0.98,0.14,0.00,1.00), // New Game
+        ] {
+            assert!(matches_menu(scores.0,scores.1,scores.2,scores.3,false));
+        }
+        // Hold an established root menu with just one unobscured icon.
+        assert!(matches_menu(0.98,0.14,0.00,0.00,true));
+        assert!(!matches_menu(0.98,0.14,0.00,0.00,false));
+        // Gameplay/video without the menu title must never match.
+        assert!(!matches_menu(0.00,0.40,0.70,0.70,true));
+        assert!(!matches_menu(0.98,0.00,0.00,0.00,true));
     }
 }
 ''', encoding="utf-8")
