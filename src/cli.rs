@@ -341,7 +341,7 @@ mod tests {
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
         // Regression: CLI help must match the current automatic migration path.
-        assert!(h.contains("automatically backed up"));
+        assert!(h.contains("moved to glide.dll.bak"));
         assert!(h.contains("glide.dll.bak"));
         assert!(h.contains("An existing regular glide.dll.bak is replaced"));
         assert!(!h.contains("unique .bak name"));
