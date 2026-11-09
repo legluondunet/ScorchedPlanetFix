@@ -7,7 +7,7 @@
 
 ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and launcher for the original 32-bit game. It installs from your own ISO or CUE/BIN image, applies exact-edition FadeLow and No-CD patches, checks original assets with SHA-256 and launches the game.
 
-## Version 2.0 — GameFrame only
+## Version 2.0.1 — GameFrame only
 
 **The only supported Glide wrapper is GameFrame Glide → OpenGL.** The Windows x64 launcher embeds a verified Windows x86 `glide.dll` built from pinned, Apache-2.0 [GameFrame source](https://github.com/tanepiper/game-frame), with Scorched-specific fixes.
 
@@ -17,12 +17,12 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - Automatic ISO/CUE installation, verification, patching and launching; second launches use the existing `splanet/` directory without re-extraction.
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Single `ScorchedPlanetFix.log` next to the launcher, including GameFrame diagnostics.
-- Post-v2.0.0 development adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu; the signature disappears on other screens.
+- v2.0.1 adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu. It persists when hovering buttons or opening the Language, Quit and New Game panels; it disappears in videos and gameplay.
 - Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the original file is renamed to `glide.dll.bak` (replacing an existing regular `.bak`) and the verified bundled GameFrame DLL is installed automatically. Only one managed backup is kept; the replacement and hashes are logged. Symlinks/non-files are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
-> **Published release vs development:** The latest stable release is [v2.0.0](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0), which includes GameFrame but **still requires manually moving aside an external glide.dll**. The newer `main` branch, after PR #24, adds the red root-menu version signature and **automatic backup of a different glide.dll**. Those changes are not yet in a published release. The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. CI artifacts are temporary development builds.
+> **Release history:** v2.0.1 includes the new version signature, automatic Glide DLL migration and safer installation checks. The [v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) is preserved with its original behavior (external `glide.dll` must be moved aside manually). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. GitHub Actions artifacts are temporary development builds; use the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) for a permanent download.
 
 ## Supported disc editions
 
@@ -37,7 +37,7 @@ All executable changes are specific to verified original SHA-256 fingerprints. S
 
 ## Installation and launch
 
-Download the [published v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) for the stable, historical behavior described in its release notes. To test the **post-v2.0.0 improvements** described below, use a [Windows CI artifact from `main`](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml). Put `ScorchedPlanetFix.exe` beside a supported ISO or CUE/BIN image, then launch it.
+Download the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest). Development builds from [`main` CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml) are for testing. Place `ScorchedPlanetFix.exe` beside a supported ISO or CUE/BIN image, then launch it.
 
 ```powershell
 .\ScorchedPlanetFix.exe
@@ -80,4 +80,4 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
-[Next-release readiness checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [RC acceptance checklist (historical)](docs/rc-test-plan-v2.0.0.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+[v2.0.1 release notes](docs/release-notes-v2.0.1.md) · [Pre-release audit checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
