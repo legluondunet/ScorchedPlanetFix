@@ -25,9 +25,9 @@ The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL b
 - nGlide and arbitrary external Glide DLLs are **unsupported**.
 - No fallback from `SysWOW64`, external launcher directory or third-party paths.
 - No `NGLIDE_*` environment variables, configurator settings or 3dfx splash DLL.
-- At normal launch, after the immutable game-file audit, any existing **regular** `splanet/glide.dll` whose hash differs from the bundled DLL is automatically renamed to `glide.dll.bak` (or an unused hash-suffixed `.bak` if backups already exist). The embedded GameFrame DLL is then installed and the game is launched.
-- This includes both older GameFrame experiments and unrecognized external DLLs. Originals and existing backups are never deleted or deliberately overwritten; replacement, original and new SHA-256, and the chosen backup path are recorded in `ScorchedPlanetFix.log`.
-- Symlinks, directories, unsafe backup/staging conflicts, or unsuccessful replacements abort safely instead of destroying the existing DLL. Failed activation attempts restore the original where possible.
+- At normal launch, after the immutable game-file audit, any existing **regular** `splanet/glide.dll` whose hash differs from the bundled DLL is renamed to the fixed `glide.dll.bak`, **overwriting an existing regular backup**. The embedded GameFrame DLL is then installed, verified and launched. No new suffixed backups are created.
+- This includes older GameFrame experiments and unrecognized external DLLs. A previous `glide.dll.bak` is intentionally replaced by the most recently displaced `glide.dll`; the operation, old and new SHA-256, and whether a backup was replaced are recorded in `ScorchedPlanetFix.log`.
+- Symlinks and directories at either the active DLL or backup path, unsafe staging conflicts, or failed replacement attempts cause a safe refusal. If GameFrame activation fails after moving the old DLL to `.bak`, restoration is attempted; an earlier `.bak` replaced during this operation is not recoverable.
 
 The game still renders internally at 640×480, but GameFrame shows a centered 4:3 image in a single borderless window fitted to the current desktop. It never switches the physical screen mode or refresh; Glide buffer swaps are capped to 60 FPS.
 
