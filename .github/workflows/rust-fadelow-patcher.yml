@@ -59,6 +59,14 @@ jobs:
           cargo build -p glide --release --target i686-pc-windows-msvc --manifest-path $manifest
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame x86 MSVC build failed' }
 
+      - name: Test patched GameFrame x86 menu-recognition and glyph helpers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = (Resolve-Path 'third_party/game-frame/wrappers/Cargo.toml').Path
+          cargo test -p glide --lib --target i686-pc-windows-msvc --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { throw 'Patched GameFrame menu recognition or unit tests failed' }
+
       - name: Audit 156 exact decorated exports and Windows x86 PE
         shell: pwsh
         run: |
