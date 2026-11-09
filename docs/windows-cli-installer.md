@@ -1,6 +1,6 @@
-# ScorchedPlanetFix Windows x64 CLI (post-v2.0.0 development)
+# ScorchedPlanetFix v2.0.1 — Windows x64 CLI
 
-This document covers the current **`main` development code after PR #24**. The [published v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) includes GameFrame, but does **not** yet contain the automatic backup of arbitrary pre-existing `glide.dll` described below. For the published behavior, consult its [historical release notes](release-notes-v2.0.0.md). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for nGlide users.
+This document covers **v2.0.1**, including automatic `glide.dll` migration, before-install verification and a root-menu signature. The [historical v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) included GameFrame but required manually moving aside unknown external `glide.dll` files. The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for nGlide users.
 
 ## Commands
 
@@ -41,4 +41,4 @@ See [supported editions](cd-editions.md) for hashes, language defaults and patch
 
 The GameFrame integration passed maintainer testing on Wine-staging, GE-Proton and Windows 11: initial installation, second launch, videos, input, Alt+Tab and gameplay. The v2.0.0 release candidate was also tested on Windows 11 and Wine-staging 11.17; Windows CI checks the integrated executable, GameFrame ABI and packaging. The single `ScorchedPlanetFix.log` records hardware inventory, verification, GameFrame diagnostics and game exit information.
 
-The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. The development version after v2.0.0 retains the GameFrame-only breaking change: external Glide DLLs are not loaded; the normal launcher backs them up automatically and installs its bundled GameFrame wrapper. The `--verify` command remains read-only and rejects a foreign active Glide DLL.
+The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version v2.0.1 retains the GameFrame-only breaking change: external Glide DLLs are not loaded; the normal launcher backs up the existing nonmatching regular DLL, replacing the single existing regular backup if necessary, and installs its bundled GameFrame wrapper. The `--verify` command remains read-only and rejects a foreign active Glide DLL.
