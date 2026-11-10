@@ -1,0 +1,73 @@
+name: One-time prune non-main branches
+
+# One-shot action on the merge commit containing the exact marker below.
+# Future main pushes and PRs do NOT trigger any branch deletion.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    if: >-
+      github.repository == 'legluondunet/ScorchedPlanetFix' &&
+      github.ref == 'refs/heads/main' &&
+      contains(github.event.head_commit.message, 'one-time-prune-non-main-branches-20261110')
+    name: Delete all non-main branches, preserve release tags
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Preflight and delete only non-main unprotected branches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Avoid disrupting any active PRs or unexpectedly protected branches.
+          open_prs="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" --jq 'length')"
+          if [[ "$open_prs" != "0" ]]; then
+            echo "::error::Refusing branch cleanup with $open_prs open pull requests"
+            exit 1
+          fi
+
+          branches="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/branches?per_page=100" \
+            --jq '.[] | select(.name != "main") | [.name, .protected] | @tsv')"
+
+          # Validate *all* candidates before attempting any destructive operation.
+          if [[ -n "$branches" ]]; then
+            while IFS=$'\t' read -r name protected; do
+              if [[ -z "$name" || "$name" == "main" || "$protected" != "false" ]]; then
+                echo "::error::Unexpected protected/invalid branch $name ($protected)"
+                exit 1
+              fi
+              echo "Preflight: $name"
+            done <<< "$branches"
+          fi
+
+          deleted=0
+          if [[ -n "$branches" ]]; then
+            while IFS=$'\t' read -r name protected; do
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/git/refs/heads/$name" --silent
+              deleted=$((deleted + 1))
+              echo "Deleted remote branch: $name"
+              sleep 0.2
+            done <<< "$branches"
+          fi
+
+          remaining="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --jq '.[].name')"
+          echo "Branch cleanup complete. Deleted: $deleted; remaining: $remaining"
+          {
+            echo "## One-time branch cleanup"
+            echo ""
+            echo "- Deleted non-main branches: $deleted"
+            echo "- Remaining branches: $remaining"
+            echo "- Release tags and assets: untouched"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$remaining" != "main" ]]; then
+            echo "::error::Expected only main to remain"
+            exit 1
+          fi
