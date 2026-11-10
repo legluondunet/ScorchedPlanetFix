@@ -1,17 +1,26 @@
-name: Cleanup Windows CI run history
+name: Cleanup GitHub Actions run history
 
-# Manually triggered only. Deletes *runs* of Windows CI, never releases,
-# tags, or the separate publication workflows.
+# Manual-only, dry-run by default. Deletes completed GitHub Actions runs,
+# including old workflows whose YAML files or branches no longer exist.
+# Never deletes published GitHub releases, release assets, tags or branches.
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: 'Which completed run history should be cleaned?'
+        required: true
+        type: choice
+        options:
+          - all
+          - windows-ci-only
+        default: all
       dry_run:
-        description: 'Preview only: do not delete anything (recommended first)'
+        description: 'Preview the run IDs; do not delete anything'
         required: true
         type: boolean
         default: true
       confirmation:
-        description: 'To delete, uncheck dry_run and type DELETE-WINDOWS-CI-RUNS'
+        description: 'For actual deletion type DELETE-ALL-ACTIONS-RUNS (or DELETE-WINDOWS-CI-RUNS for the limited scope)'
         required: false
         type: string
 
@@ -20,66 +29,74 @@ permissions:
   contents: read
 
 concurrency:
-  group: scorchedplanetfix-manual-windows-ci-cleanup
+  group: scorchedplanetfix-manual-actions-history-cleanup
   cancel-in-progress: false
 
 jobs:
   cleanup:
     if: github.repository == 'legluondunet/ScorchedPlanetFix' && github.ref == 'refs/heads/main'
-    name: Preview or delete completed Windows CI history
+    name: Preview or delete selected completed Actions runs
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      SCOPE: ${{ inputs.scope }}
       DRY_RUN: ${{ inputs.dry_run }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
-      - name: Cleanup only rust-fadelow-patcher.yml completed runs
+      - name: Preflight and clean completed run history
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "false" ]]; then
-            echo "::error::Unexpected dry_run input"
-            exit 1
+            echo "::error::Unexpected dry_run input"; exit 1
           fi
-          if [[ "$DRY_RUN" == "false" && "$CONFIRMATION" != "DELETE-WINDOWS-CI-RUNS" ]]; then
-            echo "::error::Deletion refused: confirmation must be DELETE-WINDOWS-CI-RUNS"
+          case "$SCOPE" in
+            all)
+              endpoint="repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100"
+              expected='DELETE-ALL-ACTIONS-RUNS'
+              ;;
+            windows-ci-only)
+              endpoint="repos/${GITHUB_REPOSITORY}/actions/workflows/rust-fadelow-patcher.yml/runs?per_page=100"
+              expected='DELETE-WINDOWS-CI-RUNS'
+              ;;
+            *) echo "::error::Unexpected scope"; exit 1 ;;
+          esac
+          if [[ "$DRY_RUN" == "false" && "$CONFIRMATION" != "$expected" ]]; then
+            echo "::error::Deletion refused: exact confirmation required: $expected"
             exit 1
           fi
 
-          # Paginate through *this workflow only*. It does not match any
-          # publish-v*.yml workflow or this cleanup workflow itself.
-          runs="$(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/rust-fadelow-patcher.yml/runs?per_page=100" \
+          # Capture *all pages* before deleting anything. GitHub retains runs
+          # of workflows removed from source control and of deleted branches.
+          # The current cleanup run is excluded: it cannot delete itself while active.
+          runs="$(gh api --paginate "$endpoint" \
             --jq '.workflow_runs[] | select(.status == "completed") | .id')"
-
-          if [[ -z "$runs" ]]; then
-            echo "No completed Windows CI runs to clean."
-            echo "No completed Windows CI runs found." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
           planned=0
           deleted=0
-          while IFS= read -r run_id; do
-            [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::Invalid run ID"; exit 1; }
-            planned=$((planned + 1))
-            if [[ "$DRY_RUN" == "true" ]]; then
-              echo "PREVIEW: would delete Windows CI run $run_id"
-            else
-              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id" >/dev/null
-              deleted=$((deleted + 1))
-              echo "DELETED: Windows CI run $run_id"
-              # Avoid a burst of GitHub API write requests.
-              sleep 0.5
-            fi
-          done <<< "$runs"
-
+          if [[ -n "$runs" ]]; then
+            while IFS= read -r run_id; do
+              [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::Invalid run ID"; exit 1; }
+              if [[ "$run_id" == "$GITHUB_RUN_ID" ]]; then
+                echo "SKIPPED: currently active cleanup run $run_id"
+                continue
+              fi
+              planned=$((planned + 1))
+              if [[ "$DRY_RUN" == "true" ]]; then
+                echo "PREVIEW: would delete run $run_id"
+              else
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id" >/dev/null
+                deleted=$((deleted + 1))
+                echo "DELETED: run $run_id"
+                sleep 0.4
+              fi
+            done <<< "$runs"
+          fi
           {
-            echo "## Windows CI run cleanup"
-            echo ""
-            echo "- Target: \`rust-fadelow-patcher.yml\` only"
-            echo "- Completed runs found: $planned"
-            echo "- Actually deleted: $deleted"
-            echo "- Mode: $([[ "$DRY_RUN" == "true" ]] && echo preview || echo deletion)"
-            echo "- Publication workflows and GitHub Releases: untouched"
+            echo '## GitHub Actions history cleanup'
+            echo "- Scope: $SCOPE"
+            echo "- Completed runs selected: $planned"
+            echo "- Runs deleted: $deleted"
+            echo "- Mode: $([[ \"$DRY_RUN\" == \"true\" ]] && echo preview || echo deletion)"
+            echo '- GitHub Releases, assets, release tags and branches were not modified'
+            echo '- This cleanup run will remain visible until separately deleted'
           } >> "$GITHUB_STEP_SUMMARY"
