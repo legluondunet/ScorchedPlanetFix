@@ -1,6 +1,7 @@
 name: One-time prune non-main branches
 
-# One-shot action on the merge commit containing the exact marker below.
+# One-shot action on a main merge commit containing the exact marker below.
+# May be used again after a maintenance PR to restore the main-only branch policy.
 # Future main pushes and PRs do NOT trigger any branch deletion.
 on:
   push:
