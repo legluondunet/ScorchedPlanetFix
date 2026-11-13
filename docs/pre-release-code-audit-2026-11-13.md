@@ -16,7 +16,13 @@
 | `publish-v2.0.0.yml`, `publish-v2.0.1.yml` | Historical publication jobs fixed to existing versions and tags | A **new** manually gated workflow must be reviewed for the next version |
 | `prune-non-main-once.yml` | Already-executed one-shot branch-pruning job, guarded by a literal old merge-message marker | No automatic branch deletion in normal development |
 
-The active `rust-fadelow-patcher.yml` Windows CI workflow and manual `cleanup-windows-ci.yml` workflow remain.
+The active `rust-fadelow-patcher.yml` Windows CI workflow and manual `cleanup-windows-ci.yml` workflow remain. The Windows CI action dependencies are updated to Node 24 variants (`actions/checkout@v5`, `actions/upload-artifact@v6`) without changing its build/test/package pipeline.
+
+## Validation of the cleanup branch
+
+- **Windows CI passed:** [run #43446264188](https://github.com/legluondunet/ScorchedPlanetFix/actions/runs/43446264188) — x86 GameFrame library and 156-export smoke, Rust x64 launcher tests, package verification and artifact upload.
+- The previous Node 20 deprecation warning is absent after upgrading the two GitHub Actions.
+- Remaining warnings stem from the pinned upstream GameFrame workspace/linker and the launcher `Logger.path` field (retained for pending PR #32). None of the removed Rust helpers or deleted fields is referenced by the tested build.
 
 ## Retained intentionally
 
