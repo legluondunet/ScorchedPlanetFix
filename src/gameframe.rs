@@ -272,9 +272,22 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
 }
 
 /// Native desktop 4:3 presentation and 60 FPS. Never configure nGlide.
-pub fn configure_process(command:&mut Command,game:&Path,mut log:impl FnMut(&str))
+/// Full-validation path: require the local renderer to match bundled GameFrame.
+pub fn configure_process(command:&mut Command,game:&Path,log:impl FnMut(&str))
     ->Result<(),String>{
-    verify_local_gameframe(game)?;
+    configure_process_impl(command,game,true,log)
+}
+
+/// Explicit opt-out: retain display/input settings but do not inspect ANY
+/// installed game or DLL files. Never install, back up, or replace a DLL.
+pub fn configure_process_unchecked(command:&mut Command,game:&Path,log:impl FnMut(&str))
+    ->Result<(),String>{
+    configure_process_impl(command,game,false,log)
+}
+
+fn configure_process_impl(command:&mut Command,game:&Path,check_renderer:bool,mut log:impl FnMut(&str))
+    ->Result<(),String>{
+    if check_renderer { verify_local_gameframe(game)?; }
     let (dw,dh)=desktop()?;
     let (cw,ch)=fit_4_3(dw,dh);
     command.env("GLIDE_SIZE",format!("{cw}x{ch}"));
@@ -310,6 +323,21 @@ mod tests{
                 .unwrap().as_nanos()));
         fs::create_dir(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn unchecked_launch_does_not_require_or_install_gameframe(){
+        // No game files or glide.dll exist. Environment configuration must
+        // remain usable without touching this directory.
+        let root=fixture();
+        let game=root.join("splanet");
+        let mut command=Command::new(game.join("spvoodoo.exe"));
+        configure_process_unchecked(&mut command,&game,|_|{}).unwrap();
+        assert!(command.get_envs().any(|(name,value)|name=="GLIDE_SIZE" && value.is_some()));
+        assert!(command.get_envs().any(|(name,value)|name=="GLIDE_LOG"
+            && value==Some(root.join("ScorchedPlanetFix.log").as_os_str())));
+        assert!(!game.exists(),"unchecked mode must not create a game directory");
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
