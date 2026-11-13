@@ -16,13 +16,13 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - 60 FPS limiter and keyboard/mouse input in the same game window.
 - Automatic ISO/CUE installation, verification, patching and launching; second launches use the existing `splanet/` directory without re-extraction.
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
-- Single `ScorchedPlanetFix.log` next to the launcher, including GameFrame diagnostics.
+- Two append-only logs beside the launcher: `ScorchedPlanetFix_installer.log` for installation, verification and launching, and `ScorchedPlanetFix.log` for the GameFrame DLL. Each session has a shared `session_id`.
 - v2.0.1 adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu. It persists when hovering buttons or opening the Language, Quit and New Game panels; it disappears in videos and gameplay.
 - Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the original file is renamed to `glide.dll.bak` (replacing an existing regular `.bak`) and the verified bundled GameFrame DLL is installed automatically. Only one managed backup is kept; the replacement and hashes are logged. Symlinks/non-files are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
-> **Release history:** v2.0.1 includes the new version signature, automatic Glide DLL migration and safer installation checks. The [v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) is preserved with its original behavior (external `glide.dll` must be moved aside manually). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. GitHub Actions artifacts are temporary development builds; use the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) for a permanent download.
+> **Release history:** v2.0.1 includes the new version signature, automatic Glide DLL migration and safer installation checks. The [v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) is preserved with its original behavior (external `glide.dll` must be moved aside manually). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. GitHub Actions artifacts are temporary development builds; the two-log split is currently in development and **not** in the published v2.0.1. Use the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) for a permanent download.
 
 ## Supported disc editions
 
