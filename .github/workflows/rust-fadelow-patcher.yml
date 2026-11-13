@@ -144,7 +144,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $root = Split-Path -Parent $exe
-          $logFile = Join-Path $root 'ScorchedPlanetFix.log'
+          $logFile = Join-Path $root 'ScorchedPlanetFix_installer.log'
+          $dllLog = Join-Path $root 'ScorchedPlanetFix.log'
           $beforeErrors = if (Test-Path $logFile) { @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count } else { 0 }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'Unexpected game directory before smoke' }
           $out = (& $exe 2>&1 | Out-String)
@@ -152,13 +153,14 @@ jobs:
             throw "No-CD safe refusal failed: $out"
           }
           if (Test-Path (Join-Path $root 'splanet')) { throw 'An invalid game directory was created' }
-          if (!(Test-Path $logFile)) { throw 'Unified log was not created' }
+          if (!(Test-Path $logFile)) { throw 'Installer log was not created' }
+          if (Test-Path $dllLog) { throw 'GameFrame DLL log must not be created without launching game' }
           $afterErrors = @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count
           if ($afterErrors -ne ($beforeErrors + 1)) {
             throw "Expected exactly one error line for one failed launch; before=$beforeErrors after=$afterErrors"
           }
           $global:LASTEXITCODE = 0
-          Write-Host 'No-media refusal and exactly one error record in unified log: PASS'
+          Write-Host 'No-media refusal and exactly one installer log error; no DLL log: PASS'
 
       - name: Package GameFrame launcher, source licenses, and SHA-256
         shell: pwsh
