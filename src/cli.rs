@@ -443,8 +443,11 @@ mod tests {
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
         assert_eq!(parse_args(&args(&["--launch-no-verify"])).unwrap().mode, Mode::LaunchUnchecked);
-        assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
+        assert_eq!(parse_args(&args(&["--inspect","DISC.CuE","DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
+        assert_eq!(parse_args(&args(&["--inspect","DISC.CuE","DISC.img"])).unwrap().mode,Mode::Inspect);
+        assert_eq!(parse_args(&args(&["--verbose","--inspect","DISC.ISO"])).unwrap().mode,Mode::Inspect);
+        assert_eq!(parse_args(&args(&["--install-only","--verbose"])).unwrap().mode,Mode::InstallOnly);
         for invalid in [
             vec!["--launch"], vec!["--launch-unchecked"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
             vec!["--verify", "disc.iso"], vec!["--launch-no-verify", "disc.iso"],
@@ -453,7 +456,10 @@ mod tests {
             vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
             vec!["--help", "anything"], vec!["--version", "extra"],
             vec!["disc.iso", "disc.bin"], vec!["disc.cue", "bad.iso"],
-            vec!["disc.iso", "anything", "extra"]
+            vec!["disc.iso", "anything", "extra"],
+            vec!["disc.iso"],vec!["disc.cue"],vec!["--install-only","disc.iso"],
+            vec!["--inspect"],vec!["--inspect","disc.iso","track.bin"],
+            vec!["--verbose","--verbose"]
         ] {
             assert!(parse_args(&args(&invalid)).is_err(), "{invalid:?}");
         }
@@ -498,8 +504,7 @@ mod tests {
         let no_args = parse_args(&[]).unwrap();
         let error = session(&root, &no_args, &logger, |_| {}).unwrap_err();
         assert!(error.contains("Unrecognized") || error.contains("Unknown") || error.contains("invalid"), "{error}");
-        let explicit = parse_args(&args(&["DISC.ISO"])).unwrap();
-        assert!(session(&root, &explicit, &logger, |_| {}).unwrap_err().contains("refusing to overwrite"));
+        assert!(parse_args(&args(&["DISC.ISO"])).is_err());
         assert_eq!(fs::read(root.join("splanet/spvoodoo.exe")).unwrap(), b"unknown game exe");
         assert!(!root.join("splanet/spvoodoo.exe.bak").exists());
         assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(), b"not-a-real-disc");
