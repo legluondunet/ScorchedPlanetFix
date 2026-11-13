@@ -36,7 +36,7 @@ struct Inventory {
     skipped_unused_executables: usize,
 }
 pub struct InstallReport {
-    pub files: usize, pub bytes: u64, pub folder: PathBuf,
+    pub files: usize, pub bytes: u64,
     pub edition: &'static str, pub patch_report: String,
 }
 
@@ -470,13 +470,6 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     write_ini_atomically(ini,&bytes)
 }
 
-pub fn install_iso(
-    image:&Path, destination:&Path,
-    report:impl FnMut(u64,u64,&str),
-    log:impl FnMut(&str),
-) -> Result<InstallReport,String> {
-    install_image(image,None,destination,report,log)
-}
 pub fn install_image(
     image:&Path, bin_override:Option<&Path>, destination:&Path,
     mut report:impl FnMut(u64,u64,&str),
@@ -657,7 +650,7 @@ pub fn install_image(
         log(&format!("INSTALL-OK: edition={} {} files {} source bytes, original .bak verified",
             edition.label,file_count,total));
         Ok(InstallReport{
-            files:file_count,bytes:total,folder:destination.to_owned(),
+            files:file_count,bytes:total,
             edition:edition.label,patch_report,
         })
     })();

@@ -200,11 +200,6 @@ pub fn verify_local_gameframe(game:&Path)->Result<(),String>{
     Ok(())
 }
 
-pub fn is_embedded_gameframe(game:&Path)->Result<bool,String>{
-    let Some(expected)=validate_embedded()? else {return Ok(false);};
-    Ok(digest(&regular_dll(&game.join("glide.dll"))?)==expected)
-}
-
 /// Read-only guard for --install-only. A different *regular* glide.dll is
 /// eligible for automatic backup, but reject symlinks and backup/staging
 /// conflicts before any game executable/INI migration touches game files.
@@ -272,20 +267,20 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
 }
 
 /// Native desktop 4:3 presentation and 60 FPS. Never configure nGlide.
-/// Full-validation path: require the local renderer to match bundled GameFrame.
-pub fn configure_process(command:&mut Command,game:&Path,log:impl FnMut(&str))
+/// Strict launch path: require the installed renderer to match bundled GameFrame.
+pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
     ->Result<(),String>{
-    configure_process_impl(command,game,true,log)
+    configure_process_impl(command,game,session_id,true,log)
 }
 
-/// Explicit opt-out: retain display/input settings but do not inspect ANY
-/// installed game or DLL files. Never install, back up, or replace a DLL.
-pub fn configure_process_unchecked(command:&mut Command,game:&Path,log:impl FnMut(&str))
+/// Direct-launch opt-out: configure environment without reading/verifying DLL files.
+/// Never install, back up, repair, patch or replace a game/DLL file.
+pub fn configure_process_unchecked(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
     ->Result<(),String>{
-    configure_process_impl(command,game,false,log)
+    configure_process_impl(command,game,session_id,false,log)
 }
 
-fn configure_process_impl(command:&mut Command,game:&Path,check_renderer:bool,mut log:impl FnMut(&str))
+fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_renderer:bool,mut log:impl FnMut(&str))
     ->Result<(),String>{
     if check_renderer { verify_local_gameframe(game)?; }
     let (dw,dh)=desktop()?;
@@ -300,9 +295,12 @@ fn configure_process_impl(command:&mut Command,game:&Path,check_renderer:bool,mu
     // the GameFrame source commit or an old release version as the UI identity.
     command.env("SCORCHED_FIX_SIGNATURE",format!(
         "ScorchedPlanetFix {}-{}",env!("CARGO_PKG_VERSION"),env!("SCORCHED_COMMIT")));
+    command.env("SCORCHED_FIX_SESSION_ID",session_id);
     // Temporary diagnostics: distinguish menu, FMV, option screens and 3D scenes
     // before adding a version overlay that must NOT appear during gameplay.
     command.env("SCORCHED_MENU_PROBE","1");
+    // Keep the DLL's established runtime log name. Only the installer log
+    // becomes ScorchedPlanetFix_installer.log; both files live beside the EXE.
     if let Some(root)=game.parent(){
         command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
     }
@@ -327,16 +325,16 @@ mod tests{
 
     #[test]
     fn unchecked_launch_does_not_require_or_install_gameframe(){
-        // No game files or glide.dll exist. Environment configuration must
-        // remain usable without touching this directory.
         let root=fixture();
         let game=root.join("splanet");
         let mut command=Command::new(game.join("spvoodoo.exe"));
-        configure_process_unchecked(&mut command,&game,|_|{}).unwrap();
+        configure_process_unchecked(&mut command,&game,"ci-unchecked-42",|_|{}).unwrap();
         assert!(command.get_envs().any(|(name,value)|name=="GLIDE_SIZE" && value.is_some()));
         assert!(command.get_envs().any(|(name,value)|name=="GLIDE_LOG"
             && value==Some(root.join("ScorchedPlanetFix.log").as_os_str())));
-        assert!(!game.exists(),"unchecked mode must not create a game directory");
+        assert!(command.get_envs().any(|(name,value)|name=="SCORCHED_FIX_SESSION_ID"
+            && value==Some(std::ffi::OsStr::new("ci-unchecked-42"))));
+        assert!(!game.exists(),"unchecked mode must not create game directory");
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -377,13 +375,15 @@ mod tests{
         preflight_glide(&root).unwrap(); // exact GameFrame DLL is trusted
         let dll=root.join("glide.dll");
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
-        assert!(is_embedded_gameframe(&root).unwrap());
         verify_local_gameframe(&root).unwrap();
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
         let mut cmd=Command::new("test.exe");
-        configure_process(&mut cmd,&root,|_|{}).unwrap();
-        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
+        configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
+        let expected_log=root.parent().unwrap().join("ScorchedPlanetFix.log");
+        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
+            && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_60" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));

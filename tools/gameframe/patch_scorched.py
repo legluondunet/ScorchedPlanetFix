@@ -21,6 +21,17 @@ def replace(path: str, before: str, after: str) -> None:
 
 
 def main() -> None:
+    # Keep GameFrame's existing GLIDE_LOG output file and write a shared
+    # session identifier as soon as the DLL initializes, even if rendering
+    # fails before the menu probe starts. The launcher uses its own log.
+    replace("lib.rs", '        shim::log::init("glide", "GLIDE_LOG");',
+            '''        shim::log::init("glide", "GLIDE_LOG");
+        shim::log::write(format_args!(
+            "SCORCHED_SESSION: session_id={} signature={} component=gameframe",
+            std::env::var("SCORCHED_FIX_SESSION_ID").unwrap_or_else(|_| "untracked".into()),
+            std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_else(|_| "unknown".into()),
+        ));''')
+
     # No ChangeDisplaySettings/ChangeDisplaySettingsEx hooks are needed:
     # GameFrame is a borderless OpenGL wrapper and never switches screen modes.
     replace("win32.rs", "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;",
@@ -148,7 +159,7 @@ fn limit_scorched_fps() {
 
     # The menu itself is not identified yet. Capture a low-overhead, opt-in
     # Glide-frame profile first; never infer "menu" from frame rate alone.
-    # Profiles go to the existing unified launcher log through GLIDE_LOG.
+    # Profiles go to the dedicated DLL log through GLIDE_LOG.
     replace("api/sst.rs",
             "static WIDTH: AtomicU32 = AtomicU32::new(640);",
             """static WIDTH: AtomicU32 = AtomicU32::new(640);

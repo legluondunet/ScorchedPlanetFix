@@ -67,7 +67,7 @@ fn parse_media(args: &[OsString]) -> Result<Media, String> {
     }
     if let Some(ref track) = bin {
         if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin") || e.eq_ignore_ascii_case("img")) {
-            return Err("The second disc image argument must be a .bin file".into());
+            return Err("The second disc image argument must be a .bin or .img file".into());
         }
     }
     Ok(Media { image, bin })
@@ -117,7 +117,7 @@ fn media_arguments(media: &Media, root: &Path) -> Vec<OsString> {
         .collect()
 }
 
-/// One log beside ScorchedPlanetFix.exe for diagnostics, installation and play.
+/// Launcher-only log beside ScorchedPlanetFix.exe; the DLL has its own file.
 fn emit(logger: &Logger, sink: &mut impl FnMut(&str), msg: &str) {
     logger.write(&format!("CLI: {msg}"));
     sink(msg);
@@ -205,7 +205,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
     // fingerprints are all confirmed.
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
-    let mut child=verify::launch_preverified(report,&game,
+    let mut child=verify::launch_preverified(report,&game,logger.session_id(),
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
@@ -226,7 +226,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
         &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
     let mut command = Command::new(&executable);
     command.current_dir(&game);
-    gameframe::configure_process_unchecked(&mut command, &game,
+    gameframe::configure_process_unchecked(&mut command, &game, logger.session_id(),
         |message| logger.write(message))?;
     let mut child = command.spawn()
         .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
@@ -399,8 +399,10 @@ Only open-source bundled GameFrame is supported in v2.
   Non-regular files and symlinks are refused for safety.
   --verify is strictly read-only, including GameFrame validation.
 
-All diagnostics, including hardware inventory, go to ScorchedPlanetFix.log
-beside this EXE. No proprietary game files are redistributed.")
+Installer/launcher diagnostics and hardware inventory go to
+ScorchedPlanetFix_installer.log beside this EXE. During gameplay, the
+bundled GameFrame DLL writes ScorchedPlanetFix.log in the same directory.
+Both logs share a session_id. No proprietary game files are redistributed.")
 }
 
 pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
@@ -474,7 +476,7 @@ mod tests {
         let h = help("2.0.1-deadbeef");
         for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-no-verify",
                      "GameFrame", "image.iso", "image.cue",
-                     "glide.dll", "ScorchedPlanetFix.log"] {
+                     "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
         // Only the obsolete exact --launch command is prohibited;

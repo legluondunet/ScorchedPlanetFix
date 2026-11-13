@@ -27,8 +27,10 @@ This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlan
   the overlay disappears after at most four consecutive frames without menu
   evidence. Unknown scenes intentionally fail closed. It never changes the
   game's actual Glide framebuffer or original assets.
-- `SCORCHED_MENU_PROBE` and `SCORCHED_MENU_OVERLAY` records are written to
-  the same `ScorchedPlanetFix.log` for a targeted visual test.
+- `SCORCHED_MENU_PROBE` and `SCORCHED_MENU_OVERLAY` records go to the DLL's
+  `ScorchedPlanetFix.log`. In development after v2.0.1, installer and launch
+  events go to `ScorchedPlanetFix_installer.log` instead; correlate both via
+  `session_id`. The published v2.0.1 binary used one unified log.
 
 ## Important limitations
 
@@ -62,7 +64,8 @@ Use v2.0.1 or a CI artifact built from its release preparation branch. The histo
 4. Start a mission for at least 8 seconds; verify the label **disappears**
    and does not remain visible in gameplay or any videos.
 5. Alt+Tab and return, verify display/focus stability, then quit and
-   share the unified `ScorchedPlanetFix.log` plus a root-menu screenshot.
+   share both `ScorchedPlanetFix_installer.log` and `ScorchedPlanetFix.log`
+   plus a root-menu screenshot when testing a new development build.
 
 If the label does not appear or disappears in a popup, look for
 `SCORCHED_MENU_OVERLAY:` score and transition records. A label that persists
