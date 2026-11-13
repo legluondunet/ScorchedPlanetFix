@@ -160,6 +160,24 @@ jobs:
           $global:LASTEXITCODE = 0
           Write-Host 'No-media refusal and exactly one error record in unified log: PASS'
 
+      - name: Smoke unchecked launch without game files or media access
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
+          $root = Split-Path -Parent $exe
+          if (Test-Path (Join-Path $root 'splanet')) { throw 'Game directory must be absent before unchecked smoke' }
+          $output = (& $exe --launch-unchecked 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Unable to launch unchecked game') {
+            throw "Unchecked direct launch did not report the expected OS spawn error: $output"
+          }
+          if ($output -match 'No ISO/CUE disc image|Verifying all immutable game files') {
+            throw "Unchecked launch unexpectedly accessed installer or verification path: $output"
+          }
+          if (Test-Path (Join-Path $root 'splanet')) { throw 'Unchecked launch created or modified game directory' }
+          $global:LASTEXITCODE = 0
+          Write-Host 'Direct unchecked launch bypassed media discovery and file verification: PASS'
+
       - name: Package GameFrame launcher, source licenses, and SHA-256
         shell: pwsh
         run: |
