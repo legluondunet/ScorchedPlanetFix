@@ -21,7 +21,7 @@ fn main(){
         let directory=std::env::current_exe().ok().and_then(|p|p.parent().map(|x|x.to_path_buf()));
         logger::Logger::emergency_error(directory.as_deref(),&message);
         eprintln!("ScorchedPlanetFix: ERROR: {message}");
-        eprintln!("Details: ScorchedPlanetFix.log");
+        eprintln!("Details: ScorchedPlanetFix_installer.log");
         std::process::exit(1);
     }
 }
