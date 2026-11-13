@@ -130,12 +130,28 @@ jobs:
           $probe = Join-Path $testFolder 'GameFrameGlideSmoke.exe'
           rustc --edition=2021 --target i686-pc-windows-msvc tools/gameframe/smoke_load.rs -o $probe
           if ($LASTEXITCODE -ne 0) { throw 'Cannot build 32-bit GameFrame smoke' }
+          # Exercise the *DLL's* log path and session correlation, not just loading.
+          $dllLog = Join-Path $testFolder 'ScorchedPlanetFix.log'
+          $env:GLIDE_LOG = $dllLog
+          $env:SCORCHED_FIX_SESSION_ID = 'ci-gameframe-smoke-1'
+          $env:SCORCHED_FIX_SIGNATURE = 'ScorchedPlanetFix 2.0.1-ci'
           Push-Location $testFolder
           try {
             & '.\GameFrameGlideSmoke.exe'
             if ($LASTEXITCODE -ne 0) { throw 'Glide LoadLibrary smoke failed' }
+            if (!(Test-Path $dllLog)) { throw 'GameFrame DLL log was not created' }
+            $dllText = Get-Content $dllLog -Raw
+            if (!$dllText.Contains('SCORCHED_SESSION: session_id=ci-gameframe-smoke-1')) {
+              throw "GameFrame did not log the shared session ID: $dllText"
+            }
+            if (Test-Path (Join-Path $testFolder 'ScorchedPlanetFix_installer.log')) {
+              throw 'DLL LoadLibrary unexpectedly created the installer log'
+            }
           } finally {
             Pop-Location
+            Remove-Item Env:GLIDE_LOG -ErrorAction SilentlyContinue
+            Remove-Item Env:SCORCHED_FIX_SESSION_ID -ErrorAction SilentlyContinue
+            Remove-Item Env:SCORCHED_FIX_SIGNATURE -ErrorAction SilentlyContinue
           }
 
       - name: Smoke CLI automatic launch refusal without game media
