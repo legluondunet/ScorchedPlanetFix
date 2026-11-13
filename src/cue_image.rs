@@ -335,6 +335,10 @@ mod tests {
         fs::write(&cue,b"FILE \"disc.bin\" BINARY\nTRACK 01 MODE1/2352\nINDEX 01 00:00:00\n").unwrap();
         fs::write(root.join("wrong.bin"),vec![0u8;20*2352]).unwrap();
         assert!(data_track(&cue,Some(&root.join("wrong.bin"))).is_err());
+        let renamed=root.join("renamed.img");
+        fs::write(&renamed,vec![0u8;20*2352]).unwrap();
+        assert!(data_track_impl(&cue,Some(&renamed),true).is_err());
+        assert!(data_track_impl(&cue,Some(&renamed),false).is_ok());
         let good=root.join("disc.bin");
         fs::write(&good,vec![0u8;20*2352]).unwrap();
         assert!(data_track(&cue,Some(&good)).is_ok());
