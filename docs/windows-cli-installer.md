@@ -10,17 +10,18 @@ This document covers **v2.0.1**, including automatic `glide.dll` migration, befo
 .\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --install-only
+.\ScorchedPlanetFix.exe --launch-no-verify
 .\ScorchedPlanetFix.exe --help
 .\ScorchedPlanetFix.exe --version
 ```
 
-The executable searches for `splanet/` beside itself. If present, the game is verified before play; otherwise one unambiguous ISO/CUE image beside the launcher is extracted, patched, verified and launched. Explicit image paths are supported; unknown, damaged or incomplete installations are never silently overwritten. `--verify` is strictly read-only. `--install-only` performs an explicit installation or recognized older-edition migration without launching.
+The executable searches for `splanet/` beside itself. If present, the game is verified before play; otherwise one unambiguous ISO/CUE image beside the launcher is extracted, patched, verified and launched. Explicit image paths are supported; unknown, damaged or incomplete installations are never silently overwritten. `--verify` is strictly read-only. `--install-only` performs an explicit installation or recognized older-edition migration without launching. **Development builds after v2.0.1** add `--launch-no-verify`, a deliberate opt-out that runs the fixed installed path `splanet/spvoodoo.exe` with the usual desktop/borderless/FPS environment but without checking the existence, hashes, identities, or safety of game files and `glide.dll`. It does not install a missing DLL, patch a game EXE, migrate, change INI, discover media or write to game files. OS/Wine errors are reported if the target is absent. Use only for trusted local installations; third-party DLLs might load in this mode. The release v2.0.1 does **not** contain this option.
 
 `--launch` and `--3dfx-logo` are unsupported and rejected.
 
 ## GameFrame Glide is the only supported renderer
 
-The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL built from pinned source at commit `f195a074a63cc150673c38becdec696163b0b3d1`. The embedded DLL's PE32 architecture and SHA-256 are verified before installation and the exact expected SHA-256 is verified again before spawning the 32-bit game.
+The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL built from pinned source at commit `f195a074a63cc150673c38becdec696163b0b3d1`. For normal verified mode, the embedded DLL's PE32 architecture and SHA-256 are verified before installation and the exact expected SHA-256 is verified again before spawning the 32-bit game. The explicit `--launch-no-verify` development switch bypasses these checks and never alters the DLL.
 
 - nGlide and arbitrary external Glide DLLs are **unsupported**.
 - No fallback from `SysWOW64`, external launcher directory or third-party paths.

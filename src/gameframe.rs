@@ -267,9 +267,22 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
 }
 
 /// Native desktop 4:3 presentation and 60 FPS. Never configure nGlide.
-pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,mut log:impl FnMut(&str))
+/// Strict launch path: require the installed renderer to match bundled GameFrame.
+pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
     ->Result<(),String>{
-    verify_local_gameframe(game)?;
+    configure_process_impl(command,game,session_id,true,log)
+}
+
+/// Direct-launch opt-out: configure environment without reading/verifying DLL files.
+/// Never install, back up, repair, patch or replace a game/DLL file.
+pub fn configure_process_unchecked(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
+    ->Result<(),String>{
+    configure_process_impl(command,game,session_id,false,log)
+}
+
+fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_renderer:bool,mut log:impl FnMut(&str))
+    ->Result<(),String>{
+    if check_renderer { verify_local_gameframe(game)?; }
     let (dw,dh)=desktop()?;
     let (cw,ch)=fit_4_3(dw,dh);
     command.env("GLIDE_SIZE",format!("{cw}x{ch}"));
@@ -308,6 +321,21 @@ mod tests{
                 .unwrap().as_nanos()));
         fs::create_dir(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn unchecked_launch_does_not_require_or_install_gameframe(){
+        let root=fixture();
+        let game=root.join("splanet");
+        let mut command=Command::new(game.join("spvoodoo.exe"));
+        configure_process_unchecked(&mut command,&game,"ci-unchecked-42",|_|{}).unwrap();
+        assert!(command.get_envs().any(|(name,value)|name=="GLIDE_SIZE" && value.is_some()));
+        assert!(command.get_envs().any(|(name,value)|name=="GLIDE_LOG"
+            && value==Some(root.join("ScorchedPlanetFix.log").as_os_str())));
+        assert!(command.get_envs().any(|(name,value)|name=="SCORCHED_FIX_SESSION_ID"
+            && value==Some(std::ffi::OsStr::new("ci-unchecked-42"))));
+        assert!(!game.exists(),"unchecked mode must not create game directory");
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

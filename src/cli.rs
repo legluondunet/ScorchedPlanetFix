@@ -1,24 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
+use std::fs::{File,OpenOptions};
+use std::io::Write;
+use isomage::{detect_and_parse_filesystem,TreeNode};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe
-  ScorchedPlanetFix.exe <image.iso>
-  ScorchedPlanetFix.exe <image.cue> [track.bin]
-  ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
+  ScorchedPlanetFix.exe --install-only
+  ScorchedPlanetFix.exe --inspect image.iso
+  ScorchedPlanetFix.exe --inspect image.cue [track.bin|track.img]
+  ScorchedPlanetFix.exe --verbose
   ScorchedPlanetFix.exe --verify
+  ScorchedPlanetFix.exe --launch-no-verify
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
 The executable finds splanet/ and CD images beside itself, not in the shell's
 current directory. An existing installation is verified before every launch.
-No unknown, invalid or damaged installation is replaced automatically.";
+No unknown, invalid or damaged installation is replaced automatically.
+--launch-no-verify is a direct, unverified launch; use only with trusted files.";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Media {
@@ -30,7 +37,9 @@ struct Media {
 enum Mode {
     Play,
     InstallOnly,
+    Inspect,
     VerifyOnly,
+    LaunchUnchecked,
     Help,
     Version,
 }
@@ -57,32 +66,37 @@ fn parse_media(args: &[OsString]) -> Result<Media, String> {
         }
     }
     if let Some(ref track) = bin {
-        if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin")) {
-            return Err("The second disc image argument must be a .bin file".into());
+        if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin") || e.eq_ignore_ascii_case("img")) {
+            return Err("The second disc image argument must be a .bin or .img file".into());
         }
     }
     Ok(Media { image, bin })
 }
 
-fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
-    let first = args.first().and_then(|a| a.to_str());
-    let blank = Media { image: None, bin: None };
-    match first {
-        Some("--help") | Some("-h") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Help, media: blank }),
-        Some("--version") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Version, media: blank }),
-        Some("--verify") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::VerifyOnly, media: blank }),
-        Some("--install-only") =>
-            Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])? }),
-        Some(option) if option.starts_with('-') =>
+fn parse_args(args:&[OsString])->Result<CommandLine,String>{
+    let flags=args.iter().filter(|a|*a=="--verbose").count();
+    if flags>1{return Err("--verbose specified twice".into());}
+    let filtered=args.iter().filter(|a|*a!="--verbose").collect::<Vec<_>>();
+    let name=filtered.first().and_then(|x|x.to_str());
+    let blank=Media{image:None,bin:None};
+    match name {
+        None=>Ok(CommandLine{mode:Mode::Play,media:blank}),
+        Some("--help"|"-h") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Help,media:blank}),
+        Some("--version") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Version,media:blank}),
+        Some("--verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::VerifyOnly,media:blank}),
+        Some("--launch-no-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::LaunchUnchecked,media:blank}),
+        Some("--install-only") if filtered.len()==1=>Ok(CommandLine{mode:Mode::InstallOnly,media:blank}),
+        Some("--inspect") if (2..=3).contains(&filtered.len())=>{
+            let selected=filtered[1..].iter().map(|x|(*x).clone()).collect::<Vec<_>>();
+            let media=parse_media(&selected)?;
+            Ok(CommandLine{mode:Mode::Inspect,media})
+        },
+        Some(option) if option.starts_with('-')=>
             Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
-        _ =>
-            Ok(CommandLine { mode: Mode::Play, media: parse_media(args)? }),
+        Some(option)=>Err(format!(
+            "Positional ISO/CUE media is no longer accepted: {option}; use --inspect.\n{USAGE}")),
     }
 }
-
 fn regular_input(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path)
         .map_err(|e| format!("Disc image not found {}: {e}", path.display()))?;
@@ -195,6 +209,34 @@ fn verify_and_play(root: &Path, logger: &Logger,
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
+    wait_for_game(&mut child, logger, sink)
+}
+
+/// Explicit opt-out for debugging or custom game installations. No file
+/// enumeration, existence checks, hashing, installation, patching, backup,
+/// or Glide DLL verification happens here. The OS itself resolves the fixed
+/// target path when spawning (and reports missing executables normally).
+fn launch_unchecked(root: &Path, logger: &Logger,
+                    mut sink: impl FnMut(&str)) -> Result<(), String> {
+    let game = root.join("splanet");
+    let executable = game.join("spvoodoo.exe");
+    emit(logger, &mut sink,
+        "WARNING: --launch-no-verify bypasses ALL game file existence/integrity checks and Glide DLL validation; no repair or installation will be attempted.");
+    emit(logger, &mut sink,
+        &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
+    let mut command = Command::new(&executable);
+    command.current_dir(&game);
+    gameframe::configure_process_unchecked(&mut command, &game, logger.session_id(),
+        |message| logger.write(message))?;
+    let mut child = command.spawn()
+        .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
+    emit(logger, &mut sink,
+        &format!("Game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
+    wait_for_game(&mut child, logger, sink)
+}
+
+fn wait_for_game(child: &mut Child, logger: &Logger,
+                 mut sink: impl FnMut(&str)) -> Result<(), String> {
     let status = child.wait()
         .map_err(|e| format!("Failed while monitoring the game process: {e}"))?;
     if !status.success() {
@@ -216,8 +258,82 @@ fn verify_and_play(root: &Path, logger: &Logger,
 /// Auto-start decision uses only the folder containing the launcher.
 /// An existing but invalid game folder blocks media fallback, replacement,
 /// and launch; repair requires an explicit --install-only invocation.
+/// Inspect an unsupported ISO or CUE without applying edition requirements,
+/// installing a game, or writing to the normal runtime/installer log.
+fn inspect_media(root:&Path,media:&Media,verbose:bool)->Result<(),String>{
+    let image=media.image.as_ref().ok_or("Missing ISO/CUE source")?;
+    let source=if image.is_absolute(){image.clone()}else{root.join(image)};
+    regular_input(&source)?;
+    let track=if let Some(raw)=media.bin.as_ref(){
+        let selected=if raw.is_absolute(){raw.clone()}else{root.join(raw)};
+        regular_input(&selected)?;
+        Some(selected)
+    }else{None};
+    let destination=root.join("ScorchedPlanetFix_inspect.log");
+    if fs::symlink_metadata(&destination).is_ok_and(
+        |meta|!meta.file_type().is_file() || meta.file_type().is_symlink()) {
+        return Err("Inspect report path must be a regular file".into());
+    }
+    let mut out=OpenOptions::new().create(true).write(true).truncate(true)
+        .open(&destination).map_err(|e|format!("Cannot create inspect log: {e}"))?;
+    writeln!(out,"ScorchedPlanetFix INSPECT v1\nSource={}\nTrack={}",
+        source.display(),track.as_ref().map(|p|p.display().to_string()).unwrap_or_default())
+        .map_err(|e|e.to_string())?;
+    let result=(||->Result<(),String>{
+        let temporary=if source.extension().is_some_and(|ext|ext.eq_ignore_ascii_case("cue")){
+            Some(cue_image::normalize_for_inspection(&source,track.as_deref(),root,
+                |_done,_total,_msg|{},|line|{
+                    let safe=line.replace(['\r','\n']," ");
+                    let _=writeln!(out,"CUE: {safe}");
+                })?)
+        }else {
+            if track.is_some(){return Err("BIN/IMG data track requires a CUE file".into());}
+            None
+        };
+        let image=temporary.as_ref().map(|t|t.path.as_path()).unwrap_or(&source);
+        let mut input=File::open(image).map_err(|e|e.to_string())?;
+        let len=input.metadata().map_err(|e|e.to_string())?.len();
+        let tree=detect_and_parse_filesystem(&mut input,&image.to_string_lossy())
+            .map_err(|e|format!("Unknown/unsupported CD filesystem: {e}"))?;
+        writeln!(out,"DataBytes={len}\nPATH\tSIZE_BYTES\tOFFSET\tTYPE")
+            .map_err(|e|e.to_string())?;
+        fn walk(node:&TreeNode,path:&Path,depth:usize,entries:&mut usize,
+                out:&mut File,verbose:bool)->Result<(),String>{
+            if depth>40{return Err("ISO tree exceeds safe inspection depth".into());}
+            for item in &node.children {
+                *entries+=1;
+                if *entries>25000{return Err("ISO file count exceeds safe inspection limit".into());}
+                let name=item.name.replace(['\r','\n','\t'],"_");
+                let full=path.join(name);
+                let kind=if item.is_directory{"DIR"}else{"FILE"};
+                writeln!(out,"{}\t{}\t{}\t{}",full.display(),item.size,
+                    item.file_location.unwrap_or(0),kind).map_err(|e|e.to_string())?;
+                if verbose {println!("INSPECT: {} bytes={} type={}",full.display(),item.size,kind);}
+                if item.is_directory{walk(item,&full,depth+1,entries,out,verbose)?;}
+            }
+            Ok(())
+        }
+        let mut count=0usize;
+        walk(&tree,Path::new(""),0,&mut count,&mut out,verbose)?;
+        writeln!(out,"Entries={count}\nINSPECT_RESULT=COMPLETE")
+            .map_err(|e|e.to_string())?;
+        Ok(())
+    })();
+    if let Err(ref problem)=result {
+        let _=writeln!(out,"INSPECT_RESULT=FAILED\nError={problem}");
+    }
+    out.flush().map_err(|e|e.to_string())?;
+    println!("Inspection report: {}",destination.display());
+    result
+}
+
 fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
+    if cmd.mode == Mode::LaunchUnchecked {
+        // Deliberately bypass even the usual directory-presence and symlink
+        // checks; leave all filesystem resolution to Command::spawn.
+        return launch_unchecked(root,logger,sink);
+    }
     let game = root.join("splanet");
     if game.is_symlink() {
         return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
@@ -253,16 +369,24 @@ No arguments:
   Otherwise, find one supported ISO or CUE/BIN beside this EXE, install,
   verify the complete installation and play.
   Damaged or unknown existing installs are never overwritten or launched.
-<image.iso> / <image.cue> [track.bin]:
-  Explicit original disc image; installs and plays only if splanet is absent.
+--inspect image.iso / image.cue [track.bin|track.img]:
+  Inspect unsupported discs and write ScorchedPlanetFix_inspect.log.
+--verbose:
+  Extra diagnostics, combinable with commands.
 --install-only:
-  Install from an image without playing, or explicitly migrate a recognized
-  older installation. It never overwrites unknown or modified executables.
-  A missing or different regular Glide DLL is replaced from the verified
-  embedded GameFrame after moving the old DLL to glide.dll.bak.
+  Install from an automatically discovered ISO/CUE without launching, or
+  safely upgrade a recognized existing installation. User-modified EXEs
+  and unknown files are never overwritten.
+  A missing or different regular Glide DLL is moved to glide.dll.bak.
   An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
+--launch-no-verify:
+  Start splanet/spvoodoo.exe directly, without checking the presence,
+  integrity, hashes, or identity of game files or the Glide DLL.
+  Does not install, modify, migrate, or repair any files.
+  Requires an existing playable installation; errors come from Windows/Wine.
+  For trusted/debug installs only; untrusted game DLLs can be loaded.
 --help / --version:
   Show usage or executable version without running the game.
 
@@ -283,6 +407,7 @@ Both logs share a session_id. No proprietary game files are redistributed.")
 
 pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
     let cmd = parse_args(arguments)?;
+    let verbose=arguments.iter().any(|a|a=="--verbose");
     match cmd.mode {
         Mode::Help => { println!("{}", help(version)); return Ok(()); }
         Mode::Version => { println!("ScorchedPlanetFix {version}"); return Ok(()); }
@@ -292,8 +417,15 @@ pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
         .map_err(|e| format!("Cannot locate the executable: {e}"))?;
     let root = exe.parent()
         .ok_or("Cannot determine the patcher directory")?.to_path_buf();
+    if cmd.mode == Mode::Inspect {return inspect_media(&root,&cmd.media,verbose);}
     let logger = Logger::new(&root, version)?;
     logger.system_information();
+    if verbose {
+        let line=format!("VERBOSE: mode={:?} root={} game={}",
+            cmd.mode,root.display(),root.join("splanet").display());
+        println!("{line}");
+        logger.write(&line);
+    }
     let result = if cmd.mode == Mode::VerifyOnly {
         verify_only(&root, &logger, |msg| println!("{msg}"))
     } else {
@@ -312,20 +444,29 @@ mod tests {
     }
     #[test]
     fn command_line_modes_without_legacy_wrapper_flags() {
-        for cmd in ["--help", "-h", "--version", "--verify"] {
+        for cmd in ["--help", "-h", "--version", "--verify", "--launch-no-verify"] {
             assert!(parse_args(&args(&[cmd])).is_ok(), "{cmd}");
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
-        assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
+        assert_eq!(parse_args(&args(&["--launch-no-verify"])).unwrap().mode, Mode::LaunchUnchecked);
+        assert_eq!(parse_args(&args(&["--inspect","DISC.CuE","DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
+        assert_eq!(parse_args(&args(&["--inspect","DISC.CuE","DISC.img"])).unwrap().mode,Mode::Inspect);
+        assert_eq!(parse_args(&args(&["--verbose","--inspect","DISC.ISO"])).unwrap().mode,Mode::Inspect);
+        assert_eq!(parse_args(&args(&["--install-only","--verbose"])).unwrap().mode,Mode::InstallOnly);
         for invalid in [
-            vec!["--launch"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
-            vec!["--verify", "disc.iso"], vec!["--install-only", "--3dfx-logo"],
+            vec!["--launch"], vec!["--launch-unchecked"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
+            vec!["--verify", "disc.iso"], vec!["--launch-no-verify", "disc.iso"],
+            vec!["--install-only", "--launch-no-verify"],
+            vec!["--launch-no-verify", "--verify"], vec!["--install-only", "--3dfx-logo"],
             vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
             vec!["--help", "anything"], vec!["--version", "extra"],
             vec!["disc.iso", "disc.bin"], vec!["disc.cue", "bad.iso"],
-            vec!["disc.iso", "anything", "extra"]
+            vec!["disc.iso", "anything", "extra"],
+            vec!["disc.iso"],vec!["disc.cue"],vec!["--install-only","disc.iso"],
+            vec!["--inspect"],vec!["--inspect","disc.iso","track.bin"],
+            vec!["--verbose","--verbose"]
         ] {
             assert!(parse_args(&args(&invalid)).is_err(), "{invalid:?}");
         }
@@ -333,12 +474,14 @@ mod tests {
     #[test]
     fn usage_has_no_legacy_launch_option() {
         let h = help("2.0.1-deadbeef");
-        for word in ["2.0.1-deadbeef", "--install-only", "--verify",
+        for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-no-verify",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
-        assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
+        // Only the obsolete exact --launch command is prohibited;
+        // the explicitly named --launch-no-verify opt-out is supported.
+        assert!(!h.lines().any(|line| line.trim() == "ScorchedPlanetFix.exe --launch"));
         assert!(!h.contains("--nogui"));
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
@@ -368,14 +511,33 @@ mod tests {
         let no_args = parse_args(&[]).unwrap();
         let error = session(&root, &no_args, &logger, |_| {}).unwrap_err();
         assert!(error.contains("Unrecognized") || error.contains("Unknown") || error.contains("invalid"), "{error}");
-        let explicit = parse_args(&args(&["DISC.ISO"])).unwrap();
-        assert!(session(&root, &explicit, &logger, |_| {}).unwrap_err().contains("refusing to overwrite"));
+        assert!(parse_args(&args(&["DISC.ISO"])).is_err());
         assert_eq!(fs::read(root.join("splanet/spvoodoo.exe")).unwrap(), b"unknown game exe");
         assert!(!root.join("splanet/spvoodoo.exe.bak").exists());
         assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(), b"not-a-real-disc");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn unchecked_launch_does_not_discover_media_create_game_dir_or_check_hashes() {
+        let root=std::env::temp_dir().join(format!("scorched-unchecked-test-{}", std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // A corrupt ISO must not be read or used for automatic installation.
+        fs::write(root.join("DISC.ISO"),b"corrupted image data").unwrap();
+        let logger=Logger::new(&root,"test").unwrap();
+        let cmd=parse_args(&args(&["--launch-no-verify"])).unwrap();
+        let mut events=Vec::new();
+        let error=session(&root,&cmd,&logger,|line|events.push(line.to_owned())).unwrap_err();
+        assert!(error.contains("Unable to launch unchecked game"),"{error}");
+        assert!(events.iter().any(|line|line.contains("UNVERIFIED LAUNCH")));
+        assert!(!events.iter().any(|line|line.contains("Verifying all immutable")));
+        assert!(!root.join("splanet").exists());
+        assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(),b"corrupted image data");
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn no_media_without_install_fails_without_creating_game_dir() {
         let root = std::env::temp_dir().join(format!("scorched-no-media-test-{}", std::process::id()));
