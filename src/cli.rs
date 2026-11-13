@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
         for invalid in [
-            vec!["--launch"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
+            vec!["--launch"], vec!["--launch-unchecked"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
             vec!["--verify", "disc.iso"], vec!["--launch-no-verify", "disc.iso"],
             vec!["--install-only", "--launch-no-verify"],
             vec!["--launch-no-verify", "--verify"], vec!["--install-only", "--3dfx-logo"],
