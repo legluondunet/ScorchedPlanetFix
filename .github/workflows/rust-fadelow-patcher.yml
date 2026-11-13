@@ -17,10 +17,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out ScorchedPlanetFix
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check out pinned Apache-2.0 GameFrame source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: tanepiper/game-frame
           ref: f195a074a63cc150673c38becdec696163b0b3d1
@@ -203,7 +203,7 @@ jobs:
 
       # Artifacts already use ZIP internally. Upload 7 flat files, not ZIP-in-ZIP.
       - name: Upload verified Windows GameFrame files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ScorchedPlanetFix-v2.0.1-Windows-x64
           path: dist/*
