@@ -14,14 +14,14 @@ const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe <image.cue> [track.bin]
   ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
   ScorchedPlanetFix.exe --verify
-  ScorchedPlanetFix.exe --launch-unchecked
+  ScorchedPlanetFix.exe --launch-no-verify
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
 The executable finds splanet/ and CD images beside itself, not in the shell's
 current directory. An existing installation is verified before every launch.
 No unknown, invalid or damaged installation is replaced automatically.
---launch-unchecked is a direct, unverified launch; use only with trusted files.";
+--launch-no-verify is a direct, unverified launch; use only with trusted files.";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Media {
@@ -78,7 +78,7 @@ fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
             Ok(CommandLine { mode: Mode::Version, media: blank }),
         Some("--verify") if args.len() == 1 =>
             Ok(CommandLine { mode: Mode::VerifyOnly, media: blank }),
-        Some("--launch-unchecked") if args.len() == 1 =>
+        Some("--launch-no-verify") if args.len() == 1 =>
             Ok(CommandLine { mode: Mode::LaunchUnchecked, media: blank }),
         Some("--install-only") =>
             Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])? }),
@@ -213,7 +213,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     let game = root.join("splanet");
     let executable = game.join("spvoodoo.exe");
     emit(logger, &mut sink,
-        "WARNING: --launch-unchecked bypasses ALL game file existence/integrity checks and Glide DLL validation; no repair or installation will be attempted.");
+        "WARNING: --launch-no-verify bypasses ALL game file existence/integrity checks and Glide DLL validation; no repair or installation will be attempted.");
     emit(logger, &mut sink,
         &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
     let mut command = Command::new(&executable);
@@ -302,7 +302,7 @@ No arguments:
   An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
---launch-unchecked:
+--launch-no-verify:
   Start splanet/spvoodoo.exe directly, without checking the presence,
   integrity, hashes, or identity of game files or the Glide DLL.
   Does not install, modify, migrate, or repair any files.
@@ -355,19 +355,19 @@ mod tests {
     }
     #[test]
     fn command_line_modes_without_legacy_wrapper_flags() {
-        for cmd in ["--help", "-h", "--version", "--verify", "--launch-unchecked"] {
+        for cmd in ["--help", "-h", "--version", "--verify", "--launch-no-verify"] {
             assert!(parse_args(&args(&[cmd])).is_ok(), "{cmd}");
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
-        assert_eq!(parse_args(&args(&["--launch-unchecked"])).unwrap().mode, Mode::LaunchUnchecked);
+        assert_eq!(parse_args(&args(&["--launch-no-verify"])).unwrap().mode, Mode::LaunchUnchecked);
         assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
         for invalid in [
             vec!["--launch"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
-            vec!["--verify", "disc.iso"], vec!["--launch-unchecked", "disc.iso"],
-            vec!["--install-only", "--launch-unchecked"],
-            vec!["--launch-unchecked", "--verify"], vec!["--install-only", "--3dfx-logo"],
+            vec!["--verify", "disc.iso"], vec!["--launch-no-verify", "disc.iso"],
+            vec!["--install-only", "--launch-no-verify"],
+            vec!["--launch-no-verify", "--verify"], vec!["--install-only", "--3dfx-logo"],
             vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
             vec!["--help", "anything"], vec!["--version", "extra"],
             vec!["disc.iso", "disc.bin"], vec!["disc.cue", "bad.iso"],
@@ -379,13 +379,13 @@ mod tests {
     #[test]
     fn usage_has_no_legacy_launch_option() {
         let h = help("2.0.1-deadbeef");
-        for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-unchecked",
+        for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-no-verify",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
         // Only the obsolete exact --launch command is prohibited;
-        // the explicitly named --launch-unchecked opt-out is supported.
+        // the explicitly named --launch-no-verify opt-out is supported.
         assert!(!h.lines().any(|line| line.trim() == "ScorchedPlanetFix.exe --launch"));
         assert!(!h.contains("--nogui"));
         assert!(!h.contains("--3dfx-logo"));
@@ -432,7 +432,7 @@ mod tests {
         // A corrupt ISO must not be read or used for automatic installation.
         fs::write(root.join("DISC.ISO"),b"corrupted image data").unwrap();
         let logger=Logger::new(&root,"test").unwrap();
-        let cmd=parse_args(&args(&["--launch-unchecked"])).unwrap();
+        let cmd=parse_args(&args(&["--launch-no-verify"])).unwrap();
         let mut events=Vec::new();
         let error=session(&root,&cmd,&logger,|line|events.push(line.to_owned())).unwrap_err();
         assert!(error.contains("Unable to launch unchecked game"),"{error}");
