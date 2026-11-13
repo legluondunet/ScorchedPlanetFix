@@ -374,6 +374,8 @@ No arguments:
   Install from an automatically discovered ISO/CUE without launching, or
   safely upgrade a recognized existing installation. User-modified EXEs
   and unknown files are never overwritten.
+  A missing or different regular Glide DLL is moved to glide.dll.bak.
+  An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
 --launch-no-verify:
