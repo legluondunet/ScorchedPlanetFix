@@ -91,7 +91,10 @@ fn parse_args(args:&[OsString])->Result<CommandLine,String>{
             let media=parse_media(&selected)?;
             Ok(CommandLine{mode:Mode::Inspect,media})
         },
-        Some(option)=>Err(format!("Unsupported option or positional CD image: {option}. Use --inspect for diagnostics.\n{USAGE}")),
+        Some(option) if option.starts_with('-')=>
+            Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
+        Some(option)=>Err(format!(
+            "Positional ISO/CUE media is no longer accepted: {option}; use --inspect.\n{USAGE}")),
     }
 }
 fn regular_input(path: &Path) -> Result<(), String> {
