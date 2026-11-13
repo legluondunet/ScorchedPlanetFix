@@ -42,8 +42,6 @@ Download the [latest published release](https://github.com/legluondunet/Scorched
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe "Scorched Planet.iso"
-.\ScorchedPlanetFix.exe "Scorched Planet.cue" "Scorched Planet.bin"
 ```
 
 The first launch extracts and patches the image in a private staging directory, installs GameFrame from the EXE, verifies the installation and starts the game. Later starts detect `splanet/`, verify the edition and its immutable data, then play without a disc image. Unknown or corrupted game installations are refused and never overwritten.
@@ -51,13 +49,24 @@ The first launch extracts and patches the image in a private staging directory, 
 Additional commands:
 
 ```powershell
-.\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --install-only
 .\ScorchedPlanetFix.exe --launch-no-verify
+.\ScorchedPlanetFix.exe --verify
+.\ScorchedPlanetFix.exe --inspect image.iso
+.\ScorchedPlanetFix.exe --inspect image.cue image.bin
+.\ScorchedPlanetFix.exe --inspect image.cue image.img
+.\ScorchedPlanetFix.exe --verbose
 .\ScorchedPlanetFix.exe --help
+.\ScorchedPlanetFix.exe -h
 .\ScorchedPlanetFix.exe --version
 ```
 
+- `--inspect`: read-only unknown ISO/CUE file inventory, optional separate BIN/IMG
+  data track. Writes a separate `ScorchedPlanetFix_inspect.log` beside the
+  launcher without installing or running the game. Positional CD images
+  without `--inspect` are no longer accepted.
+- `--verbose`: detailed diagnostics, combinable with other commands.
+- `--help` and `-h`: same help.
 - `--verify`: **read-only** audit of the game, original backup, patch, INI and exact GameFrame DLL. Does not launch.
 - `--launch-no-verify` (**development builds after v2.0.1**): launch the expected installed `splanet/spvoodoo.exe` directly, bypassing all game file existence, integrity, and Glide DLL checks. Never installs, repairs, patches, or replaces files; if the executable is missing, the OS reports a launch failure. Use only with trusted local game files and DLLs.
 - `--install-only`: install without launching, or explicitly migrate a recognized previous game executable.
