@@ -272,7 +272,7 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
 }
 
 /// Native desktop 4:3 presentation and 60 FPS. Never configure nGlide.
-pub fn configure_process(command:&mut Command,game:&Path,mut log:impl FnMut(&str))
+pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,mut log:impl FnMut(&str))
     ->Result<(),String>{
     verify_local_gameframe(game)?;
     let (dw,dh)=desktop()?;
@@ -287,9 +287,12 @@ pub fn configure_process(command:&mut Command,game:&Path,mut log:impl FnMut(&str
     // the GameFrame source commit or an old release version as the UI identity.
     command.env("SCORCHED_FIX_SIGNATURE",format!(
         "ScorchedPlanetFix {}-{}",env!("CARGO_PKG_VERSION"),env!("SCORCHED_COMMIT")));
+    command.env("SCORCHED_FIX_SESSION_ID",session_id);
     // Temporary diagnostics: distinguish menu, FMV, option screens and 3D scenes
     // before adding a version overlay that must NOT appear during gameplay.
     command.env("SCORCHED_MENU_PROBE","1");
+    // Keep the DLL's established runtime log name. Only the installer log
+    // becomes ScorchedPlanetFix_installer.log; both files live beside the EXE.
     if let Some(root)=game.parent(){
         command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
     }
@@ -354,8 +357,11 @@ mod tests{
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
         let mut cmd=Command::new("test.exe");
-        configure_process(&mut cmd,&root,|_|{}).unwrap();
-        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
+        configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
+        let expected_log=root.parent().unwrap().join("ScorchedPlanetFix.log");
+        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
+            && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_60" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
