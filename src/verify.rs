@@ -222,14 +222,6 @@ pub fn launch_preverified(report:Report,folder:&Path,
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
 
-/// Backwards-compatible helper for integrations that request a read-only
-/// verification plus launch without installing an optional runtime.
-#[allow(dead_code)]
-pub fn launch_verified(folder:&Path,
-                       mut log:impl FnMut(&str))->Result<Child,String>{
-    let report=verify_install(folder,|message|log(message))?;
-    launch_preverified(report,folder,|message|log(message))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
