@@ -28,7 +28,7 @@ This feature was merged in [PR #24](https://github.com/legluondunet/ScorchedPlan
   evidence. Unknown scenes intentionally fail closed. It never changes the
   game's actual Glide framebuffer or original assets.
 - `SCORCHED_MENU_PROBE` and `SCORCHED_MENU_OVERLAY` records go to the DLL's
-  `ScorchedPlanetFix.log`. In development after v2.0.1, installer and launch
+  `ScorchedPlanetFix.log`. Starting with v2.0.2, installer and launch
   events go to `ScorchedPlanetFix_installer.log` instead; correlate both via
   `session_id`. The published v2.0.1 binary used one unified log.
 

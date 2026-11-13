@@ -1,13 +1,14 @@
-# ScorchedPlanetFix v2.0.1 — Windows x64 CLI
+# ScorchedPlanetFix v2.0.2 — Windows x64 CLI
 
-This document covers **v2.0.1**, including automatic `glide.dll` migration, before-install verification and a root-menu signature. The [historical v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) included GameFrame but required manually moving aside unknown external `glide.dll` files. The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for nGlide users.
+This document covers **v2.0.2**, including automatic `glide.dll` migration, strict verification, the root-menu signature, separate logs, and diagnostic commands. The [historical v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) included GameFrame but required manually moving aside unknown external `glide.dll` files. The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for nGlide users.
 
 ## Commands
 
 ```powershell
 .\ScorchedPlanetFix.exe
-.\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.iso"
-.\ScorchedPlanetFix.exe "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
+.\ScorchedPlanetFix.exe --inspect "D:\ISO\Scorched Planet.iso"
+.\ScorchedPlanetFix.exe --inspect "D:\ISO\Scorched Planet.cue" "D:\ISO\Scorched Planet.bin"
+.\ScorchedPlanetFix.exe --verbose
 .\ScorchedPlanetFix.exe --verify
 .\ScorchedPlanetFix.exe --install-only
 .\ScorchedPlanetFix.exe --launch-no-verify
@@ -15,13 +16,13 @@ This document covers **v2.0.1**, including automatic `glide.dll` migration, befo
 .\ScorchedPlanetFix.exe --version
 ```
 
-The executable searches for `splanet/` beside itself. If present, the game is verified before play; otherwise one unambiguous ISO/CUE image beside the launcher is extracted, patched, verified and launched. Explicit image paths are supported; unknown, damaged or incomplete installations are never silently overwritten. `--verify` is strictly read-only. `--install-only` performs an explicit installation or recognized older-edition migration without launching. **Development builds after v2.0.1** add `--launch-no-verify`, a deliberate opt-out that runs the fixed installed path `splanet/spvoodoo.exe` with the usual desktop/borderless/FPS environment but without checking the existence, hashes, identities, or safety of game files and `glide.dll`. It does not install a missing DLL, patch a game EXE, migrate, change INI, discover media or write to game files. OS/Wine errors are reported if the target is absent. Use only for trusted local installations; third-party DLLs might load in this mode. The release v2.0.1 does **not** contain this option.
+The launcher searches for `splanet/` beside itself. If absent, it discovers one unambiguous supported ISO/CUE image beside the launcher, installs the game, applies validated patches, verifies it and runs it. The original image is never modified. Positional ISO/CUE arguments are no longer accepted. `--inspect image.iso` or `--inspect image.cue [track.bin|track.img]` analyzes unsupported media read-only and writes `ScorchedPlanetFix_inspect.log` without installing anything. `--verbose` expands diagnostics. `--verify` is strictly read-only. `--install-only` installs/migrates without launching. `--launch-no-verify` executes `splanet/spvoodoo.exe` directly without checking files or DLL fingerprints, and never installs, patches or repairs; it is intended only for trusted local game files.
 
 `--launch` and `--3dfx-logo` are unsupported and rejected.
 
 ## GameFrame Glide is the only supported renderer
 
-The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL built from pinned source at commit `f195a074a63cc150673c38becdec696163b0b3d1`. For normal verified mode, the embedded DLL's PE32 architecture and SHA-256 are verified before installation and the exact expected SHA-256 is verified again before spawning the 32-bit game. The explicit `--launch-no-verify` development switch bypasses these checks and never alters the DLL.
+The Windows x64 launcher embeds the Windows x86 Apache-2.0 GameFrame Glide DLL built from pinned source at commit `f195a074a63cc150673c38becdec696163b0b3d1`. For normal verified mode, the embedded DLL's PE32 architecture and SHA-256 are verified before installation and the exact expected SHA-256 is verified again before spawning the 32-bit game. The explicit `--launch-no-verify` switch bypasses these checks and never alters the DLL.
 
 - nGlide and arbitrary external Glide DLLs are **unsupported**.
 - No fallback from `SysWOW64`, external launcher directory or third-party paths.
@@ -40,6 +41,6 @@ See [supported editions](cd-editions.md) for hashes, language defaults and patch
 
 ## Validation
 
-The GameFrame integration passed maintainer testing on Wine-staging, GE-Proton and Windows 11: initial installation, second launch, videos, input, Alt+Tab and gameplay. The v2.0.0 release candidate was also tested on Windows 11 and Wine-staging 11.17; Windows CI checks the integrated executable, GameFrame ABI and packaging. In development after v2.0.1, `ScorchedPlanetFix_installer.log` records installation, hardware inventory, verification, GameFrame DLL provisioning and game exit information; `ScorchedPlanetFix.log` is reserved for Glide/OpenGL DLL diagnostics. Both are beside the executable, append to existing files and have a common `session_id`. The published v2.0.1 binary retains the older unified-log behavior.
+The GameFrame integration previously passed maintainer tests on Wine-staging, GE-Proton and Windows 11: installation, second launch, videos, input, Alt+Tab and gameplay. The v2.0.2 Windows CI checks the integrated executable, exact GameFrame exports and package; an independent final on-device v2.0.2 gameplay check is still recommended. `ScorchedPlanetFix_installer.log` records installation, hardware inventory, verification, DLL provisioning and game exit; `ScorchedPlanetFix.log` contains the GameFrame renderer's Glide/OpenGL diagnostics. The logs are append-only, beside the launcher, and share a `session_id` per launch. `ScorchedPlanetFix_inspect.log` is used only for requested disc-image inspection.
 
-The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version v2.0.1 retains the GameFrame-only breaking change: external Glide DLLs are not loaded; the normal launcher backs up the existing nonmatching regular DLL, replacing the single existing regular backup if necessary, and installs its bundled GameFrame wrapper. The `--verify` command remains read-only and rejects a foreign active Glide DLL.
+The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) remains available for systems that require nGlide. Version v2.0.2 retains the GameFrame-only breaking change: external Glide DLLs are not loaded; the normal launcher backs up the existing nonmatching regular DLL, replacing the single existing regular backup if necessary, and installs its bundled GameFrame wrapper. The `--verify` command remains read-only and rejects a foreign active Glide DLL.
