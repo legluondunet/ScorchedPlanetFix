@@ -281,7 +281,7 @@ fn inspect_media(root:&Path,media:&Media,verbose:bool)->Result<(),String>{
         .map_err(|e|e.to_string())?;
     let result=(||->Result<(),String>{
         let temporary=if source.extension().is_some_and(|ext|ext.eq_ignore_ascii_case("cue")){
-            Some(cue_image::normalize_cue_with_bin(&source,track.as_deref(),root,
+            Some(cue_image::normalize_for_inspection(&source,track.as_deref(),root,
                 |_done,_total,_msg|{},|line|{
                     let safe=line.replace(['\r','\n']," ");
                     let _=writeln!(out,"CUE: {safe}");
