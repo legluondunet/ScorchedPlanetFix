@@ -167,7 +167,7 @@ jobs:
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $root = Split-Path -Parent $exe
           if (Test-Path (Join-Path $root 'splanet')) { throw 'Game directory must be absent before unchecked smoke' }
-          $output = (& $exe --launch-unchecked 2>&1 | Out-String)
+          $output = (& $exe --launch-no-verify 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Unable to launch unchecked game') {
             throw "Unchecked direct launch did not report the expected OS spawn error: $output"
           }
