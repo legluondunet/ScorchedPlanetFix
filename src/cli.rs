@@ -255,6 +255,75 @@ fn wait_for_game(child: &mut Child, logger: &Logger,
 /// Auto-start decision uses only the folder containing the launcher.
 /// An existing but invalid game folder blocks media fallback, replacement,
 /// and launch; repair requires an explicit --install-only invocation.
+/// Inspect an unsupported ISO or CUE without applying edition requirements,
+/// installing a game, or writing to the normal runtime/installer log.
+fn inspect_media(root:&Path,media:&Media,verbose:bool)->Result<(),String>{
+    let image=media.image.as_ref().ok_or("Missing ISO/CUE source")?;
+    let source=if image.is_absolute(){image.clone()}else{root.join(image)};
+    regular_input(&source)?;
+    let track=if let Some(raw)=media.bin.as_ref(){
+        let selected=if raw.is_absolute(){raw.clone()}else{root.join(raw)};
+        regular_input(&selected)?;
+        Some(selected)
+    }else{None};
+    let destination=root.join("ScorchedPlanetFix_inspect.log");
+    if fs::symlink_metadata(&destination).is_ok_and(
+        |meta|!meta.file_type().is_file() || meta.file_type().is_symlink()) {
+        return Err("Inspect report path must be a regular file".into());
+    }
+    let mut out=OpenOptions::new().create(true).write(true).truncate(true)
+        .open(&destination).map_err(|e|format!("Cannot create inspect log: {e}"))?;
+    writeln!(out,"ScorchedPlanetFix INSPECT v1\nSource={}\nTrack={}",
+        source.display(),track.as_ref().map(|p|p.display().to_string()).unwrap_or_default())
+        .map_err(|e|e.to_string())?;
+    let result=(||->Result<(),String>{
+        let temporary=if source.extension().is_some_and(|ext|ext.eq_ignore_ascii_case("cue")){
+            Some(cue_image::normalize_cue_with_bin(&source,track.as_deref(),root,
+                |_done,_total,_msg|{},|line|{
+                    let safe=line.replace(['\r','\n']," ");
+                    let _=writeln!(out,"CUE: {safe}");
+                })?)
+        }else {
+            if track.is_some(){return Err("BIN/IMG data track requires a CUE file".into());}
+            None
+        };
+        let image=temporary.as_ref().map(|t|t.path.as_path()).unwrap_or(&source);
+        let mut input=File::open(image).map_err(|e|e.to_string())?;
+        let len=input.metadata().map_err(|e|e.to_string())?.len();
+        let tree=detect_and_parse_filesystem(&mut input,&image.to_string_lossy())
+            .map_err(|e|format!("Unknown/unsupported CD filesystem: {e}"))?;
+        writeln!(out,"DataBytes={len}\nPATH\tSIZE_BYTES\tOFFSET\tTYPE")
+            .map_err(|e|e.to_string())?;
+        fn walk(node:&TreeNode,path:&Path,depth:usize,entries:&mut usize,
+                out:&mut File,verbose:bool)->Result<(),String>{
+            if depth>40{return Err("ISO tree exceeds safe inspection depth".into());}
+            for item in &node.children {
+                *entries+=1;
+                if *entries>25000{return Err("ISO file count exceeds safe inspection limit".into());}
+                let name=item.name.replace(['\r','\n','\t'],"_");
+                let full=path.join(name);
+                let kind=if item.is_directory{"DIR"}else{"FILE"};
+                writeln!(out,"{}\t{}\t{}\t{}",full.display(),item.size,
+                    item.file_location.unwrap_or(0),kind).map_err(|e|e.to_string())?;
+                if verbose {println!("INSPECT: {} bytes={} type={}",full.display(),item.size,kind);}
+                if item.is_directory{walk(item,&full,depth+1,entries,out,verbose)?;}
+            }
+            Ok(())
+        }
+        let mut count=0usize;
+        walk(&tree,Path::new(""),0,&mut count,&mut out,verbose)?;
+        writeln!(out,"Entries={count}\nINSPECT_RESULT=COMPLETE")
+            .map_err(|e|e.to_string())?;
+        Ok(())
+    })();
+    if let Err(ref problem)=result {
+        let _=writeln!(out,"INSPECT_RESULT=FAILED\nError={problem}");
+    }
+    out.flush().map_err(|e|e.to_string())?;
+    println!("Inspection report: {}",destination.display());
+    result
+}
+
 fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
     if cmd.mode == Mode::LaunchUnchecked {
@@ -331,6 +400,7 @@ beside this EXE. No proprietary game files are redistributed.")
 
 pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
     let cmd = parse_args(arguments)?;
+    let verbose=arguments.iter().any(|a|a=="--verbose");
     match cmd.mode {
         Mode::Help => { println!("{}", help(version)); return Ok(()); }
         Mode::Version => { println!("ScorchedPlanetFix {version}"); return Ok(()); }
@@ -340,8 +410,15 @@ pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
         .map_err(|e| format!("Cannot locate the executable: {e}"))?;
     let root = exe.parent()
         .ok_or("Cannot determine the patcher directory")?.to_path_buf();
+    if cmd.mode == Mode::Inspect {return inspect_media(&root,&cmd.media,verbose);}
     let logger = Logger::new(&root, version)?;
     logger.system_information();
+    if verbose {
+        let line=format!("VERBOSE: mode={:?} root={} game={}",
+            cmd.mode,root.display(),root.join("splanet").display());
+        println!("{line}");
+        logger.write(&line);
+    }
     let result = if cmd.mode == Mode::VerifyOnly {
         verify_only(&root, &logger, |msg| println!("{msg}"))
     } else {
