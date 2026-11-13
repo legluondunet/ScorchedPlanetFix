@@ -200,11 +200,6 @@ pub fn verify_local_gameframe(game:&Path)->Result<(),String>{
     Ok(())
 }
 
-pub fn is_embedded_gameframe(game:&Path)->Result<bool,String>{
-    let Some(expected)=validate_embedded()? else {return Ok(false);};
-    Ok(digest(&regular_dll(&game.join("glide.dll"))?)==expected)
-}
-
 /// Read-only guard for --install-only. A different *regular* glide.dll is
 /// eligible for automatic backup, but reject symlinks and backup/staging
 /// conflicts before any game executable/INI migration touches game files.
@@ -352,7 +347,6 @@ mod tests{
         preflight_glide(&root).unwrap(); // exact GameFrame DLL is trusted
         let dll=root.join("glide.dll");
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
-        assert!(is_embedded_gameframe(&root).unwrap());
         verify_local_gameframe(&root).unwrap();
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);

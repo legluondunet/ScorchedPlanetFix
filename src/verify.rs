@@ -222,15 +222,6 @@ pub fn launch_preverified(report:Report,folder:&Path,session_id:&str,
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
 
-/// Backwards-compatible helper for integrations that request a read-only
-/// verification plus launch without installing an optional runtime.
-#[allow(dead_code)]
-pub fn launch_verified(folder:&Path,
-                       mut log:impl FnMut(&str))->Result<Child,String>{
-    let report=verify_install(folder,|message|log(message))?;
-    let session_id=crate::logger::new_session_id();
-    launch_preverified(report,folder,&session_id,|message|log(message))
-}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -243,12 +243,6 @@ impl Drop for TemporaryIso {
 /// Normalize only the first data track into an ephemeral 2048-byte-sector ISO.
 /// The existing isomage filesystem parser then verifies actual original game
 /// hashes; the normalized file is always removed after installation.
-pub fn normalize_cue(
-    cue:&Path,output_dir:&Path,progress:impl FnMut(u64,u64,&str),
-    log:impl FnMut(&str),
-)->Result<TemporaryIso,String>{
-    normalize_cue_with_bin(cue,None,output_dir,progress,log)
-}
 pub fn normalize_cue_with_bin(
     cue:&Path,bin_override:Option<&Path>,output_dir:&Path,
     mut progress:impl FnMut(u64,u64,&str),
@@ -356,7 +350,7 @@ mod tests {
         content[sector16+6]=1;
         fs::write(&bin,&content).unwrap();
         fs::write(&cue,b"FILE \"sample.bin\" BINARY\n TRACK 01 MODE1/2352\n INDEX 01 00:00:00\n TRACK 02 AUDIO\n INDEX 01 00:00:20\n").unwrap();
-        let t=normalize_cue(&cue,&root,|_,_,_|{},|_|{}).unwrap();
+        let t=normalize_cue_with_bin(&cue,None,&root,|_,_,_|{},|_|{}).unwrap();
         assert_eq!(fs::metadata(&t.path).unwrap().len(),20*2048);
         let mut d=vec![0;20*2048];
         File::open(&t.path).unwrap().read_exact(&mut d).unwrap();

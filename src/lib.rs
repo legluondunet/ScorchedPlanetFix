@@ -3,7 +3,7 @@
 //! No game data is bundled, downloaded, or executed by this library.
 
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, OpenOptions, Permissions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 

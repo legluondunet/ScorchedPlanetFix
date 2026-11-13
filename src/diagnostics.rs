@@ -1,18 +1,14 @@
 //! Passive Windows/Wine diagnostics, translated from the GPL-3.0-or-later
 //! SpiderMan2k1Fix system_diagnostics.c (PR #83 + #84).
 //! https://github.com/legluondunet/SpiderMan2k1Fix
-//! Called during ScorchedPlanetFix GUI startup; diagnostic-only, no personal identifiers.
+//! Called during ScorchedPlanetFix console launcher startup; diagnostic-only, no personal identifiers.
 
 use std::{
-    env, ffi::{c_char, c_void, CStr, CString},
-    mem, ptr, slice, time::Instant,
+    env, ffi::{c_char, c_void, CStr},
+    mem, ptr, time::Instant,
 };
 
 use crate::diagnostics_graphics;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Guid { data1:u32, data2:u16, data3:u16, data4:[u8;8] }
 
 #[repr(C)]
 struct OsVersion {
