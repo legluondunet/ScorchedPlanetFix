@@ -36,7 +36,7 @@ struct Inventory {
     skipped_unused_executables: usize,
 }
 pub struct InstallReport {
-    pub files: usize, pub bytes: u64, pub folder: PathBuf,
+    pub files: usize, pub bytes: u64,
     pub edition: &'static str, pub patch_report: String,
 }
 
@@ -650,7 +650,7 @@ pub fn install_image(
         log(&format!("INSTALL-OK: edition={} {} files {} source bytes, original .bak verified",
             edition.label,file_count,total));
         Ok(InstallReport{
-            files:file_count,bytes:total,folder:destination.to_owned(),
+            files:file_count,bytes:total,
             edition:edition.label,patch_report,
         })
     })();
