@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
+use std::fs::{File,OpenOptions};
+use std::io::Write;
+use isomage::{detect_and_parse_filesystem,TreeNode};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe
-  ScorchedPlanetFix.exe <image.iso>
-  ScorchedPlanetFix.exe <image.cue> [track.bin]
-  ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
+  ScorchedPlanetFix.exe --install-only
+  ScorchedPlanetFix.exe --inspect image.iso
+  ScorchedPlanetFix.exe --inspect image.cue [track.bin|track.img]
+  ScorchedPlanetFix.exe --verbose
   ScorchedPlanetFix.exe --verify
   ScorchedPlanetFix.exe --launch-no-verify
   ScorchedPlanetFix.exe --help
@@ -33,6 +37,7 @@ struct Media {
 enum Mode {
     Play,
     InstallOnly,
+    Inspect,
     VerifyOnly,
     LaunchUnchecked,
     Help,
@@ -61,34 +66,34 @@ fn parse_media(args: &[OsString]) -> Result<Media, String> {
         }
     }
     if let Some(ref track) = bin {
-        if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin")) {
+        if !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin") || e.eq_ignore_ascii_case("img")) {
             return Err("The second disc image argument must be a .bin file".into());
         }
     }
     Ok(Media { image, bin })
 }
 
-fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
-    let first = args.first().and_then(|a| a.to_str());
-    let blank = Media { image: None, bin: None };
-    match first {
-        Some("--help") | Some("-h") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Help, media: blank }),
-        Some("--version") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::Version, media: blank }),
-        Some("--verify") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::VerifyOnly, media: blank }),
-        Some("--launch-no-verify") if args.len() == 1 =>
-            Ok(CommandLine { mode: Mode::LaunchUnchecked, media: blank }),
-        Some("--install-only") =>
-            Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])? }),
-        Some(option) if option.starts_with('-') =>
-            Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
-        _ =>
-            Ok(CommandLine { mode: Mode::Play, media: parse_media(args)? }),
+fn parse_args(args:&[OsString])->Result<CommandLine,String>{
+    let flags=args.iter().filter(|a|*a=="--verbose").count();
+    if flags>1{return Err("--verbose specified twice".into());}
+    let filtered=args.iter().filter(|a|*a!="--verbose").collect::<Vec<_>>();
+    let name=filtered.first().and_then(|x|x.to_str());
+    let blank=Media{image:None,bin:None};
+    match name {
+        None=>Ok(CommandLine{mode:Mode::Play,media:blank}),
+        Some("--help"|"-h") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Help,media:blank}),
+        Some("--version") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Version,media:blank}),
+        Some("--verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::VerifyOnly,media:blank}),
+        Some("--launch-no-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::LaunchUnchecked,media:blank}),
+        Some("--install-only") if filtered.len()==1=>Ok(CommandLine{mode:Mode::InstallOnly,media:blank}),
+        Some("--inspect") if (2..=3).contains(&filtered.len())=>{
+            let selected=filtered[1..].iter().map(|x|(*x).clone()).collect::<Vec<_>>();
+            let media=parse_media(&selected)?;
+            Ok(CommandLine{mode:Mode::Inspect,media})
+        },
+        Some(option)=>Err(format!("Unsupported option or positional CD image: {option}. Use --inspect for diagnostics.\n{USAGE}")),
     }
 }
-
 fn regular_input(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path)
         .map_err(|e| format!("Disc image not found {}: {e}", path.display()))?;
@@ -292,14 +297,14 @@ No arguments:
   Otherwise, find one supported ISO or CUE/BIN beside this EXE, install,
   verify the complete installation and play.
   Damaged or unknown existing installs are never overwritten or launched.
-<image.iso> / <image.cue> [track.bin]:
-  Explicit original disc image; installs and plays only if splanet is absent.
+--inspect image.iso / image.cue [track.bin|track.img]:
+  Inspect unsupported discs and write ScorchedPlanetFix_inspect.log.
+--verbose:
+  Extra diagnostics, combinable with commands.
 --install-only:
-  Install from an image without playing, or explicitly migrate a recognized
-  older installation. It never overwrites unknown or modified executables.
-  A missing or different regular Glide DLL is replaced from the verified
-  embedded GameFrame after moving the old DLL to glide.dll.bak.
-  An existing regular glide.dll.bak is replaced, never multiplied.
+  Install from an automatically discovered ISO/CUE without launching, or
+  safely upgrade a recognized existing installation. User-modified EXEs
+  and unknown files are never overwritten.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
 --launch-no-verify:
