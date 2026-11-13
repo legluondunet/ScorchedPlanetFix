@@ -167,6 +167,10 @@ fn resolve_bin(cue:&Path, filename:&str)->Result<PathBuf,String>{
     Ok(current)
 }
 fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
+    data_track_impl(cue,bin_override,true)
+}
+fn data_track_impl(cue:&Path,bin_override:Option<&Path>,
+                   enforce_matching_name:bool)->Result<DataTrack,String>{
     let meta=fs::symlink_metadata(cue).map_err(|e|format!("Cannot read CUE file: {e}"))?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>MAX_CUE_BYTES{
         return Err("CUE must be a regular file within size limits".into());
@@ -187,7 +191,7 @@ fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
         // but must match the BIN basename declared by its first FILE.
         let declared=first.file.replace('\\',"/");
         let expected_name=Path::new(&declared).file_name().ok_or("Missing BIN filename in CUE")?;
-        if !explicit.file_name().is_some_and(|actual|actual.to_string_lossy()
+        if enforce_matching_name && !explicit.file_name().is_some_and(|actual|actual.to_string_lossy()
             .eq_ignore_ascii_case(&expected_name.to_string_lossy())){
             return Err("Explicit BIN file does not match the FILE declared in CUE".into());
         }
@@ -251,10 +255,28 @@ pub fn normalize_cue(
 }
 pub fn normalize_cue_with_bin(
     cue:&Path,bin_override:Option<&Path>,output_dir:&Path,
+    progress:impl FnMut(u64,u64,&str),
+    log:impl FnMut(&str),
+)->Result<TemporaryIso,String>{
+    normalize_impl(cue,bin_override,output_dir,true,progress,log)
+}
+/// Only for read-only support reports. A user may supply a renamed BIN/IMG
+/// data track (its name need not match the CUE FILE), while sector validity,
+/// safe file types, alignment, bounds and symlink checks remain strict.
+pub fn normalize_for_inspection(
+    cue:&Path,bin_override:Option<&Path>,output_dir:&Path,
+    progress:impl FnMut(u64,u64,&str),
+    log:impl FnMut(&str),
+)->Result<TemporaryIso,String>{
+    normalize_impl(cue,bin_override,output_dir,false,progress,log)
+}
+fn normalize_impl(
+    cue:&Path,bin_override:Option<&Path>,output_dir:&Path,
+    enforce_matching_name:bool,
     mut progress:impl FnMut(u64,u64,&str),
     mut log:impl FnMut(&str),
 )->Result<TemporaryIso,String>{
-    let data=data_track(cue,bin_override)?;
+    let data=data_track_impl(cue,bin_override,enforce_matching_name)?;
     log(&format!("CUE: mode {:?}, sectors {}, first INDEX 01={}, source {}",
         data.mode,data.sector_count,data.first_sector,data.file.display()));
     let mut source=File::open(&data.file).map_err(|e|format!("Cannot read BIN file: {e}"))?;
