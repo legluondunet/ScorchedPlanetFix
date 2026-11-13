@@ -70,7 +70,7 @@ mod tests {
     fn installer_log_is_separate_and_has_session_id(){
         let root=std::env::temp_dir().join(format!("scorched-log-{}",new_session_id()));
         std::fs::create_dir(&root).unwrap();
-        let logger=Logger::new(&root,"2.0.1-test").unwrap();
+        let logger=Logger::new(&root,env!("CARGO_PKG_VERSION")).unwrap();
         assert_eq!(logger.path,root.join("ScorchedPlanetFix_installer.log"));
         assert!(!root.join("ScorchedPlanetFix.log").exists());
         assert!(!logger.session_id().is_empty());

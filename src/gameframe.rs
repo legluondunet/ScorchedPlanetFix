@@ -389,7 +389,7 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_MENU_PROBE" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SIGNATURE"
-            && val.is_some_and(|s|s.to_string_lossy().starts_with("ScorchedPlanetFix 2.0.1-"))));
+            && val.is_some_and(|s|s.to_string_lossy().starts_with(&format!("ScorchedPlanetFix {}-", env!("CARGO_PKG_VERSION"))))));
         fs::remove_dir_all(&root).unwrap();
     }
 
