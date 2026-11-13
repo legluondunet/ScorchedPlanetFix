@@ -384,7 +384,9 @@ mod tests {
                      "glide.dll", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
-        assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
+        // Only the obsolete exact --launch command is prohibited;
+        // the explicitly named --launch-unchecked opt-out is supported.
+        assert!(!h.lines().any(|line| line.trim() == "ScorchedPlanetFix.exe --launch"));
         assert!(!h.contains("--nogui"));
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
