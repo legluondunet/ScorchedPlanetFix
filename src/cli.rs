@@ -6,6 +6,7 @@ use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe
@@ -13,12 +14,14 @@ const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe <image.cue> [track.bin]
   ScorchedPlanetFix.exe --install-only [image.iso | image.cue [track.bin]]
   ScorchedPlanetFix.exe --verify
+  ScorchedPlanetFix.exe --launch-unchecked
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
 The executable finds splanet/ and CD images beside itself, not in the shell's
 current directory. An existing installation is verified before every launch.
-No unknown, invalid or damaged installation is replaced automatically.";
+No unknown, invalid or damaged installation is replaced automatically.
+--launch-unchecked is a direct, unverified launch; use only with trusted files.";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Media {
@@ -31,6 +34,7 @@ enum Mode {
     Play,
     InstallOnly,
     VerifyOnly,
+    LaunchUnchecked,
     Help,
     Version,
 }
@@ -74,6 +78,8 @@ fn parse_args(args: &[OsString]) -> Result<CommandLine, String> {
             Ok(CommandLine { mode: Mode::Version, media: blank }),
         Some("--verify") if args.len() == 1 =>
             Ok(CommandLine { mode: Mode::VerifyOnly, media: blank }),
+        Some("--launch-unchecked") if args.len() == 1 =>
+            Ok(CommandLine { mode: Mode::LaunchUnchecked, media: blank }),
         Some("--install-only") =>
             Ok(CommandLine { mode: Mode::InstallOnly, media: parse_media(&args[1..])? }),
         Some(option) if option.starts_with('-') =>
@@ -195,6 +201,34 @@ fn verify_and_play(root: &Path, logger: &Logger,
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
+    wait_for_game(&mut child, logger, sink)
+}
+
+/// Explicit opt-out for debugging or custom game installations. No file
+/// enumeration, existence checks, hashing, installation, patching, backup,
+/// or Glide DLL verification happens here. The OS itself resolves the fixed
+/// target path when spawning (and reports missing executables normally).
+fn launch_unchecked(root: &Path, logger: &Logger,
+                    mut sink: impl FnMut(&str)) -> Result<(), String> {
+    let game = root.join("splanet");
+    let executable = game.join("spvoodoo.exe");
+    emit(logger, &mut sink,
+        "WARNING: --launch-unchecked bypasses ALL game file existence/integrity checks and Glide DLL validation; no repair or installation will be attempted.");
+    emit(logger, &mut sink,
+        &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
+    let mut command = Command::new(&executable);
+    command.current_dir(&game);
+    gameframe::configure_process_unchecked(&mut command, &game,
+        |message| logger.write(message))?;
+    let mut child = command.spawn()
+        .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
+    emit(logger, &mut sink,
+        &format!("Game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
+    wait_for_game(&mut child, logger, sink)
+}
+
+fn wait_for_game(child: &mut Child, logger: &Logger,
+                 mut sink: impl FnMut(&str)) -> Result<(), String> {
     let status = child.wait()
         .map_err(|e| format!("Failed while monitoring the game process: {e}"))?;
     if !status.success() {
@@ -218,6 +252,11 @@ fn verify_and_play(root: &Path, logger: &Logger,
 /// and launch; repair requires an explicit --install-only invocation.
 fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
+    if cmd.mode == Mode::LaunchUnchecked {
+        // Deliberately bypass even the usual directory-presence and symlink
+        // checks; leave all filesystem resolution to Command::spawn.
+        return launch_unchecked(root,logger,sink);
+    }
     let game = root.join("splanet");
     if game.is_symlink() {
         return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
@@ -263,6 +302,12 @@ No arguments:
   An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
   Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
+--launch-unchecked:
+  Start splanet/spvoodoo.exe directly, without checking the presence,
+  integrity, hashes, or identity of game files or the Glide DLL.
+  Does not install, modify, migrate, or repair any files.
+  Requires an existing playable installation; errors come from Windows/Wine.
+  For trusted/debug installs only; untrusted game DLLs can be loaded.
 --help / --version:
   Show usage or executable version without running the game.
 
@@ -310,16 +355,19 @@ mod tests {
     }
     #[test]
     fn command_line_modes_without_legacy_wrapper_flags() {
-        for cmd in ["--help", "-h", "--version", "--verify"] {
+        for cmd in ["--help", "-h", "--version", "--verify", "--launch-unchecked"] {
             assert!(parse_args(&args(&[cmd])).is_ok(), "{cmd}");
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
+        assert_eq!(parse_args(&args(&["--launch-unchecked"])).unwrap().mode, Mode::LaunchUnchecked);
         assert_eq!(parse_args(&args(&["--install-only", "DISC.CuE", "DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
         for invalid in [
             vec!["--launch"], vec!["--3dfx-logo"], vec!["--launch", "--3dfx-logo"],
-            vec!["--verify", "disc.iso"], vec!["--install-only", "--3dfx-logo"],
+            vec!["--verify", "disc.iso"], vec!["--launch-unchecked", "disc.iso"],
+            vec!["--install-only", "--launch-unchecked"],
+            vec!["--launch-unchecked", "--verify"], vec!["--install-only", "--3dfx-logo"],
             vec!["--3dfx-logo", "--install-only"], vec!["--unknown"],
             vec!["--help", "anything"], vec!["--version", "extra"],
             vec!["disc.iso", "disc.bin"], vec!["disc.cue", "bad.iso"],
@@ -331,7 +379,7 @@ mod tests {
     #[test]
     fn usage_has_no_legacy_launch_option() {
         let h = help("2.0.1-deadbeef");
-        for word in ["2.0.1-deadbeef", "--install-only", "--verify",
+        for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-unchecked",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
@@ -374,6 +422,26 @@ mod tests {
         drop(logger);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn unchecked_launch_does_not_discover_media_create_game_dir_or_check_hashes() {
+        let root=std::env::temp_dir().join(format!("scorched-unchecked-test-{}", std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // A corrupt ISO must not be read or used for automatic installation.
+        fs::write(root.join("DISC.ISO"),b"corrupted image data").unwrap();
+        let logger=Logger::new(&root,"test").unwrap();
+        let cmd=parse_args(&args(&["--launch-unchecked"])).unwrap();
+        let mut events=Vec::new();
+        let error=session(&root,&cmd,&logger,|line|events.push(line.to_owned())).unwrap_err();
+        assert!(error.contains("Unable to launch unchecked game"),"{error}");
+        assert!(events.iter().any(|line|line.contains("UNVERIFIED LAUNCH")));
+        assert!(!events.iter().any(|line|line.contains("Verifying all immutable")));
+        assert!(!root.join("splanet").exists());
+        assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(),b"corrupted image data");
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn no_media_without_install_fails_without_creating_game_dir() {
         let root = std::env::temp_dir().join(format!("scorched-no-media-test-{}", std::process::id()));
