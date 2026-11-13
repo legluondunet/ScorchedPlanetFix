@@ -103,7 +103,7 @@ fn media_arguments(media: &Media, root: &Path) -> Vec<OsString> {
         .collect()
 }
 
-/// One log beside ScorchedPlanetFix.exe for diagnostics, installation and play.
+/// Launcher-only log beside ScorchedPlanetFix.exe; the DLL has its own file.
 fn emit(logger: &Logger, sink: &mut impl FnMut(&str), msg: &str) {
     logger.write(&format!("CLI: {msg}"));
     sink(msg);
@@ -191,7 +191,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
     // fingerprints are all confirmed.
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
-    let mut child=verify::launch_preverified(report,&game,
+    let mut child=verify::launch_preverified(report,&game,logger.session_id(),
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
@@ -275,8 +275,10 @@ Only open-source bundled GameFrame is supported in v2.
   Non-regular files and symlinks are refused for safety.
   --verify is strictly read-only, including GameFrame validation.
 
-All diagnostics, including hardware inventory, go to ScorchedPlanetFix.log
-beside this EXE. No proprietary game files are redistributed.")
+Installer/launcher diagnostics and hardware inventory go to
+ScorchedPlanetFix_installer.log beside this EXE. During gameplay, the
+bundled GameFrame DLL writes ScorchedPlanetFix.log in the same directory.
+Both logs share a session_id. No proprietary game files are redistributed.")
 }
 
 pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
@@ -333,7 +335,7 @@ mod tests {
         let h = help("2.0.1-deadbeef");
         for word in ["2.0.1-deadbeef", "--install-only", "--verify",
                      "GameFrame", "image.iso", "image.cue",
-                     "glide.dll", "ScorchedPlanetFix.log"] {
+                     "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
         }
         assert!(!h.contains("ScorchedPlanetFix.exe --launch"));
