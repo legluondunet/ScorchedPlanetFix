@@ -89,7 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI build failed' }
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $version = (& $exe --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 2\.0\.1-[0-9a-f]{8}$') {
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^ScorchedPlanetFix 2\.0\.2-[0-9a-f]{8}$') {
             throw "Unexpected version: $version"
           }
           Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
@@ -134,7 +134,7 @@ jobs:
           $dllLog = Join-Path $testFolder 'ScorchedPlanetFix.log'
           $env:GLIDE_LOG = $dllLog
           $env:SCORCHED_FIX_SESSION_ID = 'ci-gameframe-smoke-1'
-          $env:SCORCHED_FIX_SIGNATURE = 'ScorchedPlanetFix 2.0.1-ci'
+          $env:SCORCHED_FIX_SIGNATURE = 'ScorchedPlanetFix 2.0.2-ci'
           Push-Location $testFolder
           try {
             & '.\GameFrameGlideSmoke.exe'
@@ -205,7 +205,7 @@ jobs:
           Copy-Item LICENSE dist/LICENSE.txt
           Copy-Item 'third_party/game-frame/LICENSE-APACHE' dist/LICENSE-APACHE.txt
           Copy-Item README.md dist/README.md
-          Copy-Item docs/release-notes-v2.0.1.md dist/RELEASE-NOTES.txt
+          Copy-Item docs/release-notes-v2.0.2.md dist/RELEASE-NOTES.txt
           Copy-Item docs/gameframe-experiment.md dist/GAMEFRAME-INFO.txt
           $hash = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ScorchedPlanetFix.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
@@ -222,7 +222,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = 'ScorchedPlanetFix-v2.0.1-Windows-x64.zip'
+          $archive = 'ScorchedPlanetFix-v2.0.2-Windows-x64.zip'
           Compress-Archive -Path dist/* -DestinationPath $archive
           Expand-Archive -Path $archive -DestinationPath dist-verify -Force
           $expected = @('ScorchedPlanetFix.exe','LICENSE.txt','LICENSE-APACHE.txt','README.md','RELEASE-NOTES.txt','GAMEFRAME-INFO.txt','SHA256SUMS.txt')
@@ -241,7 +241,7 @@ jobs:
       - name: Upload verified Windows GameFrame files
         uses: actions/upload-artifact@v6
         with:
-          name: ScorchedPlanetFix-v2.0.1-Windows-x64
+          name: ScorchedPlanetFix-v2.0.2-Windows-x64
           path: dist/*
           if-no-files-found: error
           retention-days: 14

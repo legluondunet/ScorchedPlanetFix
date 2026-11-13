@@ -473,8 +473,8 @@ mod tests {
     }
     #[test]
     fn usage_has_no_legacy_launch_option() {
-        let h = help("2.0.1-deadbeef");
-        for word in ["2.0.1-deadbeef", "--install-only", "--verify", "--launch-no-verify",
+        let h = help("2.0.2-deadbeef");
+        for word in ["2.0.2-deadbeef", "--install-only", "--verify", "--launch-no-verify",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");

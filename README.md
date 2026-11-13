@@ -7,7 +7,7 @@
 
 ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and launcher for the original 32-bit game. It installs from your own ISO or CUE/BIN image, applies exact-edition FadeLow and No-CD patches, checks original assets with SHA-256 and launches the game.
 
-## Version 2.0.1 — GameFrame only
+## Version 2.0.2 — GameFrame only
 
 **The only supported Glide wrapper is GameFrame Glide → OpenGL.** The Windows x64 launcher embeds a verified Windows x86 `glide.dll` built from pinned, Apache-2.0 [GameFrame source](https://github.com/tanepiper/game-frame), with Scorched-specific fixes.
 
@@ -15,7 +15,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - One borderless window using the **existing desktop resolution** (no display-mode switching), with 4:3 image centered and not stretched.
 - 60 FPS limiter and keyboard/mouse input in the same game window.
 - Automatic ISO/CUE installation, verification, patching and launching; second launches use the existing `splanet/` directory without re-extraction.
-- Development builds additionally provide `--launch-no-verify` to start `splanet/spvoodoo.exe` directly without checking any installed game or Glide DLL files. This is an explicit diagnostic opt-out, not the default.
+- The v2.0.2 release provides `--launch-no-verify` to start `splanet/spvoodoo.exe` directly without checking any installed game or Glide DLL files. This is an explicit diagnostic opt-out, not the default.
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Two append-only logs beside the launcher: `ScorchedPlanetFix_installer.log` for installation, verification and launching, and `ScorchedPlanetFix.log` for the GameFrame DLL. Each session has a shared `session_id`.
 - v2.0.1 adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu. It persists when hovering buttons or opening the Language, Quit and New Game panels; it disappears in videos and gameplay.
@@ -23,7 +23,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
-> **Release history:** v2.0.1 includes the new version signature, automatic Glide DLL migration and safer installation checks. The [v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) is preserved with its original behavior (external `glide.dll` must be moved aside manually). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. GitHub Actions artifacts are temporary development builds; use the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) for a permanent download.
+> **Release history:** v2.0.2 adds separate installer/GameFrame logs, `--launch-no-verify`, read-only `--inspect` and `--verbose`. v2.0.1 includes the new version signature, automatic Glide DLL migration and safer installation checks. The [v2.0.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v2.0.0) is preserved with its original behavior (external `glide.dll` must be moved aside manually). The [v1.1.0 release](https://github.com/legluondunet/ScorchedPlanetFix/releases/tag/v1.1.0) requires nGlide. GitHub Actions artifacts are temporary development builds; use the [latest published release](https://github.com/legluondunet/ScorchedPlanetFix/releases/latest) for a permanent download.
 
 ## Supported disc editions
 
@@ -68,7 +68,7 @@ Additional commands:
 - `--verbose`: detailed diagnostics, combinable with other commands.
 - `--help` and `-h`: same help.
 - `--verify`: **read-only** audit of the game, original backup, patch, INI and exact GameFrame DLL. Does not launch.
-- `--launch-no-verify` (**development builds after v2.0.1**): launch the expected installed `splanet/spvoodoo.exe` directly, bypassing all game file existence, integrity, and Glide DLL checks. Never installs, repairs, patches, or replaces files; if the executable is missing, the OS reports a launch failure. Use only with trusted local game files and DLLs.
+- `--launch-no-verify` (**v2.0.2**): launch the expected installed `splanet/spvoodoo.exe` directly, bypassing all game file existence, integrity, and Glide DLL checks. Never installs, repairs, patches, or replaces files; if the executable is missing, the OS reports a launch failure. Use only with trusted local game files and DLLs.
 - `--install-only`: install without launching, or explicitly migrate a recognized previous game executable.
 - No nGlide flags, registry changes or external wrapper setup.
 
@@ -92,4 +92,4 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
-[v2.0.1 release notes](docs/release-notes-v2.0.1.md) · [Pre-release audit checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+[v2.0.2 release notes](docs/release-notes-v2.0.2.md) · [v2.0.1 historical notes](docs/release-notes-v2.0.1.md) · [Pre-release audit checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
