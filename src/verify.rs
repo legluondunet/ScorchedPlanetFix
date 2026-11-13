@@ -211,13 +211,13 @@ pub fn verify_game_assets(folder:&Path,log:impl FnMut(&str))->Result<Report,Stri
 
 /// Consume the report from an already completed, full game-data audit.
 /// The wrapper is independently validated immediately before spawning.
-pub fn launch_preverified(report:Report,folder:&Path,
+pub fn launch_preverified(report:Report,folder:&Path,session_id:&str,
                            mut log:impl FnMut(&str))->Result<Child,String>{
     log(&format!("LAUNCH: verified {} immutable files for {} before starting game",
         report.checked_files,report.edition));
     let mut command=Command::new(&report.executable);
     command.current_dir(folder);
-    gameframe::configure_process(&mut command,folder,|message|log(message))?;
+    gameframe::configure_process(&mut command,folder,session_id,|message|log(message))?;
     command.spawn()
         .map_err(|e|format!("Unable to launch {}: {e}",report.executable.display()))
 }
@@ -228,7 +228,8 @@ pub fn launch_preverified(report:Report,folder:&Path,
 pub fn launch_verified(folder:&Path,
                        mut log:impl FnMut(&str))->Result<Child,String>{
     let report=verify_install(folder,|message|log(message))?;
-    launch_preverified(report,folder,|message|log(message))
+    let session_id=crate::logger::new_session_id();
+    launch_preverified(report,folder,&session_id,|message|log(message))
 }
 #[cfg(test)]
 mod tests {
