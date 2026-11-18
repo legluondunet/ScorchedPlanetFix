@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify, cue_image};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -185,6 +185,16 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
 /// Standalone --verify is always read-only and never launches a process.
 pub fn verify_only(root: &Path, logger: &Logger,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
+    // Preserve the 3dfx verification path when splanet/ already exists.
+    // In this groundwork stage, Matrox can only be audited read-only;
+    // installing and launching MSI95 will be integrated separately.
+    if !root.join("splanet").exists() && root.join("scorchedplanet-matrox").exists() {
+        let report = matrox::verify_original(&root.join("scorchedplanet-matrox"))?;
+        emit(logger, &mut sink, &format!(
+            "Matrox Mystique OEM: {} original files verified ({} bytes). Playback integration is still pending.",
+            report.files, report.bytes));
+        return Ok(());
+    }
     let report = verify::verify_install(&root.join("splanet"), |msg| logger.write(msg))?;
     emit(logger, &mut sink, &format!(
         "Verification successful: {} — {} files checked ({} bytes); original .bak backup verified.",
@@ -338,6 +348,9 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
     if game.is_symlink() {
         return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
     }
+    if !game.exists() && root.join("scorchedplanet-matrox").exists() {
+        return Err("Matrox OEM installation detected. This development stage supports read-only --verify; MSI95 installation and launch are not yet integrated.".into());
+    }
     if game.exists() {
         if cmd.media.image.is_some() {
             return Err("splanet already exists; refusing to overwrite it with a CD image".into());
@@ -380,7 +393,8 @@ No arguments:
   A missing or different regular Glide DLL is moved to glide.dll.bak.
   An existing regular glide.dll.bak is replaced, never multiplied.
 --verify:
-  Read-only SHA-256 audit of splanet beside this EXE; never plays or modifies.
+  Read-only SHA-256 audit of splanet (3dfx) or an existing scorchedplanet-matrox
+  OEM directory (Matrox; development groundwork only); never plays or modifies.
 --launch-no-verify:
   Start splanet/spvoodoo.exe directly, without checking the presence,
   integrity, hashes, or identity of game files or the Glide DLL.
@@ -534,6 +548,22 @@ mod tests {
         assert!(!events.iter().any(|line|line.contains("Verifying all immutable")));
         assert!(!root.join("splanet").exists());
         assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(),b"corrupted image data");
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn matrox_only_does_not_accidentally_enter_3dfx_install_path() {
+        let root = std::env::temp_dir()
+            .join(format!("scorched-matrox-guard-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("scorchedplanet-matrox")).unwrap();
+        let logger = Logger::new(&root, "test").unwrap();
+        let err = session(&root, &parse_args(&[]).unwrap(), &logger, |_| {}).unwrap_err();
+        assert!(err.contains("Matrox OEM installation detected"), "{err}");
+        assert!(!root.join("splanet").exists());
+        let err = verify_only(&root, &logger, |_| {}).unwrap_err();
+        assert!(err.contains("Cannot inspect") || err.contains("size mismatch"), "{err}");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
     }
