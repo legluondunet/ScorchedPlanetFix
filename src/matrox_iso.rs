@@ -111,8 +111,8 @@ fn record(data: &[u8], joliet: bool) -> Result<Entry, String> {
     }
     let raw_name = name(&data[33..33 + len], joliet)?;
     if !matches!(raw_name.as_str(), "." | "..") &&
-        (raw_name.is_empty() || raw_name.ends_with([' ', '.'])
-        || raw_name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
+        (raw_name.is_empty() || raw_name.ends_with(|c: char| c == ' ' || c == '.')
+        || raw_name.contains(|c: char| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
         || raw_name.chars().any(|c| c.is_control())) {
         return Err(format!("Unsafe Matrox ISO filename: {raw_name:?}"));
     }
