@@ -60,10 +60,21 @@ game or driver binary may be bundled.
    stabilize safe upgrades for previously prepared runtime copies and audit
    performance across longer sessions. Add additional malformed CD/rollback
    tests and Windows 11/Wine 3dfx regression tests.
-5. **Pending end-to-end tests:** real Wine-staging, GE-Proton and Windows 11
-   ISO/IMG installation, window focus, mouse guard, keyboard, Alt-Tab,
-   cinematics, saves, and mission progression, plus 3dfx regression.
-   **No release or merge into main until these pass.**
+5. **First Wine-staging integration test completed (2026-11-18):** existing OEM
+   source and prepared runtime passed 66-file SHA-256 validation, integrated
+   Rust launcher started the game, and embedded MSI95 performed a complete
+   resource cleanup after 6,514 rendered frames (133,968 ms, 2,409,833
+   triangles, 654,991 Z-planes). The driver logged `msiExit` and
+   `SHUTDOWN_COMPLETE`, with no first-chance access violations or errors.
+   Legacy game exit code 1 was observed **with normal MSI95 shutdown** in
+   this session; do not interpret code 1 alone as a crash or as proof of a
+   successful session without the driver log. Startup mouse protection
+   suppressed nine early events, becoming ready at frame 155; FPS cap was
+   active at 60 maximum, with 1,171 paced frames at frame 6300.
+6. **Still pending:** fresh Rust ISO/IMG install under Wine, Windows 11
+   and Proton end-to-end runs; Alt-Tab, videos, saves, full missions,
+   performance and 3dfx regression tests. **No release or merge until these
+   pass.**
 
 ### Development commands
 
