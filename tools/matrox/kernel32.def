@@ -1,0 +1,15 @@
+LIBRARY KERNEL32.dll
+EXPORTS
+ CreateFileA
+ GetTickCount
+ QueryPerformanceCounter
+ QueryPerformanceFrequency
+ Sleep
+ GetEnvironmentVariableA
+ WriteFile
+ CloseHandle
+ GetModuleFileNameA
+ VirtualAlloc
+ VirtualFree
+ AddVectoredExceptionHandler
+ VirtualQuery
