@@ -76,6 +76,17 @@ jobs:
           python tools/gameframe/audit_exports.py $dll 'third_party/game-frame/wrappers/glide/glide2x.def'
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame Glide ABI audit failed' }
 
+      - name: Compile clean-room MSI95 x86 from pinned source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/matrox/build-msi95.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Clean-room MSI95 build failed' }
+          $msi = 'target/matrox-msi95-x86/msi95.dll'
+          python tools/matrox/audit_exports.py $msi
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
+          Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
       - name: Build and test Windows x64 launcher with embedded GameFrame
         shell: pwsh
         run: |
@@ -83,6 +94,9 @@ jobs:
           $dll = 'third_party/game-frame/wrappers/target/i686-pc-windows-msvc/release/glide2x.dll'
           $env:SCORCHED_GAMEFRAME_DLL_PATH = (Resolve-Path $dll).Path
           $env:SCORCHED_GAMEFRAME_SHA256 = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          $msi = 'target/matrox-msi95-x86/msi95.dll'
+          $env:SCORCHED_MSI95_DLL_PATH = (Resolve-Path $msi).Path
+          $env:SCORCHED_MSI95_SHA256 = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant()
           cargo test --locked --target x86_64-pc-windows-msvc --all-targets
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI tests failed' }
           cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
@@ -93,7 +107,7 @@ jobs:
             throw "Unexpected version: $version"
           }
           Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
-          Write-Host "GameFrame-only v2 stable launcher: $version"
+          Write-Host "Dual-backend GameFrame + Matrox experimental launcher: $version"
           $help = (& $exe --help | Out-String)
           if ($LASTEXITCODE -ne 0 -or $help -notmatch 'GameFrame' -or $help -match 'ScorchedPlanetFix.exe --3dfx-logo') {
             throw 'Stable help missing GameFrame or advertising removed nGlide option'
