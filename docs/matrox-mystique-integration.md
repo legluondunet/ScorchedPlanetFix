@@ -1,6 +1,6 @@
 # Matrox Mystique OEM support — proposed v2.1 integration
 
-Status: **draft implementation**, not yet included in a release. This document
+Status: **functional experimental Windows CI build**, not yet included in a stable release. The clean-room MSI95 v0.35 DLL is distributed alongside the test launcher; embedding it into the final single-file launcher is the next step. This document
 tracks the migration of the experimentally validated standalone Matrox MSI95
 adapter into the existing Rust-based `ScorchedPlanetFix.exe`.
 
@@ -38,31 +38,53 @@ with the appropriate x86 DLL unpacked into the correct game directory at
 installation time. The launcher itself remains built in Rust. No proprietary
 game or driver binary may be bundled.
 
-## Stepwise implementation
+## Implementation status (PR #36)
 
-1. **Manifest and installation recognition (this draft).**
-   Add strict read-only SHA-256 verification of the 66 original OEM files.
-   `--verify` recognizes `scorchedplanet-matrox/` only when the existing
-   `splanet/` 3dfx installation is absent. A normal launch explicitly refuses
-   to fall back to the 3dfx installer for that Matrox installation.
-   All existing 3dfx paths remain unchanged.
-2. **Unified installation.** Extend the Rust ISO/CUE installer to detect the
-   Matrox OEM by original file fingerprints; handle raw CloneCD IMG and ISO
-   without trusting filenames or silently replacing an existing installation.
-   Keep a local immutable-original receipt and a separate patched runtime.
-3. **Bundle the clean-room MSI95 renderer.** Port the standalone C shim build
-   to reproducible Windows x86 CI and embed its bytes with SHA-256 and PE
-   verification, like the GameFrame backend. Do not distribute the original OEM
-   Matrox driver. Keep the existing patch in an isolated runtime copy.
-4. **Remove diagnostic constraints.** Replace the time-limited standalone
-   v0.35 Go launcher with Rust process management; the installed game runs
-   until Quit. Keep 60 FPS fixed and the validated rendering defaults:
-   perspective, indexed key, shadow-once and texture modulation. Optional
-   dithering requires a separate visual decision.
-5. **Validation.** Windows 11 + Wine/Proton install/verify/launch and long
-   gameplay; Alt-Tab, Quit, mouse guard, save files, videos, malformed/unknown
-   CDs, error paths, migration, and 3dfx regression tests. Only then publish
-   as 2.1.0.
+1. **Completed, Windows CI-validated:** committed exact OEM manifest; strict Rust
+   `--matrox-verify`; separate `scorchedplanet-matrox/` and
+   `scorchedplanet-matrox-runtime/` trees; exact hash-locked Win95 and
+   FadeLow runtime copy patch; 60 FPS/MSI95 graphics flags; no 300-second
+   diagnostic process kill. Existing 3dfx GameFrame behavior is retained.
+2. **Completed, Windows CI-validated, runtime test pending:** native Rust
+   ISO9660/Joliet importer accepting Mode1/2352 raw CloneCD IMG and standard
+   2048-byte ISO sectors. Strict 66-file size and SHA-256 verification, no
+   arbitrary files accepted, staging and rollback before publication.
+   `--matrox-install image.iso|image.img` installs and plays;
+   `--matrox-install-only` installs originals without playing; an unambiguous
+   Matrox image beside the launcher is auto-detected on fresh installs.
+3. **Prototype package (from CI + tested clean-room v0.35):** Windows x64
+   `ScorchedPlanetFix.exe` alongside the verified 100,352-byte x86
+   `ScorchedPlanetFix_MSI95_v035.dll` (SHA-256
+   `0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e`).
+   The DLL is not a proprietary original Matrox driver.
+4. **Pending:** fold the clean-room MSI95 source and reproducible x86 DLL build
+   into CI; embed the DLL in the Rust launcher and remove the extra test file.
+   Consider converting the experimental high-volume MSI95 logging/snapshots
+   into production-level diagnostics. Add rollback/migration tests for runtime
+   revisions.
+5. **Pending end-to-end tests:** real Wine-staging, GE-Proton and Windows 11
+   ISO/IMG installation, window focus, mouse guard, keyboard, Alt-Tab,
+   cinematics, saves, and mission progression, plus 3dfx regression.
+   **No release or merge into main until these pass.**
+
+### Development commands
+
+```powershell
+# Original OEM already installed in scorchedplanet-matrox/
+.\\ScorchedPlanetFix.exe --matrox-verify
+.\\ScorchedPlanetFix.exe --matrox-prepare
+.\\ScorchedPlanetFix.exe --matrox-play
+
+# New OEM CD image in ISO2048 or IMG2352 format
+.\\ScorchedPlanetFix.exe --matrox-install-only "Scorched Planet Matrox.iso"
+.\\ScorchedPlanetFix.exe --matrox-verify
+.\\ScorchedPlanetFix.exe --matrox-play
+```
+
+The optional clean-room DLL must currently be placed beside the launcher as
+`ScorchedPlanetFix_MSI95_v035.dll` for preparation or gameplay. A `--verify`
+command is strictly read-only and needs no DLL. The Matrox installer does not
+touch `splanet/` or the 3dfx GameFrame wrapper.
 
 ## Installation layout during transition
 
@@ -78,8 +100,7 @@ ScorchedPlanetFix.log
 
 The two directories may coexist in future, but automatic selection when both
 exist must be explicit and deterministic (edition flag or last successful
-selection), not accidental precedence. The current draft handles read-only
-verification of a Matrox-only install; **it does not yet offer Matrox playback**.
+selection), not accidental precedence. The experimental PR supports Matrox runtime installation and launch (pending owner Wine/Windows gameplay validation). Its current test package includes one separate clean-room DLL until automatic embedding is implemented.
 
 No new proprietary assets were committed. The manifest contains only original
 path names, sizes, and cryptographic fingerprints.
