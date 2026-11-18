@@ -1,6 +1,6 @@
 # Matrox Mystique OEM support — proposed v2.1 integration
 
-Status: **functional experimental Windows CI build**, not yet included in a stable release. The clean-room MSI95 v0.35 DLL is distributed alongside the test launcher; embedding it into the final single-file launcher is the next step. This document
+Status: **experimental dual-backend Windows CI build**, not yet included in a stable release. The clean-room MSI95 v0.35 driver is now built from source and embedded alongside GameFrame in one Rust launcher. This document
 tracks the migration of the experimentally validated standalone Matrox MSI95
 adapter into the existing Rust-based `ScorchedPlanetFix.exe`.
 
@@ -52,16 +52,14 @@ game or driver binary may be bundled.
    `--matrox-install image.iso|image.img` installs and plays;
    `--matrox-install-only` installs originals without playing; an unambiguous
    Matrox image beside the launcher is auto-detected on fresh installs.
-3. **Prototype package (from CI + tested clean-room v0.35):** Windows x64
-   `ScorchedPlanetFix.exe` alongside the verified 100,352-byte x86
-   `ScorchedPlanetFix_MSI95_v035.dll` (SHA-256
-   `0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e`).
-   The DLL is not a proprietary original Matrox driver.
-4. **Pending:** fold the clean-room MSI95 source and reproducible x86 DLL build
-   into CI; embed the DLL in the Rust launcher and remove the extra test file.
-   Consider converting the experimental high-volume MSI95 logging/snapshots
-   into production-level diagnostics. Add rollback/migration tests for runtime
-   revisions.
+3. **Completed, Windows CI-validated:** reviewed 116,216-byte C source in
+   `tools/matrox/msi95_probe.c` (hash locked), x86 freestanding DLL compilation,
+   explicit nine-export ABI audit, and embedded GameFrame + MSI95 in **one**
+   Windows x64 executable. There are no proprietary game or Matrox drivers.
+4. **Pending production polish:** reduce experimental MSI95 logging/BMP capture;
+   stabilize safe upgrades for previously prepared runtime copies and audit
+   performance across longer sessions. Add additional malformed CD/rollback
+   tests and Windows 11/Wine 3dfx regression tests.
 5. **Pending end-to-end tests:** real Wine-staging, GE-Proton and Windows 11
    ISO/IMG installation, window focus, mouse guard, keyboard, Alt-Tab,
    cinematics, saves, and mission progression, plus 3dfx regression.
@@ -81,10 +79,9 @@ game or driver binary may be bundled.
 .\\ScorchedPlanetFix.exe --matrox-play
 ```
 
-The optional clean-room DLL must currently be placed beside the launcher as
-`ScorchedPlanetFix_MSI95_v035.dll` for preparation or gameplay. A `--verify`
-command is strictly read-only and needs no DLL. The Matrox installer does not
-touch `splanet/` or the 3dfx GameFrame wrapper.
+The clean-room MSI95 DLL is now **embedded in the executable**. No separate
+driver file is needed. A `--verify` command remains strictly read-only. The
+Matrox installer never touches `splanet/` or its 3dfx GameFrame wrapper.
 
 ## Installation layout during transition
 
@@ -100,7 +97,7 @@ ScorchedPlanetFix.log
 
 The two directories may coexist in future, but automatic selection when both
 exist must be explicit and deterministic (edition flag or last successful
-selection), not accidental precedence. The experimental PR supports Matrox runtime installation and launch (pending owner Wine/Windows gameplay validation). Its current test package includes one separate clean-room DLL until automatic embedding is implemented.
+selection), not accidental precedence. The experimental PR supports Matrox runtime installation and launch (pending owner Wine/Windows gameplay validation) using one executable with both open-source renderers embedded.
 
 No new proprietary assets were committed. The manifest contains only original
 path names, sizes, and cryptographic fingerprints.
