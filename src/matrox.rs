@@ -23,7 +23,7 @@ pub struct VerifiedOem {
     pub bytes: u64,
 }
 
-fn manifest_entries() -> Result<Vec<(&'static str, u64, &'static str)>, String> {
+pub(crate) fn manifest_entries() -> Result<Vec<(&'static str, u64, &'static str)>, String> {
     let mut entries = Vec::new();
     for (line_no, raw) in MANIFEST.lines().enumerate() {
         let raw = raw.trim();
