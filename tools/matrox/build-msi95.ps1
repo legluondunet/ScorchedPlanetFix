@@ -6,17 +6,8 @@ $projectRoot = (Resolve-Path (Join-Path $sourceRoot "../..")).Path
 $build = Join-Path $projectRoot "target/matrox-msi95-x86"
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 
-$encoded = (Get-Content -Raw (Join-Path $sourceRoot "msi95_probe.c.gz.b64")).Trim()
-$compressed = [Convert]::FromBase64String($encoded)
-$inputStream = [IO.MemoryStream]::new($compressed, $false)
-$decompress = [IO.Compression.GZipStream]::new($inputStream, [IO.Compression.CompressionMode]::Decompress)
-$outputStream = [IO.MemoryStream]::new()
-try { $decompress.CopyTo($outputStream) }
-finally { $decompress.Dispose(); $inputStream.Dispose() }
-$source = Join-Path $build "msi95_probe.c"
-[IO.File]::WriteAllBytes($source, $outputStream.ToArray())
-$outputStream.Dispose()
-
+# Use the directly reviewable, hash-locked C source committed to the repo.
+$source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
 $expectedSourceHash = "a1a4291540de851305977fde576df57d42c64600f5abbcc1a2e1c0469d98d666"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
