@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox, matrox_runtime};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox, matrox_runtime, matrox_iso};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -22,6 +22,8 @@ const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe --matrox-verify
   ScorchedPlanetFix.exe --matrox-prepare
   ScorchedPlanetFix.exe --matrox-play
+  ScorchedPlanetFix.exe --matrox-install image.iso|image.img
+  ScorchedPlanetFix.exe --matrox-install-only image.iso|image.img
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
@@ -46,6 +48,8 @@ enum Mode {
     MatroxVerify,
     MatroxPrepare,
     MatroxPlay,
+    MatroxInstall,
+    MatroxInstallOnly,
     Help,
     Version,
 }
@@ -94,6 +98,16 @@ fn parse_args(args:&[OsString])->Result<CommandLine,String>{
         Some("--matrox-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxVerify,media:blank}),
         Some("--matrox-prepare") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxPrepare,media:blank}),
         Some("--matrox-play") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxPlay,media:blank}),
+        Some("--matrox-install" | "--matrox-install-only") if filtered.len()==2=>{
+            let p = PathBuf::from(&filtered[1]);
+            if !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso") || e.eq_ignore_ascii_case("img")) {
+                return Err("Matrox install requires a recognized .iso or raw Mode1/2352 .img".into());
+            }
+            Ok(CommandLine{
+                mode:if name==Some("--matrox-install"){Mode::MatroxInstall}else{Mode::MatroxInstallOnly},
+                media:Media{image:Some(p),bin:None},
+            })
+        },
         Some("--install-only") if filtered.len()==1=>Ok(CommandLine{mode:Mode::InstallOnly,media:blank}),
         Some("--inspect") if (2..=3).contains(&filtered.len())=>{
             let selected=filtered[1..].iter().map(|x|(*x).clone()).collect::<Vec<_>>();
@@ -388,6 +402,16 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
     if cmd.mode == Mode::MatroxPlay {
         return matrox_play(root, logger, sink);
     }
+    if cmd.mode == Mode::MatroxInstall || cmd.mode == Mode::MatroxInstallOnly {
+        let chosen = cmd.media.image.as_ref().ok_or("Matrox CD path missing")?;
+        let source = if chosen.is_absolute() { chosen.clone() } else { root.join(chosen) };
+        matrox_iso::install(root, &source)?;
+        emit(logger, &mut sink, &format!("Verified Matrox OEM CD installed from {}", source.display()));
+        if cmd.mode == Mode::MatroxInstallOnly {
+            return Ok(());
+        }
+        return matrox_play(root, logger, sink);
+    }
     let game = root.join("splanet");
     if game.is_symlink() {
         return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
@@ -411,6 +435,28 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         emit(logger, &mut sink,
             "Existing splanet detected. Game data will not be modified; checking all hashes before play.");
     } else {
+        // Recognize a unique Matrox OEM ISO/IMG before the legacy 3dfx
+        // installer, but never guess when multiple supported OEM discs exist.
+        let mut matrox_images = Vec::new();
+        for found in fs::read_dir(root).map_err(|e| e.to_string())? {
+            let found = found.map_err(|e| e.to_string())?;
+            let path = found.path();
+            if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("iso") || ext.eq_ignore_ascii_case("img"))
+                && matrox_iso::recognized(&path) {
+                matrox_images.push(path);
+            }
+        }
+        if matrox_images.len() > 1 {
+            return Err("Multiple Matrox OEM ISO/IMG files detected; use --matrox-install with an explicit path".into());
+        }
+        if let Some(image) = matrox_images.pop() {
+            matrox_iso::install(root, &image)?;
+            emit(logger, &mut sink, &format!("Matrox Mystique OEM automatically recognized and verified from {}", image.display()));
+            if cmd.mode == Mode::InstallOnly {
+                return Ok(());
+            }
+            return matrox_play(root, logger, sink);
+        }
         let images = media_arguments(&cmd.media, root);
         run(&images, root, logger, |line| sink(line))?;
         if cmd.mode == Mode::InstallOnly {
@@ -450,7 +496,12 @@ No arguments:
   ScorchedPlanetFix_MSI95_v035.dll beside the launcher (no original Matrox DLL).
   It creates scorchedplanet-matrox-runtime without modifying OEM original files.
   Matrox games run without the standalone probe's 300-second timeout.
-  Matrox CD installation and automated DLL bundling are pending.
+  Matrox ISO/IMG installation is integrated. The clean-room DLL remains
+  separately supplied for now; automatic DLL bundling is still pending.
+--matrox-install image.iso|image.img:
+  Verify and extract a recognized OEM CD, prepare the isolated runtime, then play.
+--matrox-install-only image.iso|image.img:
+  Verify and extract OEM original data without launching or requiring MSI95.
 --launch-no-verify:
   Start splanet/spvoodoo.exe directly, without checking the presence,
   integrity, hashes, or identity of game files or the Glide DLL.
@@ -519,6 +570,8 @@ mod tests {
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
+        assert_eq!(parse_args(&args(&["--matrox-install", "oem.iso"])).unwrap().mode, Mode::MatroxInstall);
+        assert_eq!(parse_args(&args(&["--matrox-install-only", "oem.img"])).unwrap().mode, Mode::MatroxInstallOnly);
         for (cmd, mode) in [
             ("--matrox-play", Mode::MatroxPlay),
             ("--matrox-prepare", Mode::MatroxPrepare),
@@ -552,7 +605,7 @@ mod tests {
     fn usage_has_no_legacy_launch_option() {
         let h = help("2.0.2-deadbeef");
         for word in ["2.0.2-deadbeef", "--install-only", "--verify", "--launch-no-verify",
-                     "--matrox-play", "--matrox-prepare", "--matrox-verify",
+                     "--matrox-play", "--matrox-prepare", "--matrox-verify", "--matrox-install",
                      "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
