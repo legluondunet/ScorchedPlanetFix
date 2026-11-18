@@ -13,6 +13,31 @@ const RUNTIME_FOLDER: &str = "scorchedplanet-matrox-runtime";
 const STAGE_FOLDER: &str = ".scorchedplanet-matrox-runtime-staging";
 const DLL_SOURCE_NAME: &str = "ScorchedPlanetFix_MSI95_v035.dll";
 const DLL_SHA: &str = "0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e";
+#[cfg(matrox_embedded)]
+const MSI95_DRIVER: &[u8] = include_bytes!(env!("SCORCHED_MSI95_DLL_PATH"));
+#[cfg(not(matrox_embedded))]
+const MSI95_DRIVER: &[u8] = &[];
+
+fn expected_driver_hash() -> &'static str {
+    option_env!("SCORCHED_MSI95_SHA256").unwrap_or(DLL_SHA)
+}
+fn cleanroom_driver(root: &Path) -> Result<Vec<u8>, String> {
+    let bytes = if MSI95_DRIVER.is_empty() {
+        let supplied = root.join(DLL_SOURCE_NAME);
+        safe_regular(&supplied)?;
+        fs::read(&supplied)
+            .map_err(|e| format!("Cannot read clean-room MSI95 driver {}: {e}", supplied.display()))?
+    } else {
+        MSI95_DRIVER.to_vec()
+    };
+    if digest(&bytes) != expected_driver_hash() {
+        return Err(format!("MSI95 clean-room DLL SHA-256 mismatch; expected {}", expected_driver_hash()));
+    }
+    if bytes.len() < 4096 || !bytes.starts_with(b"MZ") {
+        return Err("Embedded MSI95 is not a valid PE DLL".into());
+    }
+    Ok(bytes)
+}
 const PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
 const PATCH_MARKER: &str = "scorchedplanetfix-matrox-oem-runtime-1\n";
 const WIN95_OFFSET: usize = 0x1579b;
@@ -92,7 +117,7 @@ pub fn verify_prepared(root: &Path) -> Result<(), String> {
     for (original_sha, bytes, rel) in matrox::manifest_entries()? {
         let expected = match rel {
             "splanetw.exe" => PATCHED_EXE_SHA,
-            "msi95.dll" => DLL_SHA,
+            "msi95.dll" => expected_driver_hash(),
             _ => original_sha
         };
         let path = runtime.join(rel);
@@ -114,9 +139,9 @@ pub fn verify_prepared(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Stages a complete isolated runtime and publishes it only after verification.
-/// The caller must supply the exact clean-room MSI95 v0.35 DLL alongside the
-/// launcher; this temporary requirement will be removed when CI embeds MSI95.
+/// Stage a complete isolated runtime, then publish after verifying every file.
+/// Production CI embeds the source-built clean-room x86 MSI95 DLL. Only older
+/// external development builds require a separate v0.35 DLL beside the EXE.
 pub fn prepare(root: &Path) -> Result<PathBuf, String> {
     let original = root.join(OEM_FOLDER);
     matrox::verify_original(&original)?;
@@ -125,10 +150,7 @@ pub fn prepare(root: &Path) -> Result<PathBuf, String> {
         verify_prepared(root)?;
         return Ok(runtime);
     }
-    let provided_dll = root.join(DLL_SOURCE_NAME);
-    if hash_file(&provided_dll)? != DLL_SHA {
-        return Err(format!("Expected the clean-room MSI95 v0.35 DLL (SHA-256 {}) at {}; original proprietary msi95.dll is not permitted", DLL_SHA, provided_dll.display()));
-    }
+    let driver = cleanroom_driver(root)?;
     let stage = root.join(STAGE_FOLDER);
     // Never remove a pre-existing staging path: it may contain user data.
     if fs::symlink_metadata(&stage).is_ok() {
@@ -144,8 +166,10 @@ pub fn prepare(root: &Path) -> Result<PathBuf, String> {
             match rel {
                 "splanetw.exe" => patch_executable(&original.join(rel), &target)?,
                 "msi95.dll" => {
-                    fs::copy(&provided_dll, &target)
-                        .map_err(|e| format!("Cannot copy clean-room MSI95 DLL: {e}"))?;
+                    let mut file = OpenOptions::new().write(true).create_new(true).open(&target)
+                        .map_err(|e| format!("Cannot stage embedded MSI95 DLL: {e}"))?;
+                    file.write_all(&driver).map_err(|e| e.to_string())?;
+                    file.sync_all().map_err(|e| e.to_string())?;
                 },
                 _ => {
                     fs::copy(original.join(rel), &target)
@@ -165,7 +189,7 @@ pub fn prepare(root: &Path) -> Result<PathBuf, String> {
         for (sha, bytes, rel) in matrox::manifest_entries()? {
             let expect = match rel {
                 "splanetw.exe" => PATCHED_EXE_SHA,
-                "msi95.dll" => DLL_SHA,
+                "msi95.dll" => expected_driver_hash(),
                 _ => sha,
             };
             let path = stage.join(rel);
