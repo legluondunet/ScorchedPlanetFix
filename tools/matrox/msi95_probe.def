@@ -1,0 +1,11 @@
+LIBRARY MSI95.dll
+EXPORTS
+ msiAllocTextureHeap
+ msiEndFrame
+ msiExit
+ msiFreeTextureHeap
+ msiInit
+ msiRenderTriangle
+ msiRenderZPlane
+ msiSetParameters
+ msiStartFrame
