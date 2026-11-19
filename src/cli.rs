@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox, matrox_runtime, matrox_iso, settings};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox_runtime, matrox_iso, settings, layout};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -61,34 +61,38 @@ enum InstalledEdition {
 }
 
 fn installation_kind(root: &Path) -> Result<Option<InstalledEdition>, String> {
-    let retail = root.join("splanet");
-    let matrox = root.join("scorchedplanet-matrox");
-    // These are fixed installation directories, never user-provided paths.
-    let check = |path: &Path| -> Result<bool, String> {
-        match fs::symlink_metadata(path) {
-            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => Ok(true),
-            Ok(_) => Err(format!("Installation path is not a regular directory: {}", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(format!("Cannot inspect installation {}: {e}", path.display())),
-        }
-    };
-    let retail_present = check(&retail)?;
-    let matrox_present = check(&matrox)?;
-    // A leftover prepared Matrox runtime is not a complete installation.
-    // Refuse to treat it as a clean folder for a different edition.
-    if !matrox_present {
-        let runtime = root.join("scorchedplanet-matrox-runtime");
-        match fs::symlink_metadata(&runtime) {
-            Ok(_) => return Err("An orphaned Matrox runtime exists without its original game installation. No new edition will be installed until it is moved out of this folder.".into()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-            Err(e) => return Err(format!("Cannot inspect Matrox runtime directory: {e}")),
+    // A new-layout installation is isolated from the old layout. Automatic
+    // migration of old splanet/ and dual Matrox folders is not supported.
+    for legacy in ["splanet","scorchedplanet-matrox","scorchedplanet-matrox-runtime"] {
+        let path=root.join(legacy);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => return Err(format!(
+                "Legacy installation {} detected. To protect game saves and previous installs, ScorchedPlanetFix does not migrate folders automatically. Use a separate new-layout directory.",path.display())),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(e)=>return Err(format!("Cannot inspect legacy path {}: {e}",path.display())),
         }
     }
-    match (retail_present, matrox_present) {
-        (false, false) => Ok(None),
-        (true, false) => Ok(Some(InstalledEdition::Retail3dfx)),
-        (false, true) => Ok(Some(InstalledEdition::MatroxOem)),
-        (true, true) => Err("Two game installations found (splanet/ and scorchedplanet-matrox/). ScorchedPlanetFix manages only one edition. Move the unwanted installation out of the launcher folder; nothing was changed.".into()),
+    let game=root.join(layout::GAME);
+    match fs::symlink_metadata(&game){
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink()=>{},
+        Ok(_)=>return Err(format!("game/ is not a regular directory: {}",game.display())),
+        Err(e)=>return Err(format!("Cannot inspect game/: {e}")),
+    }
+    let executable = |name:&str|->Result<bool,String>{
+        let path=game.join(name);
+        match fs::symlink_metadata(&path){
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink()=>Ok(true),
+            Ok(_)=>Err(format!("Unsafe game executable: {}",path.display())),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(false),
+            Err(e)=>Err(format!("Cannot inspect {}: {e}",path.display())),
+        }
+    };
+    match (executable("spvoodoo.exe")?,executable("splanetw.exe")?){
+        (true,false)=>Ok(Some(InstalledEdition::Retail3dfx)),
+        (false,true)=>Ok(Some(InstalledEdition::MatroxOem)),
+        (true,true)=>Err("Two game editions detected inside game/. Exactly one game executable is supported; no files were changed.".into()),
+        (false,false)=>Err("Unrecognized game/ installation: missing supported executable; refusing automatic overwrite".into()),
     }
 }
 
@@ -171,13 +175,13 @@ fn emit(logger: &Logger, sink: &mut impl FnMut(&str), msg: &str) {
 pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
     let media = parse_media(arguments)?;
-    let install = root.join("splanet");
+    let install = root.join(layout::GAME);
     if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
-        return Err("A Matrox edition is already installed; refusing retail 3dfx installation".into());
+        return Err("A Matrox edition is already installed in game/; refusing retail 3dfx installation".into());
     }
     if install.exists() {
         if media.image.is_some() {
-            return Err("The splanet directory already exists: extraction refused; no files were overwritten".into());
+            return Err("The game/ directory already exists: extraction refused; no files were overwritten".into());
         }
         let exe = scorched_planet_fix::find_installed_exe(&install)?;
         // --install-only must refuse an unsupported wrapper *before* any
@@ -194,6 +198,8 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
         gameframe::ensure_glide(root, &install, |message| logger.write(message))?;
         emit(logger, &mut sink, &outcome);
         emit(logger, &mut sink, &format!("Portable configuration: video= video, language={language}"));
+        settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
+        layout::ensure_support_files(root,"retail")?;
         emit(logger, &mut sink, &format!("Migration complete. Original backup preserved: {}.bak", exe.display()));
         return Ok(());
     }
@@ -218,7 +224,9 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
     emit(logger, &mut sink, &format!(
         "Detected edition: {}. {} files, {} game data bytes.",
         report.edition, report.files, report.bytes));
-    emit(logger, &mut sink, "Backup: splanet/spvoodoo.exe.bak");
+    settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
+    layout::ensure_support_files(root,"retail")?;
+    emit(logger, &mut sink, "Backup: game/spvoodoo.exe.bak");
     emit(logger, &mut sink, &format!("Automatic patch: {}", report.patch_report));
     emit(logger, &mut sink, "Installation and patching completed.");
     Ok(())
@@ -231,7 +239,8 @@ pub fn verify_only(root: &Path, logger: &Logger,
     if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
         return matrox_verify(root, logger, sink);
     }
-    let report = verify::verify_install(&root.join("splanet"), |msg| logger.write(msg))?;
+    let report = verify::verify_install(&root.join(layout::GAME), |msg| logger.write(msg))?;
+    let _ = settings::read_settings(&root.join(layout::CONFIG))?;
     emit(logger, &mut sink, &format!(
         "Verification successful: {} — {} files checked ({} bytes); original .bak backup verified.",
         report.edition, report.checked_files, report.checked_bytes));
@@ -241,24 +250,21 @@ pub fn verify_only(root: &Path, logger: &Logger,
 /// Read-only verification for an automatically selected Matrox installation.
 fn matrox_verify(root: &Path, logger: &Logger,
                  mut sink: impl FnMut(&str)) -> Result<(), String> {
-    let report = matrox::verify_original(&root.join("scorchedplanet-matrox"))?;
-    emit(logger, &mut sink, &format!(
-        "Matrox Mystique OEM original: {} files and {} bytes verified.",
-        report.files, report.bytes));
-    if root.join("scorchedplanet-matrox-runtime").exists() {
-        matrox_runtime::verify_prepared(root)?;
-        emit(logger, &mut sink, "Matrox runtime: isolated EXE and clean-room MSI95 DLL verified.");
-    }
+    matrox_runtime::verify_prepared(root)?;
+    let _ = settings::read_settings(&root.join(layout::CONFIG))?;
+    emit(logger, &mut sink, "Matrox game/: all immutable OEM files, original backups, patched EXE and clean-room MSI95 DLL verified.");
     Ok(())
 }
 
 /// Prepare the isolated Matrox runtime, then start the user-owned OEM game.
 fn matrox_play(root: &Path, logger: &Logger,
                mut sink: impl FnMut(&str)) -> Result<(), String> {
-    emit(logger, &mut sink, "Preparing or verifying isolated Matrox Mystique OEM runtime...");
+    emit(logger, &mut sink, "Verifying Matrox Mystique OEM edition inside game/...");
     let runtime = matrox_runtime::prepare(root)?;
-    emit(logger, &mut sink, &format!("Verified Matrox runtime: {}", runtime.display()));
-    emit(logger, &mut sink, "Starting Matrox MSI95 backend (60 FPS max; no diagnostic time limit)...");
+    layout::ensure_support_files(root,"matrox")?;
+    emit(logger, &mut sink, &format!("Verified Matrox game: {}", runtime.display()));
+    emit(logger, &mut sink, "Starting Matrox MSI95 backend (shared INI FPSLimit; no diagnostic time limit)...");
+    logger.reset_renderer_log(root)?;
     let mut child = matrox_runtime::spawn(root)?;
     emit(logger, &mut sink, &format!("Matrox game started, PID {}.", child.id()));
     wait_for_game(&mut child, logger, sink)
@@ -270,7 +276,7 @@ fn matrox_play(root: &Path, logger: &Logger,
 fn verify_and_play(root: &Path, logger: &Logger,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
     emit(logger, &mut sink, "Verifying all immutable game files before launch...");
-    let game=root.join("splanet");
+    let game=root.join(layout::GAME);
     // Verify the complete game first, with no changes to any original data.
     // Provisioning the required embedded GameFrame DLL is permitted only
     // once this edition's executable, original backup, INI and game-data
@@ -278,8 +284,10 @@ fn verify_and_play(root: &Path, logger: &Logger,
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
     // The game INI is mutable, unlike immutable game assets. Fill only
     // missing FPS defaults; never overwrite a user's configured frame cap.
-    settings::ensure_defaults(&game.join("splanet.ini"),false)?;
+    settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
+    layout::ensure_support_files(root,"retail")?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
+    logger.reset_renderer_log(root)?;
     let mut child=verify::launch_preverified(report,&game,logger.session_id(),
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
@@ -293,15 +301,16 @@ fn verify_and_play(root: &Path, logger: &Logger,
 /// target path when spawning (and reports missing executables normally).
 fn launch_unchecked(root: &Path, logger: &Logger,
                     mut sink: impl FnMut(&str)) -> Result<(), String> {
-    let game = root.join("splanet");
+    let game = root.join(layout::GAME);
     // Even unchecked mode refuses conflicting installations, without
     // game file hashing, runtime preparation, installation or repair.
     if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
-        let executable = root.join("scorchedplanet-matrox-runtime").join("splanetw.exe");
+        let executable = game.join("splanetw.exe");
         emit(logger, &mut sink,
             "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
         emit(logger, &mut sink,
             &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
+        logger.reset_renderer_log(root)?;
         let mut child = matrox_runtime::spawn_unchecked(root)?;
         emit(logger, &mut sink,
             &format!("Matrox game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
@@ -316,6 +325,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     command.current_dir(&game);
     gameframe::configure_process_unchecked(&mut command, &game, logger.session_id(),
         |message| logger.write(message))?;
+    logger.reset_renderer_log(root)?;
     let mut child = command.spawn()
         .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
     emit(logger, &mut sink,
@@ -422,25 +432,26 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
     }
     // One ScorchedPlanetFix invocation manages exactly one installed edition.
     let installed = installation_kind(root)?;
-    let game = root.join("splanet");
+    let game = root.join(layout::GAME);
     if installed == Some(InstalledEdition::MatroxOem) {
         if cmd.mode == Mode::InstallOnly {
             let runtime = matrox_runtime::prepare(root)?;
-            emit(logger, &mut sink, &format!("Matrox runtime prepared: {}", runtime.display()));
+            layout::ensure_support_files(root,"matrox")?;
+            emit(logger, &mut sink, &format!("Matrox game prepared: {}", runtime.display()));
             return Ok(());
         }
         return matrox_play(root, logger, sink);
     }
     if installed == Some(InstalledEdition::Retail3dfx) {
         if cmd.media.image.is_some() {
-            return Err("splanet already exists; refusing to overwrite it with a CD image".into());
+            return Err("game/ already exists; refusing to overwrite it with a CD image".into());
         }
         if cmd.mode == Mode::InstallOnly {
             emit(logger, &mut sink, "Install-only mode: checking and migrating recognized existing files.");
             return run(&[], root, logger, sink);
         }
         emit(logger, &mut sink,
-            "Existing splanet detected. Game data will not be modified; checking all hashes before play.");
+            "Existing game/ (retail 3dfx) detected. Game data will not be modified; checking all hashes before play.");
     } else {
         // Prefer a safe CUE descriptor for its referenced raw IMG. The IMG
         // itself must not be counted a second time as another Matrox disc.
@@ -482,6 +493,8 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             matrox_iso::install_media(root, &image, None)?;
             emit(logger, &mut sink, &format!("Matrox Mystique OEM automatically recognized and verified from {}", image.display()));
             if cmd.mode == Mode::InstallOnly {
+                settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
+                layout::ensure_support_files(root,"matrox")?;
                 return Ok(());
             }
             return matrox_play(root, logger, sink);
@@ -506,8 +519,8 @@ No arguments:
   and play. Otherwise detect one recognized ISO/CUE/BIN/IMG disc image,
   install, prepare the matching renderer and play.
   Only one installed edition is supported. Reuse the existing one even
-  if a CD image is present. When two installation folders are detected,
-  refuse without launching or modifying either installation.
+  if a CD image is present. A single game/ directory holds one edition.
+  Legacy installations are never moved automatically; use a fresh directory.
   Damaged or unknown existing installs are never overwritten or launched.
 --inspect image.iso / image.cue [track.bin|track.img]:
   Inspect unsupported discs and write ScorchedPlanetFix_inspect.log.
@@ -515,22 +528,22 @@ No arguments:
   Extra diagnostics, combinable with commands.
 --install-only:
   Install the automatically recognized edition without launching or safely
-  migrate an existing installation. Original Matrox OEM data is never patched
-  in place. Retail Glide backup rules remain unchanged.
+  migrate an existing new-layout installation. Matrox OEM originals are kept
+  as .bak inside game/. Retail Glide backup rules remain unchanged.
 --verify:
   Read-only SHA-256 audit of the automatically selected installed edition,
-  including the Matrox prepared runtime if present; never plays or modifies.
+  including Matrox original backups and current MSI95 DLL; never modifies.
   GameFrame (retail) and MSI95 (Matrox) are bundled; no extra DLL is needed.
 --launch-no-verify:
   Launch the selected installed edition without verifying game or renderer
   hashes, installing, preparing, patching or repairing any files.
-  The Matrox runtime must already have been prepared. For trusted files only.
+  The Matrox game/ must already be prepared. For trusted files only.
 --help / --version:
   Show usage or executable version without running the game.
 
 Retail 3dfx uses bundled GameFrame; Matrox OEM uses bundled open-source MSI95.
   At normal launch, after verifying immutable game files, an older or
-  unknown regular splanet/glide.dll is moved to glide.dll.bak,
+  unknown regular game/glide.dll is moved to glide.dll.bak,
   replacing any previous regular backup rather than adding more files.
   The embedded GameFrame DLL is installed and verified before play.
   This backup replacement and both DLL hashes are logged.
@@ -539,7 +552,8 @@ Retail 3dfx uses bundled GameFrame; Matrox OEM uses bundled open-source MSI95.
 
 Installer/launcher diagnostics and hardware inventory go to
 ScorchedPlanetFix_installer.log beside this EXE. During gameplay, the
-bundled GameFrame DLL writes ScorchedPlanetFix.log in the same directory.
+selected renderer writes ScorchedPlanetFix.log in the same directory.
+ScorchedPlanetFix.ini configures FPSLimit and Matrox Dither for both.
 Both logs share a session_id. No proprietary game files are redistributed.")
 }
 
@@ -560,7 +574,7 @@ pub fn dispatch(arguments: &[OsString], version: &str) -> Result<(), String> {
     logger.system_information();
     if verbose {
         let line=format!("VERBOSE: mode={:?} root={} game={}",
-            cmd.mode,root.display(),root.join("splanet").display());
+            cmd.mode,root.display(),root.join(layout::GAME).display());
         println!("{line}");
         logger.write(&line);
     }
@@ -650,16 +664,16 @@ mod tests {
     fn existing_unverified_install_is_never_replaced_by_media() {
         let root = std::env::temp_dir().join(format!("scorched-autostart-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("splanet")).unwrap();
-        fs::write(root.join("splanet/spvoodoo.exe"), b"unknown game exe").unwrap();
+        fs::create_dir_all(root.join("game")).unwrap();
+        fs::write(root.join("game/spvoodoo.exe"), b"unknown game exe").unwrap();
         fs::write(root.join("DISC.ISO"), b"not-a-real-disc").unwrap();
         let logger = Logger::new(&root, "test").unwrap();
         let no_args = parse_args(&[]).unwrap();
         let error = session(&root, &no_args, &logger, |_| {}).unwrap_err();
         assert!(error.contains("Unrecognized") || error.contains("Unknown") || error.contains("invalid"), "{error}");
         assert!(parse_args(&args(&["DISC.ISO"])).is_err());
-        assert_eq!(fs::read(root.join("splanet/spvoodoo.exe")).unwrap(), b"unknown game exe");
-        assert!(!root.join("splanet/spvoodoo.exe.bak").exists());
+        assert_eq!(fs::read(root.join("game/spvoodoo.exe")).unwrap(), b"unknown game exe");
+        assert!(!root.join("game/spvoodoo.exe.bak").exists());
         assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(), b"not-a-real-disc");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
@@ -678,7 +692,7 @@ mod tests {
         assert!(error.contains("Unable to launch unchecked game"),"{error}");
         assert!(events.iter().any(|line|line.contains("UNVERIFIED LAUNCH")));
         assert!(!events.iter().any(|line|line.contains("Verifying all immutable")));
-        assert!(!root.join("splanet").exists());
+        assert!(!root.join("game").exists());
         assert_eq!(fs::read(root.join("DISC.ISO")).unwrap(),b"corrupted image data");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
@@ -686,66 +700,83 @@ mod tests {
 
     #[test]
     fn unchecked_launch_auto_selects_matrox_and_rejects_two_installations() {
-        let root = std::env::temp_dir()
-            .join(format!("scorched-matrox-unchecked-selection-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("scorchedplanet-matrox")).unwrap();
-        fs::write(root.join("scorchedplanet-matrox/sentinel"), b"untouched").unwrap();
-        let logger = Logger::new(&root, "test").unwrap();
-        let mode = parse_args(&args(&["--launch-no-verify"])).unwrap();
-        // No retail install: Matrox is selected, but missing runtime is never
-        // silently prepared or verified in the explicit debug/unchecked mode.
-        let err = session(&root, &mode, &logger, |_| {}).unwrap_err();
-        assert!(err.contains("Cannot launch Matrox Mystique OEM"), "{err}");
-        assert!(!root.join("scorchedplanet-matrox-runtime").exists());
-        assert_eq!(fs::read(root.join("scorchedplanet-matrox/sentinel")).unwrap(), b"untouched");
-        // Both editions present: refuse every mode, never guess or overwrite.
-        fs::create_dir_all(root.join("splanet")).unwrap();
-        let err = session(&root, &mode, &logger, |_| {}).unwrap_err();
-        assert!(err.contains("Two game installations"), "{err}");
-        assert!(verify_only(&root, &logger, |_| {}).unwrap_err()
-            .contains("Two game installations"));
-        assert!(session(&root, &parse_args(&[]).unwrap(), &logger, |_| {})
-            .unwrap_err().contains("Two game installations"));
-        assert!(session(&root, &parse_args(&args(&["--install-only"])).unwrap(),
-            &logger, |_| {}).unwrap_err().contains("Two game installations"));
-        assert!(!root.join("scorchedplanet-matrox-runtime").exists());
-        assert_eq!(fs::read(root.join("scorchedplanet-matrox/sentinel")).unwrap(), b"untouched");
+        let root=std::env::temp_dir().join(format!(
+            "scorched-single-game-unchecked-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("game")).unwrap();
+        fs::write(root.join("game/splanetw.exe"),b"synthetic Matrox executable").unwrap();
+        fs::write(root.join("game/sentinel"),b"untouched").unwrap();
+        let logger=Logger::new(&root,"test").unwrap();
+        let mode=parse_args(&args(&["--launch-no-verify"])).unwrap();
+        let err=session(&root,&mode,&logger,|_|{}).unwrap_err();
+        assert!(err.contains("Cannot launch Matrox Mystique OEM"),"{err}");
+        assert_eq!(fs::read(root.join("game/sentinel")).unwrap(),b"untouched");
+        // Exactly one executable may appear inside game/. Refuse a collision
+        // for launch, verify, and install-only without modifying either file.
+        fs::write(root.join("game/spvoodoo.exe"),b"conflicting retail executable").unwrap();
+        for mode in [&mode,&parse_args(&args(&["--install-only"])).unwrap(),
+                     &parse_args(&[]).unwrap()] {
+            let error=session(&root,mode,&logger,|_|{}).unwrap_err();
+            assert!(error.contains("Two game editions"),"{error}");
+        }
+        assert!(verify_only(&root,&logger,|_|{}).unwrap_err()
+            .contains("Two game editions"));
+        assert_eq!(fs::read(root.join("game/sentinel")).unwrap(),b"untouched");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn installed_edition_must_be_unique() {
-        let root = std::env::temp_dir()
-            .join(format!("scorched-unique-edition-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root=std::env::temp_dir().join(format!(
+            "scorched-unique-game-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        assert_eq!(installation_kind(&root).unwrap(), None);
-        fs::create_dir(root.join("splanet")).unwrap();
-        assert_eq!(installation_kind(&root).unwrap(), Some(InstalledEdition::Retail3dfx));
-        fs::create_dir(root.join("scorchedplanet-matrox")).unwrap();
-        assert!(installation_kind(&root).unwrap_err().contains("Two game installations"));
-        assert!(root.join("splanet").exists());
-        assert!(root.join("scorchedplanet-matrox").exists());
-        fs::remove_dir(root.join("splanet")).unwrap();
-        assert_eq!(installation_kind(&root).unwrap(), Some(InstalledEdition::MatroxOem));
+        assert_eq!(installation_kind(&root).unwrap(),None);
+        fs::create_dir(root.join("game")).unwrap();
+        assert!(installation_kind(&root).unwrap_err().contains("Unrecognized game/"));
+        fs::write(root.join("game/spvoodoo.exe"),b"retail").unwrap();
+        assert_eq!(installation_kind(&root).unwrap(),Some(InstalledEdition::Retail3dfx));
+        fs::write(root.join("game/splanetw.exe"),b"matrox").unwrap();
+        assert!(installation_kind(&root).unwrap_err().contains("Two game editions"));
+        fs::remove_file(root.join("game/spvoodoo.exe")).unwrap();
+        assert_eq!(installation_kind(&root).unwrap(),Some(InstalledEdition::MatroxOem));
+        assert!(root.join("game/splanetw.exe").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn matrox_only_does_not_accidentally_enter_3dfx_install_path() {
-        let root = std::env::temp_dir()
-            .join(format!("scorched-matrox-guard-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("scorchedplanet-matrox")).unwrap();
-        let logger = Logger::new(&root, "test").unwrap();
-        let err = session(&root, &parse_args(&[]).unwrap(), &logger, |_| {}).unwrap_err();
-        assert!(err.contains("Cannot inspect") || err.contains("size mismatch"), "{err}");
-        assert!(!root.join("splanet").exists());
-        let err = verify_only(&root, &logger, |_| {}).unwrap_err();
-        assert!(err.contains("Cannot inspect") || err.contains("size mismatch"), "{err}");
+        let root=std::env::temp_dir().join(format!(
+            "scorched-matrox-new-layout-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("game")).unwrap();
+        fs::write(root.join("game/splanetw.exe"),b"unverified matrox").unwrap();
+        let logger=Logger::new(&root,"test").unwrap();
+        let err=session(&root,&parse_args(&[]).unwrap(),&logger,|_|{}).unwrap_err();
+        assert!(err.contains("Cannot inspect") || err.contains("size mismatch"),"{err}");
+        assert!(!root.join("game/spvoodoo.exe").exists());
+        let err=verify_only(&root,&logger,|_|{}).unwrap_err();
+        assert!(err.contains("Cannot inspect") || err.contains("size mismatch"),"{err}");
         drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn old_layout_is_not_migrated_or_deleted() {
+        let root=std::env::temp_dir().join(format!(
+            "scorched-legacy-protect-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for folder in ["splanet","scorchedplanet-matrox","scorchedplanet-matrox-runtime"] {
+            let legacy=root.join(folder);
+            fs::create_dir(&legacy).unwrap();
+            fs::write(legacy.join("save.sav"),b"KEEP ORIGINAL DATA").unwrap();
+            assert!(installation_kind(&root).unwrap_err().contains("Legacy installation"));
+            assert!(!root.join("game").exists());
+            assert_eq!(fs::read(legacy.join("save.sav")).unwrap(),b"KEEP ORIGINAL DATA");
+            fs::remove_dir_all(&legacy).unwrap();
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -757,7 +788,7 @@ mod tests {
         let logger = Logger::new(&root, "test").unwrap();
         let error = session(&root, &parse_args(&[]).unwrap(), &logger, |_| {}).unwrap_err();
         assert!(error.contains("No ISO/CUE disc image"), "{error}");
-        assert!(!root.join("splanet").exists());
+        assert!(!root.join("game").exists());
         drop(logger);
         fs::remove_dir_all(root).unwrap();
     }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Single game INI configuration shared by retail GameFrame and Matrox MSI95.
-//! FPSLimit lives in the existing [scorch] section; Matrox-only effects in [matrox].
+//! User-owned ScorchedPlanetFix.ini beside the launcher, shared by all editions.
+//! Native game/splanet.ini is separate and never used for fix-specific options.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -26,11 +26,11 @@ fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
                 return Err(format!("Configuration must be a regular INI file: {}", path.display()));
             }
             if meta.len() > MAX_INI_SIZE as u64 {
-                return Err("splanet.ini exceeds the 256 KiB limit".into());
+                return Err("ScorchedPlanetFix.ini exceeds the 256 KiB limit".into());
             }
             let bytes = fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
             if bytes.len() > MAX_INI_SIZE {
-                return Err("splanet.ini exceeds the 256 KiB limit".into());
+                return Err("ScorchedPlanetFix.ini exceeds the 256 KiB limit".into());
             }
             Ok(Some(bytes))
         }
@@ -92,8 +92,8 @@ fn parse(bytes: &[u8]) -> Result<(GameSettings, Presence), String> {
     Ok((settings, present))
 }
 
-/// A missing INI in explicit unchecked mode retains the original 60 FPS
-/// default. Normal verified launches already require the game INI to exist.
+/// Missing fixer INI defaults to 60 FPS and Matrox dither OFF. Normal
+/// launcher startup creates it when needed; --verify and unchecked do not.
 pub fn read_settings(path: &Path) -> Result<GameSettings, String> {
     match read_bytes(path)? {
         Some(bytes) => Ok(parse(&bytes)?.0),
@@ -112,8 +112,9 @@ fn append_line(out: &mut Vec<u8>, line: &[u8]) {
 /// Called only during installation/preparation or verified normal launch;
 /// --verify and --launch-no-verify never call it.
 pub fn ensure_defaults(path: &Path, matrox: bool) -> Result<(), String> {
-    let original = read_bytes(path)?.ok_or_else(|| format!("Missing game INI: {}", path.display()))?;
-    let (_, present) = parse(&original)?;
+    let existing = read_bytes(path)?;
+    let original = existing.as_deref().unwrap_or(b"");
+    let (_, present) = parse(original)?;
     let add_fps = !present.fps;
     let add_dither = matrox && !present.dither;
     if !add_fps && !add_dither { return Ok(()); }
@@ -160,7 +161,7 @@ pub fn ensure_defaults(path: &Path, matrox: bool) -> Result<(), String> {
         append_line(&mut out, b"Dither=0");
     }
     if out.len() > MAX_INI_SIZE { return Err("Adding settings would exceed INI size limit".into()); }
-    if parse(&out)?.0 != parse(&original)?.0 {
+    if parse(&out)?.0 != parse(original)?.0 {
         return Err("INI migration changed an existing value; refusing".into());
     }
     let temporary = path.with_file_name(format!(
@@ -172,8 +173,10 @@ pub fn ensure_defaults(path: &Path, matrox: bool) -> Result<(), String> {
             .open(&temporary).map_err(|e| format!("Cannot stage INI defaults: {e}"))?;
         file.write_all(&out).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
-        file.set_permissions(fs::metadata(path).map_err(|e| e.to_string())?.permissions())
-            .map_err(|e| e.to_string())?;
+        if existing.is_some() {
+            file.set_permissions(fs::metadata(path).map_err(|e| e.to_string())?.permissions())
+                .map_err(|e| e.to_string())?;
+        }
         drop(file);
         fs::rename(&temporary, path).map_err(|e| format!("Cannot update game INI: {e}"))
     })();
@@ -213,7 +216,7 @@ mod tests {
     #[test]
     fn creates_only_missing_settings_and_preserves_users_ini() {
         let dir = fixture();
-        let ini = dir.join("splanet.ini");
+        let ini = dir.join("ScorchedPlanetFix.ini");
         fs::write(&ini, b"[scorch]\r\nlanguage=2\r\n[Other]\r\nnotes=\xff\r\n[Matrox]\r\nDither=1\r\n").unwrap();
         ensure_defaults(&ini, true).unwrap();
         let bytes = fs::read(&ini).unwrap();
@@ -233,7 +236,7 @@ mod tests {
     #[test]
     fn matrox_section_is_added_and_uncategorized_files_are_refused() {
         let dir=fixture();
-        let ini=dir.join("splanet.ini");
+        let ini=dir.join("ScorchedPlanetFix.ini");
         fs::write(&ini,b"[scorch]\nvideo= video\n").unwrap();
         ensure_defaults(&ini,true).unwrap();
         let text=fs::read_to_string(&ini).unwrap();
@@ -241,7 +244,10 @@ mod tests {
         assert!(text.contains("FPSLimit=60\r\n"));
         fs::remove_file(&ini).unwrap();
         assert_eq!(read_settings(&ini).unwrap(),GameSettings::default());
-        assert!(ensure_defaults(&ini,true).is_err());
+        ensure_defaults(&ini,true).unwrap();
+        let restored=fs::read_to_string(&ini).unwrap();
+        assert!(restored.contains("FPSLimit=60"));
+        assert!(restored.contains("[matrox]"));
         fs::remove_dir_all(dir).unwrap();
     }
 }

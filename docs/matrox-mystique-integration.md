@@ -121,34 +121,53 @@ The clean-room MSI95 DLL is now **embedded in the executable**. No separate
 driver file is needed. A `--verify` command remains strictly read-only. The
 Matrox installer never touches `splanet/` or its 3dfx GameFrame wrapper.
 
-## Installation layout during transition
+## Unified CrimsonSkiesFix-style installation layout (v2.1 candidate)
 
 ```text
-ScorchedPlanetFix.exe
-splanet/                       # Retail 3dfx installation (if this edition)
-# OR, never alongside splanet/:
-scorchedplanet-matrox/          # Original Matrox OEM files (immutable)
-scorchedplanet-matrox-runtime/  # Prepared Matrox runtime and open MSI95
-state/                          # Matrox installation receipts, if used
-ScorchedPlanetFix_installer.log
-ScorchedPlanetFix.log
+ScorchedPlanetFix/
+├── ScorchedPlanetFix.exe
+├── ScorchedPlanetFix.ini            # FPSLimit in [scorch], Dither in [matrox]
+├── ScorchedPlanetFix.log            # selected runtime, reset on each game start
+├── ScorchedPlanetFix_installer.log  # launcher session, noncumulative
+├── game/                            # ONE installed edition, all game resources
+│   ├── spvoodoo.exe / splanetw.exe  # exactly one playable EXE
+│   ├── glide.dll / msi95.dll        # exactly one open renderer
+│   ├── splanet.ini                  # untouched native game preferences
+│   └── ...                          # original game data and player saves
+├── state/
+│   └── ScorchedPlanetFix.install-receipt.txt
+└── docs/
+    ├── README.md
+    ├── LICENSE
+    ├── ScorchedPlanetFix.ini.example
+    └── build-info.txt
 ```
 
-Only one edition may be installed beside the launcher. A second installation
-is refused, and any accidental coexistence is reported as an error: there is
-no fallback, no priority and no automatic deletion. The experimental PR supports
-Matrox installation and launch with both open-source renderers embedded in one
-executable; Windows and full-gameplay regression validation remain pending.
+- The executable, installer log, runtime log and fix-owned INI are together at
+  the launcher root, not in `game/`. The game retains its own native
+  `game/splanet.ini` for language, settings and videos.
+- Retail 3dfx: `game/spvoodoo.exe`, original authenticated
+  `game/spvoodoo.exe.bak` and embedded GameFrame `game/glide.dll`.
+- Matrox Mystique: `game/splanetw.exe`, original authenticated
+  `game/splanetw.exe.bak`, embedded clean-room `game/msi95.dll`,
+  and original proprietary `game/msi95.dll.bak` retained as DATA ONLY,
+  never loaded by the game. All remaining 64 OEM immutable resources retain
+  their exact original hashes and paths. This replaces the former separate
+  source and runtime trees; game copies and saves are never duplicated.
+- No `dlls/` or `third_party/` directory is created. Windows/Wine finds
+  the required DLL alongside the active executable without search-path hacks.
+- `state/` contains only fix-owned receipt/installation metadata.
+  `docs/` contains the reference files and example configuration.
+  Preexisting player-owned files are not overwritten.
+- Old `splanet/`, `scorchedplanet-matrox/` and
+  `scorchedplanet-matrox-runtime/` layouts are **not migrated
+  automatically**: if found beside the launcher the new version refuses
+  to run or install over them. Move to a separate fresh test directory.
+- `--verify` remains read-only, and `--launch-no-verify` never repairs or
+  copies runtime files. The ordinary launcher verifies the sole edition
+  detected inside `game/` and can replace only trusted fix-owned DLLs.
 
-No new proprietary assets were committed. The manifest contains only original
-path names, sizes, and cryptographic fingerprints.
-
-## Configuration (v2.1 candidate)
-
-The original game's **existing** `[scorch]` section in `splanet.ini`
-contains the common FPS ceiling; new `[matrox]` options only affect the
-Matrox Mystique OEM renderer. The installer adds missing defaults but preserves
-existing user values and unrelated game settings.
+## Shared INI configuration
 
 ```ini
 [scorch]
@@ -158,19 +177,10 @@ FPSLimit=60
 Dither=0
 ```
 
-- `FPSLimit=60`: default cap for **both** editions. Valid values 1..240;
-  `0` disables the cap (not recommended if the original game's timing depends
-  on frame pacing). This is a maximum, not a guaranteed rate.
-- `Dither=0`: default. Change to `1` to enable experimental ordered
-  RGB565 dithering in the Matrox 3D renderer. It is ignored for retail 3dfx.
-- Invalid values or duplicate option definitions fail clearly instead of
-  silently applying an unexpected configuration.
+This is **ScorchedPlanetFix.ini** beside the EXE, not the original
+`game/splanet.ini`. FPSLimit applies to GameFrame and MSI95; 0 disables
+the limiter, 1–240 caps maximum FPS. Dither=1 enables the experimental
+Matrox-only RGB565 ordered dithering; Dither=0 is the default. Unknown
+settings are preserved; malformed or duplicate known settings are rejected.
 
-INI location for retail: `splanet/splanet.ini`. For Matrox, edit
-`scorchedplanet-matrox-runtime/splanet.ini`, the active game's runtime
-copy. The pristine OEM source folder's INI is not the active runtime INI once
-prepared. The launcher passes settings to the selected renderer on each launch;
-no edition-specific CLI flags or direct environment-variable edits are required.
-
-`--verify` remains read-only; standard launches and `--install-only` may
-add missing INI defaults when migrating older supported installations.
+See [unified layout implementation notes](unified-layout.md) for validation.

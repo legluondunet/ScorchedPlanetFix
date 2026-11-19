@@ -73,6 +73,22 @@ impl Logger {
             }
         }
     }
+    /// Restart the renderer log for each game launch; both GameFrame and MSI95
+    /// write ScorchedPlanetFix.log beside the launcher, never under game/.
+    pub fn reset_renderer_log(&self,root:&Path)->Result<(),String>{
+        let path=root.join("ScorchedPlanetFix.log");
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if !meta.is_file() || meta.file_type().is_symlink()=>
+                return Err(format!("Unsafe renderer log path: {}",path.display())),
+            Ok(_)=>{},
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(e)=>return Err(format!("Cannot inspect renderer log: {e}")),
+        }
+        OpenOptions::new().create(true).write(true).truncate(true).open(&path)
+            .map_err(|e|format!("Cannot reset renderer log {}: {e}",path.display()))?;
+        self.write("LOG: reset ScorchedPlanetFix.log before game session");
+        Ok(())
+    }
     pub fn system_information(&self) {
         self.write("SYSTEM: passive Windows / Wine hardware inventory (no personal identifiers)");
         crate::diagnostics::report(|line|self.write(line));

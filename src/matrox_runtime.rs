@@ -1,331 +1,231 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Experimental Matrox Mystique OEM backend. No original game files are edited.
-//! This module is deliberately independent of the 3dfx/GameFrame path.
-use crate::{matrox,settings};
-use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+//! One Matrox Mystique OEM game installation in game/, sharing the standard
+//! CrimsonSkiesFix-style layout with retail 3dfx. No second runtime folder.
+//! The exact original OEM EXE and MSI95 are preserved as .bak files.
+use crate::{matrox, settings};
+use sha2::{Digest,Sha256};
+use std::fs::{self,File,OpenOptions};
+use std::io::{Read,Write};
+use std::path::{Path,PathBuf};
+use std::process::{Child,Command};
 
-const OEM_FOLDER: &str = "scorchedplanet-matrox";
-const RUNTIME_FOLDER: &str = "scorchedplanet-matrox-runtime";
-const STAGE_FOLDER: &str = ".scorchedplanet-matrox-runtime-staging";
-const DLL_SOURCE_NAME: &str = "ScorchedPlanetFix_MSI95_v035.dll";
-const DLL_SHA: &str = "0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e";
+const GAME_FOLDER: &str = "game";
+const DRIVER_SOURCE: &str = "ScorchedPlanetFix_MSI95_v035.dll";
+const LEGACY_DRIVER_HASH: &str = "0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e";
+const PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
+const ORIGINAL_EXE_SHA: &str = "1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894";
+const WIN95_OFFSET: usize = 0x1579b;
+const FADELOW_OFFSET: usize = 0x6ec8b;
+
 #[cfg(matrox_embedded)]
 const MSI95_DRIVER: &[u8] = include_bytes!(env!("SCORCHED_MSI95_DLL_PATH"));
 #[cfg(not(matrox_embedded))]
 const MSI95_DRIVER: &[u8] = &[];
 
 fn expected_driver_hash() -> &'static str {
-    option_env!("SCORCHED_MSI95_SHA256").unwrap_or(DLL_SHA)
+    option_env!("SCORCHED_MSI95_SHA256").unwrap_or(LEGACY_DRIVER_HASH)
 }
-fn cleanroom_driver(root: &Path) -> Result<Vec<u8>, String> {
-    let bytes = if MSI95_DRIVER.is_empty() {
-        let supplied = root.join(DLL_SOURCE_NAME);
-        safe_regular(&supplied)?;
-        fs::read(&supplied)
-            .map_err(|e| format!("Cannot read clean-room MSI95 driver {}: {e}", supplied.display()))?
-    } else {
-        MSI95_DRIVER.to_vec()
-    };
-    if digest(&bytes) != expected_driver_hash() {
-        return Err(format!("MSI95 clean-room DLL SHA-256 mismatch; expected {}", expected_driver_hash()));
+fn digest(data: &[u8]) -> String {
+    format!("{:x}",Sha256::digest(data))
+}
+fn safe_regular(path: &Path) -> Result<(),String> {
+    let meta=fs::symlink_metadata(path).map_err(|e|format!("Cannot inspect {}: {e}",path.display()))?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(format!("Not a regular Matrox file: {}",path.display()));
     }
-    if bytes.len() < 4096 || !bytes.starts_with(b"MZ") {
-        return Err("Embedded MSI95 is not a valid PE DLL".into());
+    Ok(())
+}
+fn hash_file(path: &Path) -> Result<String,String> {
+    safe_regular(path)?;
+    let mut file=File::open(path).map_err(|e|e.to_string())?;
+    let mut hasher=Sha256::new();
+    let mut buf=[0u8;65536];
+    loop {
+        let n=file.read(&mut buf).map_err(|e|e.to_string())?;
+        if n==0 {break;}
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}",hasher.finalize()))
+}
+fn cleanroom_driver(root: &Path) -> Result<Vec<u8>,String> {
+    let bytes=if MSI95_DRIVER.is_empty() {
+        let path=root.join(DRIVER_SOURCE);
+        safe_regular(&path)?;
+        fs::read(&path).map_err(|e|e.to_string())?
+    }else{MSI95_DRIVER.to_vec()};
+    if bytes.len()<4096 || !bytes.starts_with(b"MZ") || digest(&bytes)!=expected_driver_hash() {
+        return Err("Bundled MSI95 DLL is invalid or fails expected SHA-256".into());
     }
     Ok(bytes)
 }
-const PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
-const PATCH_MARKER: &str = "scorchedplanetfix-matrox-oem-runtime-1\n";
-const WIN95_OFFSET: usize = 0x1579b;
-const FADELOW_OFFSET: usize = 0x6ec8b;
-
-fn safe_regular(path: &Path) -> Result<std::fs::Metadata, String> {
-    let meta = fs::symlink_metadata(path)
-        .map_err(|e| format!("Cannot inspect {}: {e}", path.display()))?;
-    if !meta.is_file() || meta.file_type().is_symlink() {
-        return Err(format!("Refusing non-regular or symlinked Matrox file: {}", path.display()));
+fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
+    safe_regular(original)?;
+    let mut exe=fs::read(original).map_err(|e|e.to_string())?;
+    if exe.len()!=840_704 || digest(&exe)!=ORIGINAL_EXE_SHA {
+        return Err("Unknown Matrox executable; patch refused".into());
     }
-    Ok(meta)
-}
-
-fn safe_directory(path: &Path) -> Result<(), String> {
-    let meta = fs::symlink_metadata(path)
-        .map_err(|e| format!("Cannot inspect {}: {e}", path.display()))?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return Err(format!("Refusing non-directory or symlinked Matrox path: {}", path.display()));
+    if exe[WIN95_OFFSET..WIN95_OFFSET+2]!=[0x74,0x1d]
+        || exe[FADELOW_OFFSET..FADELOW_OFFSET+4]!=[0x17,0xb7,0xd1,0x38] {
+        return Err("Unknown Matrox Win95/FadeLow patch sites".into());
     }
-    Ok(())
+    exe[WIN95_OFFSET]=0xeb;
+    exe[FADELOW_OFFSET..FADELOW_OFFSET+4].copy_from_slice(&[0xac,0xc5,0x27,0x37]);
+    if digest(&exe)!=PATCHED_EXE_SHA {
+        return Err("Patched Matrox executable failed exact SHA-256 audit".into());
+    }
+    Ok(exe)
 }
-
-fn hash_file(path: &Path) -> Result<String, String> {
+fn write_new(path: &Path,data: &[u8]) -> Result<(),String> {
+    let mut output=OpenOptions::new().write(true).create_new(true).open(path)
+        .map_err(|e|format!("Cannot create {}: {e}",path.display()))?;
+    output.write_all(data).map_err(|e|e.to_string())?;
+    output.sync_all().map_err(|e|e.to_string())
+}
+fn check_ini(path: &Path)->Result<(),String> {
     safe_regular(path)?;
-    let mut src = File::open(path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let n = src.read(&mut buffer)
-            .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
-        if n == 0 { break; }
-        hash.update(&buffer[..n]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-fn patch_executable(original: &Path, target: &Path) -> Result<(), String> {
-    if safe_regular(original)?.len() != 840_704 {
-        return Err("Unknown Matrox executable length; patch refused".into());
-    }
-    let mut exe = fs::read(original).map_err(|e| format!("Read original OEM executable: {e}"))?;
-    if digest(&exe) != "1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894" {
-        return Err("Original Matrox executable SHA-256 mismatch; patch refused".into());
-    }
-    if exe[WIN95_OFFSET..WIN95_OFFSET + 2] != [0x74, 0x1d]
-        || exe[FADELOW_OFFSET..FADELOW_OFFSET + 4] != [0x17, 0xb7, 0xd1, 0x38] {
-        return Err("Unknown Matrox Win95/FadeLow patch sites; patch refused".into());
-    }
-    exe[WIN95_OFFSET] = 0xeb;
-    exe[FADELOW_OFFSET..FADELOW_OFFSET + 4].copy_from_slice(&[0xac, 0xc5, 0x27, 0x37]);
-    if digest(&exe) != PATCHED_EXE_SHA {
-        return Err("Patched Matrox executable does not match known SHA-256".into());
-    }
-    let mut dest = OpenOptions::new().write(true).create_new(true).open(target)
-        .map_err(|e| format!("Cannot create isolated Matrox executable: {e}"))?;
-    dest.write_all(&exe).map_err(|e| e.to_string())?;
-    dest.sync_all().map_err(|e| e.to_string())?;
+    let len=fs::metadata(path).map_err(|e|e.to_string())?.len();
+    if len>256*1024 {return Err("Matrox splanet.ini exceeds safe size limit".into());}
     Ok(())
 }
 
-/// Verifies every copied file. A save/config file may be modified by gameplay,
-/// but original OEM data, the patched EXE, and the clean-room DLL must match.
-pub fn verify_prepared(root: &Path) -> Result<(), String> {
-    verify_prepared_driver(root,expected_driver_hash())
+/// The Matrox importer calls this in its PRIVATE, uncommitted staging directory.
+/// Preserve all original OEM immutable files; rename the exact original EXE
+/// and proprietary MSI95 to .bak, then put the verified replacements alongside
+/// the game. No second runtime/ folder is generated.
+pub fn prepare_staged(game: &Path, launcher_root: &Path)->Result<(),String>{
+    matrox::verify_original(game)?;
+    let driver=cleanroom_driver(launcher_root)?;
+    let exe_path=game.join("splanetw.exe");
+    let original_exe=game.join("splanetw.exe.bak");
+    let original_driver=game.join("msi95.dll");
+    let original_backup=game.join("msi95.dll.bak");
+    for backup in [&original_exe,&original_backup] {
+        if fs::symlink_metadata(backup).is_ok() {
+            return Err(format!("Matrox backup already exists: {}",backup.display()));
+        }
+    }
+    let exe=patched_exe(&exe_path)?;
+    // All changes below affect only the private uncommitted stage.
+    fs::rename(&exe_path,&original_exe).map_err(|e|e.to_string())?;
+    write_new(&exe_path,&exe)?;
+    fs::rename(&original_driver,&original_backup).map_err(|e|e.to_string())?;
+    write_new(&original_driver,&driver)?;
+    check_ini(&game.join("splanet.ini"))?;
+    verify_prepared_at(game,expected_driver_hash())
+}
+fn verify_prepared_at(game: &Path,driver_hash: &str)->Result<(),String> {
+    matrox::verify_installed(game,PATCHED_EXE_SHA,driver_hash)?;
+    check_ini(&game.join("splanet.ini"))
+}
+pub fn verify_prepared(root: &Path)->Result<(),String> {
+    verify_prepared_at(&root.join(GAME_FOLDER),expected_driver_hash())
 }
 
-fn verify_prepared_driver(root: &Path, driver_hash: &str) -> Result<(), String> {
-    matrox::verify_original(&root.join(OEM_FOLDER))?;
-    let runtime = root.join(RUNTIME_FOLDER);
-    safe_directory(&runtime)?;
-    let marker = runtime.join(".scorchedplanetfix-matrox");
-    if safe_regular(&marker)?.len() != PATCH_MARKER.len() as u64
-        || fs::read(&marker).map_err(|e| e.to_string())? != PATCH_MARKER.as_bytes() {
-        return Err("Matrox runtime marker absent or invalid".into());
-    }
-    for (original_sha, bytes, rel) in matrox::manifest_entries()? {
-        let expected = match rel {
-            "splanetw.exe" => PATCHED_EXE_SHA,
-            "msi95.dll" => driver_hash,
-            _ => original_sha
-        };
-        let path = runtime.join(rel);
-        for parent in Path::new(rel).parent().into_iter().flat_map(|p| p.ancestors()).filter(|p| p != &Path::new("")) {
-            safe_directory(&runtime.join(parent))?;
+/// Existing new-layout installations may have a previous known MSI95 renderer.
+/// Replace ONLY an authenticated older driver with rollback, never touch
+/// unknown DLLs, game data, player saves or the original MSI95 .bak backup.
+pub fn prepare(root: &Path)->Result<PathBuf,String>{
+    let game=root.join(GAME_FOLDER);
+    if let Err(current_error)=verify_prepared(root) {
+        if expected_driver_hash()==LEGACY_DRIVER_HASH {
+            return Err(current_error);
         }
-        let meta = safe_regular(&path)?;
-        if rel != "msi95.dll" && meta.len() != bytes {
-            return Err(format!("Matrox runtime file length changed: {}", path.display()));
+        verify_prepared_at(&game,LEGACY_DRIVER_HASH).map_err(|_|current_error)?;
+        let replacement=cleanroom_driver(root)?;
+        let current=game.join("msi95.dll");
+        let staged=game.join(".msi95.dll.installing");
+        let displaced=game.join(".msi95.dll.replacing");
+        for item in [&staged,&displaced] {
+            if fs::symlink_metadata(item).is_ok() {
+                return Err(format!("Interrupted MSI95 upgrade; inspect {}",item.display()));
+            }
         }
-        if hash_file(&path)? != expected {
-            return Err(format!("Matrox runtime SHA-256 mismatch: {}", path.display()));
+        write_new(&staged,&replacement)?;
+        if hash_file(&staged)?!=expected_driver_hash() {
+            let _=fs::remove_file(&staged);
+            return Err("Staged MSI95 checksum mismatch".into());
         }
+        if let Err(e)=fs::rename(&current,&displaced) {
+            let _=fs::remove_file(&staged);
+            return Err(format!("Cannot prepare MSI95 rollback: {e}"));
+        }
+        if let Err(e)=fs::rename(&staged,&current) {
+            let _=fs::rename(&displaced,&current);
+            let _=fs::remove_file(&staged);
+            return Err(format!("Cannot publish new MSI95 driver: {e}"));
+        }
+        if let Err(e)=verify_prepared(root) {
+            let _=fs::remove_file(&current);
+            let _=fs::rename(&displaced,&current);
+            return Err(format!("MSI95 update verification failed; original restored: {e}"));
+        }
+        fs::remove_file(&displaced)
+            .map_err(|e|format!("MSI95 upgraded but stale rollback remains: {e}"))?;
     }
-    let ini = runtime.join("splanet.ini");
-    if safe_regular(&ini)?.len() > 1_048_576 {
-        return Err("Matrox runtime INI exceeds safe size limit".into());
-    }
-    Ok(())
+    settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
+    Ok(game)
 }
 
-/// Stage a complete isolated runtime, then publish after verifying every file.
-/// Production CI embeds the source-built clean-room x86 MSI95 DLL. Only older
-/// external development builds require a separate v0.35 DLL beside the EXE.
-pub fn prepare(root: &Path) -> Result<PathBuf, String> {
-    let original = root.join(OEM_FOLDER);
-    matrox::verify_original(&original)?;
-    let runtime = root.join(RUNTIME_FOLDER);
-    if fs::symlink_metadata(&runtime).is_ok() {
-        // A prior experimental runtime may still hold the exact old v0.35
-        // open-source driver. Upgrade ONLY that known hash: preserve the
-        // game executable, OEM assets, save files and user INI untouched.
-        if let Err(problem) = verify_prepared(root) {
-            if expected_driver_hash()==DLL_SHA {
-                return Err(problem);
-            }
-            verify_prepared_driver(root,DLL_SHA).map_err(|_| problem)?;
-            let replacement = cleanroom_driver(root)?;
-            let temporary = runtime.join(".scorchedplanetfix-msi95-upgrade.tmp");
-            let active = runtime.join("msi95.dll");
-            let mut output = OpenOptions::new().write(true).create_new(true)
-                .open(&temporary).map_err(|e| format!("Cannot stage recognized MSI95 upgrade: {e}"))?;
-            let result = (|| -> Result<(), String> {
-                output.write_all(&replacement).map_err(|e| e.to_string())?;
-                output.sync_all().map_err(|e| e.to_string())?;
-                drop(output);
-                if hash_file(&temporary)? != expected_driver_hash() {
-                    return Err("MSI95 replacement checksum mismatch".into());
-                }
-                // Atomic replacement of the audited open-source DLL only.
-                fs::rename(&temporary,&active)
-                    .map_err(|e| format!("Cannot replace recognized legacy MSI95: {e}"))?;
-                verify_prepared(root)
-            })();
-            if result.is_err() { let _ = fs::remove_file(&temporary); }
-            result?;
-        }
-        settings::ensure_defaults(&runtime.join("splanet.ini"),true)?;
-        return Ok(runtime);
-    }
-    let driver = cleanroom_driver(root)?;
-    let stage = root.join(STAGE_FOLDER);
-    // Never remove a pre-existing staging path: it may contain user data.
-    if fs::symlink_metadata(&stage).is_ok() {
-        return Err(format!("Pre-existing Matrox staging path; manual inspection required: {}", stage.display()));
-    }
-    fs::create_dir(&stage).map_err(|e| format!("Cannot stage Matrox runtime: {e}"))?;
-    let result = (|| -> Result<(), String> {
-        for (_sha, _bytes, rel) in matrox::manifest_entries()? {
-            let target = stage.join(rel);
-            if let Some(dir) = target.parent() {
-                fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-            }
-            match rel {
-                "splanetw.exe" => patch_executable(&original.join(rel), &target)?,
-                "msi95.dll" => {
-                    let mut file = OpenOptions::new().write(true).create_new(true).open(&target)
-                        .map_err(|e| format!("Cannot stage embedded MSI95 DLL: {e}"))?;
-                    file.write_all(&driver).map_err(|e| e.to_string())?;
-                    file.sync_all().map_err(|e| e.to_string())?;
-                },
-                _ => {
-                    fs::copy(original.join(rel), &target)
-                        .map_err(|e| format!("Cannot copy original Matrox data {rel}: {e}"))?;
-                }
-            }
-        }
-        let ini = original.join("splanet.ini");
-        let size = safe_regular(&ini)?.len();
-        if size > 1_048_576 {
-            return Err("Original Matrox INI is too large".into());
-        }
-        fs::copy(ini, stage.join("splanet.ini")).map_err(|e| format!("Cannot copy Matrox INI: {e}"))?;
-        fs::write(stage.join(".scorchedplanetfix-matrox"), PATCH_MARKER)
-            .map_err(|e| e.to_string())?;
-        // Audit stage in place before publication.
-        for (sha, bytes, rel) in matrox::manifest_entries()? {
-            let expect = match rel {
-                "splanetw.exe" => PATCHED_EXE_SHA,
-                "msi95.dll" => expected_driver_hash(),
-                _ => sha,
-            };
-            let path = stage.join(rel);
-            if rel != "msi95.dll" && safe_regular(&path)?.len() != bytes {
-                return Err(format!("Staged Matrox file size mismatch: {rel}"));
-            }
-            if hash_file(&path)? != expect {
-                return Err(format!("Staged Matrox data verification failed: {rel}"));
-            }
-        }
-        if fs::symlink_metadata(&runtime).is_ok() {
-            return Err("Matrox runtime destination appeared during staging; refusing to overwrite".into());
-        }
-        fs::rename(&stage, &runtime)
-            .map_err(|e| format!("Cannot publish Matrox runtime: {e}"))?;
-        Ok(())
-    })();
-    if let Err(ref e) = result {
-        // Only the freshly created private stage is ours to delete; we never
-        // remove an existing installation, any existing stage or user save.
-        if !runtime.exists() {
-            let _ = fs::remove_dir_all(&stage);
-        }
-        return Err(e.clone());
-    }
-    verify_prepared(root)?;
-    settings::ensure_defaults(&runtime.join("splanet.ini"),true)?;
-    Ok(runtime)
-}
-
-fn validated_env(command: &mut Command, game: &Path) -> Result<(), String> {
-    let configured=settings::read_settings(&game.join("splanet.ini"))?;
-    // Make flags deterministic: never inherit legacy experimental modes.
-    let controlled = [
-        "MATROX_MSI_BORDERLESS", "MATROX_MSI_PERSPECTIVE",
-        "MATROX_MSI_INDEXED_KEY", "MATROX_MSI_SHADOW_ONCE",
-        "MATROX_MSI_MODULATE", "MATROX_MSI_DITHER", "MATROX_MSI_FPS_LIMIT",
-        "MATROX_MSI_SHADOW_BLEND", "MATROX_MSI_SHADOW_UNDERLAY",
+fn configure(command: &mut Command,root:&Path)->Result<(),String> {
+    let configured=settings::read_settings(&root.join("ScorchedPlanetFix.ini"))?;
+    let controlled=[
+        "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
+        "MATROX_MSI_INDEXED_KEY","MATROX_MSI_SHADOW_ONCE",
+        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT",
+        "MATROX_MSI_SHADOW_BLEND","MATROX_MSI_SHADOW_UNDERLAY",
         "MATROX_MSI_WORLD_BLUE_KEY",
     ];
-    for name in controlled {
-        command.env_remove(name);
-    }
-    for name in [
-        "MATROX_MSI_BORDERLESS", "MATROX_MSI_PERSPECTIVE",
-        "MATROX_MSI_INDEXED_KEY", "MATROX_MSI_SHADOW_ONCE", "MATROX_MSI_MODULATE",
-    ] {
-        command.env(name, "1");
+    for key in controlled {command.env_remove(key);}
+    for key in ["MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
+                "MATROX_MSI_INDEXED_KEY","MATROX_MSI_SHADOW_ONCE",
+                "MATROX_MSI_MODULATE"] {
+        command.env(key,"1");
     }
     command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
-    command.env("MATROX_MSI_DITHER",if configured.dither {"1"} else {"0"});
+    command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
     Ok(())
 }
-
-/// Normal gameplay is not subject to the standalone 300-second diagnostic
-/// timeout. The MSI95 driver gets the cap from [scorch] FPSLimit.
-pub fn spawn(root: &Path) -> Result<Child, String> {
+pub fn spawn(root: &Path)->Result<Child,String> {
     verify_prepared(root)?;
     spawn_unchecked(root)
 }
-
-/// Debug-only launch: preserve Matrox's deterministic graphics defaults but
-/// do not verify data, prepare a runtime, or alter any installed files.
-pub fn spawn_unchecked(root: &Path) -> Result<Child, String> {
-    let game = root.join(RUNTIME_FOLDER);
-    let exe = game.join("splanetw.exe");
-    let mut command = Command::new(&exe);
+pub fn spawn_unchecked(root: &Path)->Result<Child,String> {
+    let game=root.join(GAME_FOLDER);
+    let mut command=Command::new(game.join("splanetw.exe"));
     command.current_dir(&game);
-    validated_env(&mut command,&game)?;
-    command.spawn().map_err(|e| format!("Cannot launch Matrox Mystique OEM: {e}"))
+    configure(&mut command,root)?;
+    command.spawn().map_err(|e|format!("Cannot launch Matrox Mystique OEM: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn matrox_environment_uses_common_fps_and_optional_dither() {
-        let folder = std::env::temp_dir().join(format!(
-            "matrox-settings-env-{}",std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join("splanet.ini"),b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
-        let mut command=Command::new("unused.exe");
-        validated_env(&mut command,&folder).unwrap();
-        assert!(command.get_envs().any(|(key,val)|
-            key=="MATROX_MSI_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("120"))));
-        assert!(command.get_envs().any(|(key,val)|
-            key=="MATROX_MSI_DITHER" && val==Some(std::ffi::OsStr::new("1"))));
-        fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[test]
-    fn patch_offsets_and_known_digests_are_stable() {
-        assert_eq!(WIN95_OFFSET, 0x1579b);
-        assert_eq!(FADELOW_OFFSET, 0x6ec8b);
-        assert_eq!(PATCHED_EXE_SHA.len(), 64);
-        assert_eq!(DLL_SHA.len(), 64);
-        assert_eq!(matrox::manifest_entries().unwrap().len(), 66);
+    fn offsets_manifest_and_driver_identity_are_stable(){
+        assert_eq!(WIN95_OFFSET,0x1579b);
+        assert_eq!(FADELOW_OFFSET,0x6ec8b);
+        assert_eq!(matrox::manifest_entries().unwrap().len(),66);
+        assert_eq!(PATCHED_EXE_SHA.len(),64);
     }
     #[test]
-    fn preparation_does_not_create_anything_without_recognized_originals() {
-        let missing = std::env::temp_dir()
-            .join(format!("matrox-missing-runtime-{}", std::process::id()));
-        assert!(prepare(&missing).is_err());
-        assert!(!missing.join(RUNTIME_FOLDER).exists());
+    fn environment_gets_shared_root_ini_values(){
+        let root=std::env::temp_dir().join(format!("matrox-layout-env-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("ScorchedPlanetFix.ini"),
+            b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
+        let mut c=Command::new("unused");
+        configure(&mut c,&root).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_FPS_LIMIT" &&
+            v==Some(std::ffi::OsStr::new("120"))));
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_DITHER" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn missing_game_does_not_create_second_runtime(){
+        let root=std::env::temp_dir().join(format!("matrox-missing-{}",std::process::id()));
+        assert!(prepare(&root).is_err());
+        assert!(!root.join(GAME_FOLDER).exists());
     }
 }

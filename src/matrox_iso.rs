@@ -2,7 +2,7 @@
 //! Matrox Mystique OEM extraction from an original, user-owned ISO9660 disc.
 //! Supports 2048-byte ISO images and raw CloneCD Mode1/2352 IMG sectors.
 //! This code does not modify the source disc and never invokes its installer.
-use crate::{matrox, cue_image};
+use crate::{matrox, matrox_runtime, cue_image};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
@@ -10,7 +10,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const PAYLOAD: u64 = 2048;
-const ORIGINAL_FOLDER: &str = "scorchedplanet-matrox";
+const ORIGINAL_FOLDER: &str = "game";
 const STAGING_FOLDER: &str = ".scorchedplanet-matrox-installing";
 const MAX_DIR_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 25_000;
@@ -209,13 +209,13 @@ fn expected_files(image: &mut Image) -> Result<Vec<Entry>, String> {
     Ok(verified)
 }
 
-/// Never allow Matrox installation while a retail 3dfx installation exists.
+/// Never allow Matrox installation while ANY game installation exists.
 /// Use symlink_metadata so even dangling links block unsafe reuse.
 fn refuse_retail_installation(root: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(root.join("splanet")) {
-        Ok(_) => Err("A retail 3dfx edition is already installed. ScorchedPlanetFix manages only one edition; Matrox installation refused.".into()),
+    match fs::symlink_metadata(root.join("game")) {
+        Ok(_) => Err("A game edition is already installed in game/. ScorchedPlanetFix manages only one edition; Matrox installation refused.".into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("Cannot inspect existing 3dfx installation: {e}")),
+        Err(e) => Err(format!("Cannot inspect existing game/ installation: {e}")),
     }
 }
 
@@ -227,10 +227,6 @@ fn refuse_retail_installation(root: &Path) -> Result<(), String> {
 pub fn install_media(root: &Path, source: &Path, bin_override: Option<&Path>) -> Result<(), String> {
     refuse_retail_installation(root)?;
     if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
-        if fs::symlink_metadata(&root.join(ORIGINAL_FOLDER)).is_ok() {
-            matrox::verify_original(&root.join(ORIGINAL_FOLDER))?;
-            return Ok(());
-        }
         let temporary = cue_image::normalize_cue_with_bin(source, bin_override, root,
             |_done, _total, _message| {}, |_message| {})?;
         install(root, &temporary.path)
@@ -271,8 +267,7 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
     refuse_retail_installation(root)?;
     let target = root.join(ORIGINAL_FOLDER);
     if fs::symlink_metadata(&target).is_ok() {
-        matrox::verify_original(&target)?;
-        return Ok(());
+        return Err("game/ already exists: refusing to overwrite an installed edition".into());
     }
     let mut source = open_image(image)?;
     let files = expected_files(&mut source)?;
@@ -314,6 +309,9 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
         let ini = b"[scorch]\r\nlanguage= 2\r\nvideo= video\r\nHighQualityVideo=1\r\nFPSLimit=60\r\n[matrox]\r\nDither=0\r\n";
         fs::write(stage.join("splanet.ini"), ini).map_err(|e| e.to_string())?;
         matrox::verify_original(&stage)?;
+        // Transform only the private staging tree into ONE playable game/.
+        // Preserve the two authenticated original binaries as .bak files.
+        matrox_runtime::prepare_staged(&stage,root)?;
         if fs::symlink_metadata(&target).is_ok() {
             return Err("Matrox install target appeared while staging; refusing overwrite".into());
         }
@@ -389,14 +387,14 @@ mod tests {
     fn retail_install_blocks_matrox_media_without_touching_existing_files() {
         let folder = std::env::temp_dir().join(format!("matrox-single-edition-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(folder.join("splanet")).unwrap();
-        fs::write(folder.join("splanet/keep.txt"), b"retail saved data").unwrap();
+        fs::create_dir_all(folder.join("game")).unwrap();
+        fs::write(folder.join("game/keep.txt"), b"retail saved data").unwrap();
         let image = folder.join("matrox.iso");
         fs::write(&image, b"not a real disc").unwrap();
         let err = install_media(&folder, &image, None).unwrap_err();
         assert!(err.contains("only one edition"), "{err}");
         assert!(!folder.join(ORIGINAL_FOLDER).exists());
-        assert_eq!(fs::read(folder.join("splanet/keep.txt")).unwrap(), b"retail saved data");
+        assert_eq!(fs::read(folder.join("game/keep.txt")).unwrap(), b"retail saved data");
         fs::remove_dir_all(folder).unwrap();
     }
 

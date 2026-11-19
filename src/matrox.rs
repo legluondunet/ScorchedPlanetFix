@@ -71,10 +71,34 @@ fn regular_not_symlink(path: &Path) -> Result<std::fs::Metadata, String> {
     Ok(meta)
 }
 
+/// Audit the playable Matrox install in game/ using the complete OEM
+/// reference manifest for immutable resources and exact original backups.
+/// The patched executable and clean-room MSI95 must also match expected hashes.
+pub fn verify_installed(folder: &Path, patched_exe_hash: &str, driver_hash: &str)
+    -> Result<VerifiedOem, String> {
+    let report = verify_reference(folder, true)?;
+    let verify_modified = |relative: &str, hash: &str| -> Result<(), String> {
+        let path=folder.join(relative);
+        regular_not_symlink(&path)?;
+        let bytes=fs::read(&path).map_err(|e| e.to_string())?;
+        if format!("{:x}",Sha256::digest(&bytes)) != hash {
+            return Err(format!("Modified or unsupported Matrox runtime: {}",path.display()));
+        }
+        Ok(())
+    };
+    verify_modified("splanetw.exe",patched_exe_hash)?;
+    verify_modified("msi95.dll",driver_hash)?;
+    Ok(report)
+}
+
 /// Read-only SHA-256 audit of the 66 immutable original Matrox OEM files.
 /// The user's splanet.ini and future local saves are deliberately excluded.
 /// Every intermediate directory is inspected without following symlinks.
 pub fn verify_original(folder: &Path) -> Result<VerifiedOem, String> {
+    verify_reference(folder,false)
+}
+
+fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, String> {
     let root_meta = fs::symlink_metadata(folder)
         .map_err(|e| format!("Cannot inspect Matrox installation: {e}"))?;
     if !root_meta.is_dir() || root_meta.file_type().is_symlink() {
@@ -96,7 +120,9 @@ pub fn verify_original(folder: &Path) -> Result<VerifiedOem, String> {
                 }
             }
         }
-        let path = folder.join(relative);
+        let path = if installed && matches!(rel,"splanetw.exe"|"msi95.dll") {
+            folder.join(format!("{rel}.bak"))
+        } else { folder.join(relative) };
         let meta = regular_not_symlink(&path)?;
         if meta.len() != expected_size {
             return Err(format!("Matrox OEM size mismatch: {}", path.display()));

@@ -291,7 +291,9 @@ fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_
     command.env("GLIDE_LFB_FILTER","nearest");
     command.env("SCORCHED_GLIDE_DESKTOP","1");
     command.env("SCORCHED_GLIDE_ADOPT_WINDOW","1");
-    let configured=settings::read_settings(&game.join("splanet.ini"))?;
+    let fixer_ini=game.parent().ok_or("GameFrame game directory has no parent")?
+        .join("ScorchedPlanetFix.ini");
+    let configured=settings::read_settings(&fixer_ini)?;
     command.env_remove("SCORCHED_GLIDE_FPS_60");
     command.env("SCORCHED_GLIDE_FPS_LIMIT",configured.fps_limit.to_string());
     // Carry the launcher identity into the 32-bit renderer. Do not hardcode
@@ -371,7 +373,9 @@ mod tests{
     #[cfg(gameframe_embedded)]
     #[test]
     fn installs_bundled_gameframe_once_and_keeps_exact_bytes(){
-        let root=fixture();
+        let base=fixture();
+        let root=base.join("game");
+        fs::create_dir_all(&root).unwrap();
         let expected=validate_embedded().unwrap().unwrap();
         preflight_glide(&root).unwrap(); // absent Glide DLL is safe to provision
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
@@ -388,7 +392,7 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
             && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("60"))));
-        fs::write(root.join("splanet.ini"),b"[scorch]\nFPSLimit=120\n").unwrap();
+        fs::write(base.join("ScorchedPlanetFix.ini"),b"[scorch]\nFPSLimit=120\n").unwrap();
         configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT"
             && val==Some(std::ffi::OsStr::new("120"))));
@@ -397,7 +401,7 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_MENU_PROBE" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SIGNATURE"
             && val.is_some_and(|s|s.to_string_lossy().starts_with(concat!("ScorchedPlanetFix ", env!("CARGO_PKG_VERSION"), "-")))));
-        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[cfg(gameframe_embedded)]

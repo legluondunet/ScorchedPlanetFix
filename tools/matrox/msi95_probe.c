@@ -364,7 +364,7 @@ static void ensure_log(void){
     char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
     if(n==0||n>=1023)return;
     DWORD i=n; while(i>0 && path[i-1]!='\\' && path[i-1]!='/')i--;
-    const char *name="ScorchedPlanetMatrox_probe.log";
+    const char *name="..\\ScorchedPlanetFix.log";
     DWORD k=0;while(name[k] && i+k<1022){path[i+k]=name[k];k++;}
     path[i+k]=0;
     g_log=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);

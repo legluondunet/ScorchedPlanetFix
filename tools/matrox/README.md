@@ -24,9 +24,11 @@ framebuffer BMP capture must be streamlined before a stable v2.1.0 release.
 
 ## Runtime INI options
 
-The Windows launcher reads the installed game's `splanet.ini` and passes
+The Windows launcher reads `ScorchedPlanetFix.ini` beside the launcher and passes
 `[scorch] FPSLimit` to MSI95 through `MATROX_MSI_FPS_LIMIT`. The
 `[matrox] Dither` value is passed separately through `MATROX_MSI_DITHER`.
 Both options default to 60 and 0 respectively; `FPSLimit=0` disables
 pacing and valid positive caps are 1..240. No separate Matrox CLI option is
 needed. The two renderer environment variables are implementation details.
+
+The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original validated OEM DLL is retained in `game/msi95.dll.bak` as an audit backup, not loaded. GameFrame uses the same `game/` directory when the retail edition is installed instead.

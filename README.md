@@ -1,5 +1,13 @@
 # ScorchedPlanetFix
 
+> **Development branch (PR #36):** ScorchedPlanetFix 2.1 is migrating
+> to the CrimsonSkiesFix-style layout with ONE `game/` directory,
+> `ScorchedPlanetFix.ini` and logs beside the launcher, fix-owned
+> `state/` and `docs/`, and renderer DLLs alongside the game's EXE.
+> [Read the proposed v2.1 layout](docs/unified-layout.md). This is
+> experimental and **not yet the published v2.0.2 release**.
+>
+
 **Play *Scorched Planet* (1996) on Windows and Linux (Wine / Proton) using an integrated open-source Glide renderer.**
 
 [![Windows CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml/badge.svg)](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml)
