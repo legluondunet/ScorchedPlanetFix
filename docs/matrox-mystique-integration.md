@@ -40,8 +40,8 @@ game or driver binary may be bundled.
 
 ## Implementation status (PR #36)
 
-1. **Completed, Windows CI-validated:** committed exact OEM manifest; strict Rust
-   `--matrox-verify`; separate `scorchedplanet-matrox/` and
+1. **Completed, Windows CI-validated:** committed exact OEM manifest; edition-neutral
+   read-only `--verify`; separate `scorchedplanet-matrox/` and
    `scorchedplanet-matrox-runtime/` trees; exact hash-locked Win95 and
    FadeLow runtime copy patch; 60 FPS/MSI95 graphics flags; no 300-second
    diagnostic process kill. Existing 3dfx GameFrame behavior is retained.
@@ -51,9 +51,9 @@ game or driver binary may be bundled.
    the existing strict CUE data-track normalizer. The CUE and its referenced
    IMG are deduplicated during automatic discovery. Strict 66-file size and SHA-256 verification, no
    arbitrary files accepted, staging and rollback before publication.
-   `--matrox-install image.iso|image.img|image.cue [track.bin|track.img]` installs and plays;
-   `--matrox-install-only` installs originals without playing; an unambiguous
-   Matrox image beside the launcher is auto-detected on fresh installs.
+   The regular no-argument command installs and launches automatically;
+   `--install-only` installs originals without playing. An unambiguous Matrox
+   image beside the launcher is auto-detected on fresh installs.
 3. **Completed, Windows CI-validated:** reviewed 116,216-byte C source in
    `tools/matrox/msi95_probe.c` (hash locked), x86 freestanding DLL compilation,
    explicit nine-export ABI audit, and embedded GameFrame + MSI95 in **one**
@@ -77,8 +77,8 @@ game or driver binary may be bundled.
    The user-installed ISO9660 Mode1/2352 data track from
    `Scorched_Planet.cue` and its companion `Scorched_Planet.img`, without
    the standalone Go installer. The Rust launcher published the original OEM
-   directory, `--matrox-verify` accepted all 66 original files / 315,947,520
-   bytes, and `--matrox-play` started the clean-room MSI95 runtime.
+   directory, edition verification accepted all 66 original files / 315,947,520
+   bytes, and the launcher started the clean-room MSI95 runtime.
    The driver recorded 3,305 frames / 68,496 ms, 1,114,647 triangles,
    291,970 Z-planes, 738,571 modulated textured triangles, 972 FPS-cap
    waited frames at frame 3300, and an orderly `msiExit` with
@@ -87,21 +87,35 @@ game or driver binary may be bundled.
    cinematics, saves, full missions, performance and 3dfx regression tests.
    **No release or merge until these pass.**
 
-### Development commands
+### Common user commands — identical for 3dfx and Matrox
 
 ```powershell
-# Original OEM already installed in scorchedplanet-matrox/
-.\\ScorchedPlanetFix.exe --matrox-verify
-.\\ScorchedPlanetFix.exe --matrox-prepare
-.\\ScorchedPlanetFix.exe --matrox-play
+# Use the existing installation, or detect, install and launch the edition on disc
+.\ScorchedPlanetFix.exe
 
-# New OEM CD image in ISO2048, raw IMG2352, or CUE/IMG format
-.\\ScorchedPlanetFix.exe --matrox-install-only "Scorched_Planet.cue"
-# The CUE data track is resolved relative to the CUE file (case-insensitive).
-# Optional explicit override: --matrox-install-only disc.cue disc.img
-.\\ScorchedPlanetFix.exe --matrox-verify
-.\\ScorchedPlanetFix.exe --matrox-play
+# Detect and install a supported disc without launching
+.\ScorchedPlanetFix.exe --install-only
+
+# Verify the selected existing edition without changing files
+.\ScorchedPlanetFix.exe --verify
+
+# Other retained commands
+.\ScorchedPlanetFix.exe --inspect "Scorched_Planet.cue"
+.\ScorchedPlanetFix.exe --verbose
+.\ScorchedPlanetFix.exe --launch-no-verify
+.\ScorchedPlanetFix.exe --help
+.\ScorchedPlanetFix.exe --version
 ```
+
+The launcher searches beside itself, independently of the shell's working
+directory. For the Matrox OEM CUE/IMG media, the CUE's data track is resolved
+automatically and case-insensitively on Linux/Wine. It recognizes exact supported
+disc profiles; modified or unrecognized media are refused. When both installed
+editions exist, the existing retail 3dfx installation takes priority to preserve
+v2.0 behavior. To use Matrox, place its CD image or installation beside a launcher
+without an existing retail 3dfx installation; there is **no edition-specific
+CLI flag**. Ambiguous multiple recognized Matrox images are refused rather than
+guessed. Neither original OEM files nor the original CD image are modified.
 
 The clean-room MSI95 DLL is now **embedded in the executable**. No separate
 driver file is needed. A `--verify` command remains strictly read-only. The
@@ -119,9 +133,10 @@ ScorchedPlanetFix_installer.log
 ScorchedPlanetFix.log
 ```
 
-The two directories may coexist in future, but automatic selection when both
-exist must be explicit and deterministic (edition flag or last successful
-selection), not accidental precedence. The experimental PR supports Matrox runtime installation and launch (pending owner Wine/Windows gameplay validation) using one executable with both open-source renderers embedded.
+The two editions may coexist, but retail 3dfx always wins when both installed
+directories are present. The experimental PR supports Matrox runtime installation
+and launch using one executable with both open-source renderers embedded; native
+Windows and complete gameplay validation remain pending.
 
 No new proprietary assets were committed. The manifest contains only original
 path names, sizes, and cryptographic fingerprints.
