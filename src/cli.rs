@@ -25,7 +25,8 @@ const USAGE: &str = "Usage:
 
 The executable finds retail 3dfx or Matrox installations and CD images beside
 itself, not in the shell's current directory. An existing installation is
-verified before normal launch. If both editions exist, retail 3dfx wins.
+verified before normal launch. Only one edition can be installed; finding both
+is an error, and neither installation is modified.
 No unknown, invalid or damaged installation is replaced automatically.
 --launch-no-verify is a direct, unverified launch; use only with trusted files.";
 
@@ -50,6 +51,33 @@ enum Mode {
 struct CommandLine {
     mode: Mode,
     media: Media,
+}
+
+/// The renderer is selected from the sole installed edition, never by a flag.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum InstalledEdition {
+    Retail3dfx,
+    MatroxOem,
+}
+
+fn installation_kind(root: &Path) -> Result<Option<InstalledEdition>, String> {
+    let retail = root.join("splanet");
+    let matrox = root.join("scorchedplanet-matrox");
+    // These are fixed installation directories, never user-provided paths.
+    let check = |path: &Path| -> Result<bool, String> {
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => Ok(true),
+            Ok(_) => Err(format!("Installation path is not a regular directory: {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("Cannot inspect installation {}: {e}", path.display())),
+        }
+    };
+    match (check(&retail)?, check(&matrox)?) {
+        (false, false) => Ok(None),
+        (true, false) => Ok(Some(InstalledEdition::Retail3dfx)),
+        (false, true) => Ok(Some(InstalledEdition::MatroxOem)),
+        (true, true) => Err("Two game installations found (splanet/ and scorchedplanet-matrox/). ScorchedPlanetFix manages only one edition. Move the unwanted installation out of the launcher folder; nothing was changed.".into()),
+    }
 }
 
 fn parse_media(args: &[OsString]) -> Result<Media, String> {
@@ -132,8 +160,8 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
     let media = parse_media(arguments)?;
     let install = root.join("splanet");
-    if install.is_symlink() {
-        return Err("The splanet directory is a symlink; refusing".into());
+    if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
+        return Err("A Matrox edition is already installed; refusing retail 3dfx installation".into());
     }
     if install.exists() {
         if media.image.is_some() {
@@ -187,8 +215,8 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
 /// Standalone --verify is always read-only and never launches a process.
 pub fn verify_only(root: &Path, logger: &Logger,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
-    // The same edition precedence is used by all standard CLI operations.
-    if !root.join("splanet").exists() && root.join("scorchedplanet-matrox").exists() {
+    // Verify the sole installed edition; never choose between two.
+    if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
         return matrox_verify(root, logger, sink);
     }
     let report = verify::verify_install(&root.join("splanet"), |msg| logger.write(msg))?;
@@ -251,9 +279,9 @@ fn verify_and_play(root: &Path, logger: &Logger,
 fn launch_unchecked(root: &Path, logger: &Logger,
                     mut sink: impl FnMut(&str)) -> Result<(), String> {
     let game = root.join("splanet");
-    // Only folder presence is used to pick an edition. No file integrity
-    // inspection, runtime preparation, installation or repair happens here.
-    if !game.exists() && root.join("scorchedplanet-matrox").exists() {
+    // Even unchecked mode refuses conflicting installations, without
+    // game file hashing, runtime preparation, installation or repair.
+    if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
         let executable = root.join("scorchedplanet-matrox-runtime").join("splanetw.exe");
         emit(logger, &mut sink,
             "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
