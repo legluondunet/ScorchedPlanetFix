@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Experimental Matrox Mystique OEM backend. No original game files are edited.
 //! This module is deliberately independent of the 3dfx/GameFrame path.
-use crate::matrox;
+use crate::{matrox,settings};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -106,6 +106,10 @@ fn patch_executable(original: &Path, target: &Path) -> Result<(), String> {
 /// Verifies every copied file. A save/config file may be modified by gameplay,
 /// but original OEM data, the patched EXE, and the clean-room DLL must match.
 pub fn verify_prepared(root: &Path) -> Result<(), String> {
+    verify_prepared_driver(root,expected_driver_hash())
+}
+
+fn verify_prepared_driver(root: &Path, driver_hash: &str) -> Result<(), String> {
     matrox::verify_original(&root.join(OEM_FOLDER))?;
     let runtime = root.join(RUNTIME_FOLDER);
     safe_directory(&runtime)?;
@@ -117,7 +121,7 @@ pub fn verify_prepared(root: &Path) -> Result<(), String> {
     for (original_sha, bytes, rel) in matrox::manifest_entries()? {
         let expected = match rel {
             "splanetw.exe" => PATCHED_EXE_SHA,
-            "msi95.dll" => expected_driver_hash(),
+            "msi95.dll" => driver_hash,
             _ => original_sha
         };
         let path = runtime.join(rel);
@@ -147,7 +151,35 @@ pub fn prepare(root: &Path) -> Result<PathBuf, String> {
     matrox::verify_original(&original)?;
     let runtime = root.join(RUNTIME_FOLDER);
     if fs::symlink_metadata(&runtime).is_ok() {
-        verify_prepared(root)?;
+        // A prior experimental runtime may still hold the exact old v0.35
+        // open-source driver. Upgrade ONLY that known hash: preserve the
+        // game executable, OEM assets, save files and user INI untouched.
+        if let Err(problem) = verify_prepared(root) {
+            if expected_driver_hash()==DLL_SHA {
+                return Err(problem);
+            }
+            verify_prepared_driver(root,DLL_SHA).map_err(|_| problem)?;
+            let replacement = cleanroom_driver(root)?;
+            let temporary = runtime.join(".scorchedplanetfix-msi95-upgrade.tmp");
+            let active = runtime.join("msi95.dll");
+            let mut output = OpenOptions::new().write(true).create_new(true)
+                .open(&temporary).map_err(|e| format!("Cannot stage recognized MSI95 upgrade: {e}"))?;
+            let result = (|| -> Result<(), String> {
+                output.write_all(&replacement).map_err(|e| e.to_string())?;
+                output.sync_all().map_err(|e| e.to_string())?;
+                drop(output);
+                if hash_file(&temporary)? != expected_driver_hash() {
+                    return Err("MSI95 replacement checksum mismatch".into());
+                }
+                // Atomic replacement of the audited open-source DLL only.
+                fs::rename(&temporary,&active)
+                    .map_err(|e| format!("Cannot replace recognized legacy MSI95: {e}"))?;
+                verify_prepared(root)
+            })();
+            if result.is_err() { let _ = fs::remove_file(&temporary); }
+            result?;
+        }
+        settings::ensure_defaults(&runtime.join("splanet.ini"),true)?;
         return Ok(runtime);
     }
     let driver = cleanroom_driver(root)?;
@@ -216,15 +248,17 @@ pub fn prepare(root: &Path) -> Result<PathBuf, String> {
         return Err(e.clone());
     }
     verify_prepared(root)?;
+    settings::ensure_defaults(&runtime.join("splanet.ini"),true)?;
     Ok(runtime)
 }
 
-fn validated_env(command: &mut Command) {
+fn validated_env(command: &mut Command, game: &Path) -> Result<(), String> {
+    let configured=settings::read_settings(&game.join("splanet.ini"))?;
     // Make flags deterministic: never inherit legacy experimental modes.
     let controlled = [
         "MATROX_MSI_BORDERLESS", "MATROX_MSI_PERSPECTIVE",
         "MATROX_MSI_INDEXED_KEY", "MATROX_MSI_SHADOW_ONCE",
-        "MATROX_MSI_MODULATE", "MATROX_MSI_DITHER",
+        "MATROX_MSI_MODULATE", "MATROX_MSI_DITHER", "MATROX_MSI_FPS_LIMIT",
         "MATROX_MSI_SHADOW_BLEND", "MATROX_MSI_SHADOW_UNDERLAY",
         "MATROX_MSI_WORLD_BLUE_KEY",
     ];
@@ -237,10 +271,13 @@ fn validated_env(command: &mut Command) {
     ] {
         command.env(name, "1");
     }
+    command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
+    command.env("MATROX_MSI_DITHER",if configured.dither {"1"} else {"0"});
+    Ok(())
 }
 
 /// Normal gameplay is not subject to the standalone 300-second diagnostic
-/// timeout. The v0.35 MSI95 driver itself keeps the hard 60 FPS ceiling.
+/// timeout. The MSI95 driver gets the cap from [scorch] FPSLimit.
 pub fn spawn(root: &Path) -> Result<Child, String> {
     verify_prepared(root)?;
     spawn_unchecked(root)
@@ -253,13 +290,29 @@ pub fn spawn_unchecked(root: &Path) -> Result<Child, String> {
     let exe = game.join("splanetw.exe");
     let mut command = Command::new(&exe);
     command.current_dir(&game);
-    validated_env(&mut command);
+    validated_env(&mut command,&game)?;
     command.spawn().map_err(|e| format!("Cannot launch Matrox Mystique OEM: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn matrox_environment_uses_common_fps_and_optional_dither() {
+        let folder = std::env::temp_dir().join(format!(
+            "matrox-settings-env-{}",std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("splanet.ini"),b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
+        let mut command=Command::new("unused.exe");
+        validated_env(&mut command,&folder).unwrap();
+        assert!(command.get_envs().any(|(key,val)|
+            key=="MATROX_MSI_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("120"))));
+        assert!(command.get_envs().any(|(key,val)|
+            key=="MATROX_MSI_DITHER" && val==Some(std::ffi::OsStr::new("1"))));
+        fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn patch_offsets_and_known_digests_are_stable() {
         assert_eq!(WIN95_OFFSET, 0x1579b);

@@ -1,4 +1,4 @@
-# Clean-room Matrox MSI95 v0.35 build for Windows x86.
+# Clean-room Matrox MSI95 v0.36 build for Windows x86.
 # No proprietary Matrox driver source or binaries are used.
 $ErrorActionPreference = "Stop"
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "a1a4291540de851305977fde576df57d42c64600f5abbcc1a2e1c0469d98d666"
+$expectedSourceHash = "631f0cf513fe5930c6a4c9439a518643c0b9ca1e72b956d258e59f623f586334"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 

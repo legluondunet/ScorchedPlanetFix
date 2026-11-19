@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox, matrox_runtime, matrox_iso};
+use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox, matrox_runtime, matrox_iso, settings};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -276,6 +276,9 @@ fn verify_and_play(root: &Path, logger: &Logger,
     // once this edition's executable, original backup, INI and game-data
     // fingerprints are all confirmed.
     let report=verify::verify_game_assets(&game,|message|logger.write(message))?;
+    // The game INI is mutable, unlike immutable game assets. Fill only
+    // missing FPS defaults; never overwrite a user's configured frame cap.
+    settings::ensure_defaults(&game.join("splanet.ini"),false)?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
     let mut child=verify::launch_preverified(report,&game,logger.session_id(),
         |message|logger.write(message))?;

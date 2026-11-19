@@ -1,13 +1,13 @@
-# Matrox Mystique MSI95 clean-room driver (v0.35)
+# Matrox Mystique MSI95 clean-room driver (v0.36 experimental)
 
 This directory contains the **independently implemented, open-source**
 MSI95 Win95 compatibility layer used by the experimental Matrox OEM backend.
 It is not the original Matrox proprietary `msi95.dll`.
 
-The full 116,216-byte C source is directly reviewable in
+The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`a1a4291540de851305977fde576df57d42c64600f5abbcc1a2e1c0469d98d666`
+`631f0cf513fe5930c6a4c9439a518643c0b9ca1e72b956d258e59f623f586334`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -21,3 +21,12 @@ before installing the DLL into its isolated Matrox runtime.
 
 This is still a diagnostic-origin renderer: its default logging and
 framebuffer BMP capture must be streamlined before a stable v2.1.0 release.
+
+## Runtime INI options
+
+The Windows launcher reads the installed game's `splanet.ini` and passes
+`[scorch] FPSLimit` to MSI95 through `MATROX_MSI_FPS_LIMIT`. The
+`[matrox] Dither` value is passed separately through `MATROX_MSI_DITHER`.
+Both options default to 60 and 0 respectively; `FPSLimit=0` disables
+pacing and valid positive caps are 1..240. No separate Matrox CLI option is
+needed. The two renderer environment variables are implementation details.

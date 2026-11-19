@@ -1,5 +1,5 @@
 /* Scorched Planet Matrox Mystique — MSI95 *diagnostic* compatibility shim.
- * Stage 0.35: enforce a native 60 FPS frame ceiling at MSI frame boundary; preserve validated effects.
+ * Stage 0.36: shared INI-configurable frame ceiling at MSI frame boundary; preserve validated effects.
  * Target: 32-bit x86 PE DLL, cdecl exports (1996 MSI95.dll ABI).
  * No proprietary code or game data included.
  * Compile with clang targeting i686-pc-windows-msvc and lld-link; no CRT.
@@ -184,10 +184,9 @@ static int g_msi_modulate_enabled=0,g_msi_dither_enabled=0;
 static unsigned g_modulate_triangles=0,g_modulate_pixels=0,g_modulate_varying=0;
 static unsigned g_dither_candidates=0,g_dither_changed=0,g_dither_bypassed=0;
 static unsigned g_fx_vertex_color_logs=0,g_fx_param_state_logs=0;
-/* Always-on 60 FPS limiter. Scheduled from the previous frame boundary,
- * with one QPC tick rounded up above 1/60s to prevent a speed >60 FPS.
- * Throttles only at MSI95 EndFrame (never within rasterization or HUD draws). */
-#define MSI_FPS_CEILING 60u
+/* FPS cap from [scorch] FPSLimit via launcher environment; default 60.
+ * Zero disables pacing. Limits only at EndFrame, not during HUD draws. */
+static unsigned g_cap_target_fps=60u;
 static DWORD g_cap_frequency=0;
 static MSI_INT64 g_cap_last_tick=0;
 static DWORD g_cap_last_ms=0;
@@ -976,6 +975,18 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_zplanes=0;g_drawn_zplanes=g_drawn_zpixels=g_rejected_zplanes=0;
     g_first_zplane_frame=0xFFFFFFFFu;
     g_cap_qpc_ready=0;
+    g_cap_target_fps=60u;
+    {char setting[16]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_FPS_LIMIT",setting,sizeof(setting));
+     if(n>0 && n<sizeof(setting)){
+         unsigned fps=0u,valid=1u;
+         for(DWORD i=0;i<n;i++){
+             if(setting[i]<'0'||setting[i]>'9'){valid=0u;break;}
+             fps=fps*10u+(unsigned)(setting[i]-'0');
+             if(fps>240u){valid=0u;break;}
+         }
+         if(valid)g_cap_target_fps=fps;
+     }
+    }
     g_cap_frequency=g_cap_last_tick=0;
     g_cap_last_ms=0;
     g_cap_waited_frames=g_cap_late_frames=g_cap_sleep_ms=g_cap_fallback_frames=0;
@@ -985,7 +996,11 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
          g_cap_qpc_ready=1;
      }
     }
-    logtext("FPS_CAP enabled permanently: maximum 60 FPS at MSI95 end-of-frame (QPC with fallback)");
+    {char buf[180];DWORD n=0;
+      putstr(buf,&n,"FPS_CAP configured maximum=");putunsigned(buf,&n,g_cap_target_fps);
+      putstr(buf,&n,g_cap_target_fps?" FPS at MSI95 end-of-frame (QPC with fallback)":" (frame pacing disabled)");
+      buf[n]=0;logtext(buf);
+    }
     logtext("msiInit OK: allocated RAM framebuffer, Z buffer, texture cache");
     preview_open();
     return &g_info;
@@ -1057,13 +1072,13 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     return TRUE;
 }
 /* Pacing runs after preview_present(), not before rasterization or Windows
- * message processing. A late frame never triggers a catch-up burst: the next
- * deadline is anchored to its ACTUAL completion. This is deliberately a 60 FPS
- * ceiling, not a forced 60 FPS target on slow machines. */
-static void frame_limit_60(void){
+ * message processing. A late frame never triggers a catch-up burst.
+ * This is an upper bound, not a forced FPS target on slow machines. */
+static void frame_limit(void){
+    if(g_cap_target_fps==0u)return;
     if(g_cap_qpc_ready){
         MSI_LARGE_INTEGER ts;
-        MSI_INT64 interval=(MSI_INT64)((g_cap_frequency+59u)/60u);
+        MSI_INT64 interval=((MSI_INT64)g_cap_frequency+(MSI_INT64)g_cap_target_fps-1LL)/(MSI_INT64)g_cap_target_fps;
         if(QueryPerformanceCounter(&ts)){
             if(g_cap_last_tick!=0){
                 MSI_INT64 deadline=g_cap_last_tick+interval;
@@ -1098,11 +1113,13 @@ static void frame_limit_60(void){
         g_cap_qpc_ready=0;
         logtext("FPS_CAP QPC failed; switching to conservative GetTickCount pacing");
     }
-    /* Fallback for unavailable QPC: ceil(1000/60)=17 ms between boundaries. */
+    /* Fallback for unavailable QPC: conservatively round the target
+     * interval up to a whole millisecond. */
     {DWORD now=GetTickCount();
+     DWORD interval=(1000u+g_cap_target_fps-1u)/g_cap_target_fps;
      if(g_cap_last_ms){
          DWORD elapsed=now-g_cap_last_ms;
-         if(elapsed<17u){Sleep(17u-elapsed);++g_cap_waited_frames;}
+         if(elapsed<interval){Sleep(interval-elapsed);++g_cap_waited_frames;}
          else ++g_cap_late_frames;
      }
      g_cap_last_ms=GetTickCount();
@@ -1172,7 +1189,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         g_capture_ownership=0;
     }
     preview_present();
-    frame_limit_60(); /* fixed default 60 FPS ceiling, measured at frame boundary */
+    frame_limit(); /* user-configured maximum FPS from [scorch] */
     if(g_frames%120==0 && g_frames>360 && g_frames-g_last_triangle_frame>=120 && !g_no_geometry_logged){
         g_no_geometry_logged=1;
         lognum("NO_GEOMETRY_BEGIN elapsed_ms=",GetTickCount()-g_boot_tick,"frame=",g_frames);
@@ -1221,7 +1238,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("MSI_MODULATE varying_triangles=",g_modulate_varying,"enabled=",(unsigned)g_msi_modulate_enabled);
         lognum("MSI_DITHER candidates=",g_dither_candidates,"changed_pixels=",g_dither_changed);
         lognum("MSI_DITHER bypassed_textured_pixels=",g_dither_bypassed,"enabled=",(unsigned)g_msi_dither_enabled);
-        lognum("FPS_CAP target_fps=",MSI_FPS_CEILING,"waited_frames=",g_cap_waited_frames);
+        lognum("FPS_CAP target_fps=",g_cap_target_fps,"waited_frames=",g_cap_waited_frames);
         lognum("FPS_CAP late_frames=",g_cap_late_frames,"fallback_frames=",g_cap_fallback_frames);
         lognum("FPS_CAP slept_ms=",g_cap_sleep_ms,"qpc_active=",(unsigned)g_cap_qpc_ready);
         lognum("PERF_WALL elapsed_ms=",GetTickCount()-g_boot_tick,"frames=",g_frames);

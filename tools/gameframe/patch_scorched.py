@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scorched Planet-specific, pinned GameFrame fix: native desktop 4:3, one game window, 60 FPS.
+"""Scorched Planet-specific, pinned GameFrame fix: native desktop 4:3, one game window, configurable FPS.
 
 Applied only to an ephemeral checkout of tanepiper/game-frame at its exact pinned
 commit in GitHub Actions, never to the upstream source or CyberGladiatorsFix.
@@ -124,7 +124,14 @@ use std::time::{Duration, Instant};
 fn limit_scorched_fps() {
     // Limit the game's calls themselves (and thus game time), not only the
     // OpenGL presenter. A 120 Hz VSync would otherwise run the game at 120.
-    if std::env::var_os("SCORCHED_GLIDE_FPS_60").is_none() { return; }
+    static LIMIT: OnceLock<u32> = OnceLock::new();
+    let fps=*LIMIT.get_or_init(|| {
+        std::env::var("SCORCHED_GLIDE_FPS_LIMIT").ok()
+            .and_then(|value|value.parse::<u32>().ok())
+            .filter(|fps|*fps<=240)
+            .unwrap_or(60)
+    });
+    if fps==0 { return; } // FPSLimit=0 disables frame pacing
     static NEXT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
     let clock=NEXT.get_or_init(||Mutex::new(None));
     let mut next=clock.lock().unwrap_or_else(|e|e.into_inner());
@@ -133,7 +140,8 @@ fn limit_scorched_fps() {
         if deadline>now { std::thread::sleep(deadline.duration_since(now)); }
     }
     // Do not try to catch up missed frames; cap independent of monitor Hz.
-    *next=Some(Instant::now()+Duration::from_nanos(16_666_667));
+    let interval_ns=(1_000_000_000u64+fps as u64-1)/fps as u64;
+    *next=Some(Instant::now()+Duration::from_nanos(interval_ns));
 }
 """)
     replace("api/sst.rs",
@@ -469,7 +477,7 @@ mod tests {
             '            crate::gl::check(gl, "in the frame");',
             '            overlay.draw(gl, lfb, cw, ch, x0, y0, vw, vh);\n            crate::gl::check(gl, "in the frame");')
 
-    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS + menu telemetry + root-menu version overlay")
+    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + INI-configured FPS + menu telemetry + root-menu version overlay")
     for file in ["window.rs","win32.rs","api/sst.rs"]:
         text=(ROOT/file).read_text()
         if "ChangeDisplaySettings" in text:

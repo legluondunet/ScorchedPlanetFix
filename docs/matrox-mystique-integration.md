@@ -28,10 +28,10 @@ Keep all current 3dfx/GameFrame code and checks intact. Never feed OEM
 its `glide.dll`, and never load the original proprietary Matrox `msi95.dll`
 in the modern runtime.
 
-| Edition | Executable | Backend | Native ratio | FPS ceiling |
+| Edition | Executable | Backend | Native ratio | FPS setting |
 | --- | --- | --- | --- | --- |
-| Retail 3dfx | `spvoodoo.exe` | GameFrame `glide.dll` | 4:3 | 60 |
-| Mystique OEM | `splanetw.exe` | clean-room `msi95.dll` | 8:5 | 60 |
+| Retail 3dfx | `spvoodoo.exe` | GameFrame `glide.dll` | 4:3 | `[scorch] FPSLimit` |
+| Mystique OEM | `splanetw.exe` | clean-room `msi95.dll` | 8:5 | `[scorch] FPSLimit` |
 
 Both backends should be packaged in **one downloadable Windows x64 launcher**,
 with the appropriate x86 DLL unpacked into the correct game directory at
@@ -43,7 +43,7 @@ game or driver binary may be bundled.
 1. **Completed, Windows CI-validated:** committed exact OEM manifest; edition-neutral
    read-only `--verify`; separate `scorchedplanet-matrox/` and
    `scorchedplanet-matrox-runtime/` trees; exact hash-locked Win95 and
-   FadeLow runtime copy patch; 60 FPS/MSI95 graphics flags; no 300-second
+   FadeLow runtime copy patch; MSI95 graphics flags; no 300-second
    diagnostic process kill. Existing 3dfx GameFrame behavior is retained.
 2. **Completed, Windows CI-validated, runtime test pending:** native Rust
    ISO9660/Joliet importer accepting Mode1/2352 raw CloneCD IMG, standard
@@ -54,7 +54,7 @@ game or driver binary may be bundled.
    The regular no-argument command installs and launches automatically;
    `--install-only` installs originals without playing. An unambiguous Matrox
    image beside the launcher is auto-detected on fresh installs.
-3. **Completed, Windows CI-validated:** reviewed 116,216-byte C source in
+3. **Completed, Windows CI-validated:** reviewed freestanding C source in
    `tools/matrox/msi95_probe.c` (hash locked), x86 freestanding DLL compilation,
    explicit nine-export ABI audit, and embedded GameFrame + MSI95 in **one**
    Windows x64 executable. There are no proprietary game or Matrox drivers.
@@ -142,3 +142,35 @@ executable; Windows and full-gameplay regression validation remain pending.
 
 No new proprietary assets were committed. The manifest contains only original
 path names, sizes, and cryptographic fingerprints.
+
+## Configuration (v2.1 candidate)
+
+The original game's **existing** `[scorch]` section in `splanet.ini`
+contains the common FPS ceiling; new `[matrox]` options only affect the
+Matrox Mystique OEM renderer. The installer adds missing defaults but preserves
+existing user values and unrelated game settings.
+
+```ini
+[scorch]
+FPSLimit=60
+
+[matrox]
+Dither=0
+```
+
+- `FPSLimit=60`: default cap for **both** editions. Valid values 1..240;
+  `0` disables the cap (not recommended if the original game's timing depends
+  on frame pacing). This is a maximum, not a guaranteed rate.
+- `Dither=0`: default. Change to `1` to enable experimental ordered
+  RGB565 dithering in the Matrox 3D renderer. It is ignored for retail 3dfx.
+- Invalid values or duplicate option definitions fail clearly instead of
+  silently applying an unexpected configuration.
+
+INI location for retail: `splanet/splanet.ini`. For Matrox, edit
+`scorchedplanet-matrox-runtime/splanet.ini`, the active game's runtime
+copy. The pristine OEM source folder's INI is not the active runtime INI once
+prepared. The launcher passes settings to the selected renderer on each launch;
+no edition-specific CLI flags or direct environment-variable edits are required.
+
+`--verify` remains read-only; standard launches and `--install-only` may
+add missing INI defaults when migrating older supported installations.

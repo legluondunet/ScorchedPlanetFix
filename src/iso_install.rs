@@ -407,18 +407,19 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
     };
     // Numeric language indices come from the original game's PE32 resource
     // pointer table: 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
-    let names: [&[u8];5]=[b"video=",b"language=",b"HighQualityVideo=",b"settings=",b"name="];
-    let values: [Vec<u8>;5]=[
+    let names: [&[u8];6]=[b"video=",b"language=",b"HighQualityVideo=",b"settings=",b"name=",b"FPSLimit="];
+    let values: [Vec<u8>;6]=[
         b"video= video".to_vec(),
         format!("language={language}").into_bytes(),
         b"HighQualityVideo=1".to_vec(),
         b"settings=1 0 1 1 5 95 127 0 0 5 320".to_vec(),
         b"name=Player".to_vec(),
+        b"FPSLimit=60".to_vec(),
     ];
     let mut out:Vec<Vec<u8>>=Vec::new();
     let mut in_scorch=false;
     let mut section_found=false;
-    let mut seen=[false;5];
+    let mut seen=[false;6];
     let chunks:Vec<&[u8]>=original.split(|b|*b==b'\n').collect();
     for (index,line) in chunks.iter().enumerate() {
         if index+1==chunks.len() && line.is_empty() {continue;}
@@ -426,7 +427,7 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
         let trimmed=line.trim_ascii();
         if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
             if in_scorch {
-                for i in 0..5 {
+                for i in 0..6 {
                     if !seen[i] {out.push(values[i].clone());seen[i]=true;}
                 }
             }
@@ -435,9 +436,17 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
         }
         if in_scorch {
             let mut handled=false;
-            for i in 0..5 {
-                if trimmed.len()>=names[i].len() &&
-                   trimmed[..names[i].len()].eq_ignore_ascii_case(names[i]) {
+            for i in 0..6 {
+                let matches = if i == 5 {
+                    // Accept user formatting such as "FPSLimit = 120" and
+                    // preserve the value rather than inserting a duplicate.
+                    trimmed.iter().position(|b| *b == b'=')
+                        .is_some_and(|eq| trimmed[..eq].trim_ascii().eq_ignore_ascii_case(b"FPSLimit"))
+                } else {
+                    trimmed.len() >= names[i].len() &&
+                        trimmed[..names[i].len()].eq_ignore_ascii_case(names[i])
+                };
+                if matches {
                     // A migrated INI must contain exactly one video, language,
                     // and HighQualityVideo entry, or --verify will reject it.
                     // Keep all other user-defined settings unmodified.
@@ -460,7 +469,7 @@ pub fn update_ini(ini:&Path,language:u8)->Result<(),String>{
         in_scorch=true;
     }
     if in_scorch {
-        for i in 0..5 {if !seen[i]{out.push(values[i].clone());}}
+        for i in 0..6 {if !seen[i]{out.push(values[i].clone());}}
     }
     let mut bytes=Vec::new();
     for line in out {

@@ -3,6 +3,7 @@
 //! Builds from pinned Apache-2.0 source, embeds the 32-bit DLL into the
 //! Windows x64 launcher. A different regular glide.dll is backed up before
 //! installation of the embedded GameFrame; unknown files are never discarded.
+use crate::settings;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read,Write};
@@ -266,7 +267,7 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
     Ok(true)
 }
 
-/// Native desktop 4:3 presentation and 60 FPS. Never configure nGlide.
+/// Native desktop 4:3 presentation and shared INI FPS limit. Never configure nGlide.
 /// Strict launch path: require the installed renderer to match bundled GameFrame.
 pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
     ->Result<(),String>{
@@ -290,7 +291,9 @@ fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_
     command.env("GLIDE_LFB_FILTER","nearest");
     command.env("SCORCHED_GLIDE_DESKTOP","1");
     command.env("SCORCHED_GLIDE_ADOPT_WINDOW","1");
-    command.env("SCORCHED_GLIDE_FPS_60","1");
+    let configured=settings::read_settings(&game.join("splanet.ini"))?;
+    command.env_remove("SCORCHED_GLIDE_FPS_60");
+    command.env("SCORCHED_GLIDE_FPS_LIMIT",configured.fps_limit.to_string());
     // Carry the launcher identity into the 32-bit renderer. Do not hardcode
     // the GameFrame source commit or an old release version as the UI identity.
     command.env("SCORCHED_FIX_SIGNATURE",format!(
@@ -306,7 +309,7 @@ fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_
     }
     let prior=std::env::var("WINEDLLOVERRIDES").unwrap_or_default();
     command.env("WINEDLLOVERRIDES",format!("glide=n;{prior}"));
-    log(&format!("GAMEFRAME: backend=OpenGL, API=Glide 2.11, original=640x480, desktop={dw}x{dh} unchanged, 4:3 content={cw}x{ch} centered, one borderless native game HWND, cap=60fps, override=glide=n"));
+    log(&format!("GAMEFRAME: backend=OpenGL, API=Glide 2.11, original=640x480, desktop={dw}x{dh} unchanged, 4:3 content={cw}x{ch} centered, one borderless native game HWND, cap={}fps (0=unlimited), override=glide=n", configured.fps_limit));
     Ok(())
 }
 
@@ -384,7 +387,11 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
             && val==Some(std::ffi::OsStr::new("123456-42"))));
-        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_60" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("60"))));
+        fs::write(root.join("splanet.ini"),b"[scorch]\nFPSLimit=120\n").unwrap();
+        configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT"
+            && val==Some(std::ffi::OsStr::new("120"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_MENU_PROBE" && val.is_some()));

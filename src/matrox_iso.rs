@@ -311,7 +311,7 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
                 return Err(format!("Matrox ISO content hash does not match OEM edition: {}", entry.path));
             }
         }
-        let ini = b"[scorch]\r\nlanguage= 2\r\nvideo= video\r\nHighQualityVideo=1\r\n";
+        let ini = b"[scorch]\r\nlanguage= 2\r\nvideo= video\r\nHighQualityVideo=1\r\nFPSLimit=60\r\n[matrox]\r\nDither=0\r\n";
         fs::write(stage.join("splanet.ini"), ini).map_err(|e| e.to_string())?;
         matrox::verify_original(&stage)?;
         if fs::symlink_metadata(&target).is_ok() {
