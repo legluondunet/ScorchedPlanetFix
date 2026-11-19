@@ -15,14 +15,17 @@ pub struct GameSettings{
     pub fps_limit:u32,
     pub dither:bool,
     pub unlimited_fuel:bool,
+    pub aliah:bool,
+    pub fatal:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false,aliah:false,fatal:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
     graphics_fps:bool,legacy_fps:bool,dither:bool,unlimited_fuel:bool,
+    aliah:bool,fatal:bool,
     legacy_value:Option<u32>,
 }
 fn read_bytes(path:&Path)->Result<Option<Vec<u8>>,String>{
@@ -100,6 +103,14 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 seen.unlimited_fuel=true;
                 result.unlimited_fuel=switch(value,"[Cheats] UnlimitedFuel")?;
             },
+            4 if name.eq_ignore_ascii_case(b"ALIAH")=>{
+                if seen.aliah{return Err("INI: duplicate [Cheats] ALIAH".into());}
+                seen.aliah=true;result.aliah=switch(value,"[Cheats] ALIAH")?;
+            },
+            4 if name.eq_ignore_ascii_case(b"FATAL")=>{
+                if seen.fatal{return Err("INI: duplicate [Cheats] FATAL".into());}
+                seen.fatal=true;result.fatal=switch(value,"[Cheats] FATAL")?;
+            },
             _=>{},
         }
     }
@@ -127,17 +138,23 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_fps=!seen.graphics_fps;
     let add_dither=matrox&&!seen.dither;
     let add_fuel=!seen.unlimited_fuel;
-    if !add_fps&&!add_dither&&!add_fuel&&!seen.legacy_fps{return Ok(());}
+    let add_aliah=!seen.aliah;
+    let add_fatal=!seen.fatal;
+    if !add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+160);
     let mut current=0u8;
     let mut did_fps=false;
     let mut did_dither=false;
     let mut did_fuel=false;
+    let mut did_aliah=false;
+    let mut did_fatal=false;
     let mut finish=|old:u8,out:&mut Vec<u8>|{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
         if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
+        if old==4&&add_aliah&&!did_aliah{append(out,b"ALIAH=0");did_aliah=true;}
+        if old==4&&add_fatal&&!did_fatal{append(out,b"FATAL=0");did_fatal=true;}
     };
     for line in original.split_inclusive(|b|*b==b'\n'){
         let trimmed=line.trim_ascii();
@@ -159,6 +176,8 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
     if !seen.cheats{append(&mut out,b"[Cheats]");}
     if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
+    if add_aliah&&!did_aliah{append(&mut out,b"ALIAH=0");}
+    if add_fatal&&!did_fatal{append(&mut out,b"FATAL=0");}
     if out.len()>MAX_INI_SIZE{return Err("INI migration exceeds 256 KiB".into());}
     if parse(&out)?.0!=before{return Err("INI migration unexpectedly changed a user setting".into());}
     let temporary=path.with_file_name(format!(".scorchedplanetfix-ini-{}-{}.tmp",
@@ -184,8 +203,22 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
 /// establish an unlimited-fuel memory or executable patch. Fail explicitly
 /// instead of silently launching with an ineffective option.
 pub fn reject_unimplemented_cheats(path:&Path)->Result<(),String>{
-    if read_settings(path)?.unlimited_fuel {
+    let configured=read_settings(path)?;
+    if configured.unlimited_fuel {
         return Err("[Cheats] UnlimitedFuel=1 is not yet supported: no verified fuel consumption patch is available for this game executable. Keep UnlimitedFuel=0 until the cheat is implemented.".into());
+    }
+    // ALIAH and FATAL are established in-game keyboard codes, but there is
+    // no authenticated automated key-injection path for either retail or
+    // Matrox yet. Never silently pretend the INI toggle activated the cheat.
+    if configured.aliah || configured.fatal {
+        let codes=match (configured.aliah,configured.fatal){
+            (true,true)=>"ALIAH and FATAL",
+            (true,false)=>"ALIAH",
+            (false,true)=>"FATAL",
+            (false,false)=>unreachable!(),
+        };
+        return Err(format!(
+            "[Cheats] {codes}=1 requests automatic cheat activation, which is not implemented yet. Enter the codes manually during gameplay (invulnerability may require ALLAH instead of ALIAH depending on the game build), or set these INI options back to 0."));
     }
     Ok(())
 }
@@ -200,15 +233,19 @@ mod tests{
     }
     #[test]
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
-        let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\n";
+        let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,unlimited_fuel:true});
+            fps_limit:120,dither:true,unlimited_fuel:true,aliah:true,fatal:true});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=60\nfpslimit=30").is_err());
         assert!(parse(b"[Cheats]\nUnlimitedFuel=2").is_err());
         assert!(parse(b"[Cheats]\nUnlimitedFuel=1\nUnlimitedFuel=0").is_err());
+        assert!(parse(b"[Cheats]\nALIAH=2").is_err());
+        assert!(parse(b"[Cheats]\nFATAL=YES").is_err());
+        assert!(parse(b"[Cheats]\naliah=0\nALIAH=1").is_err());
+        assert!(parse(b"[Cheats]\nFATAL=0\nfatal=1").is_err());
     }
     #[test]
     fn legacy_fps_migrates_without_losing_player_values(){
@@ -221,8 +258,10 @@ mod tests{
         assert!(out.windows(b"[Graphics]".len()).any(|v|v==b"[Graphics]"));
         assert!(out.windows(b"FPSLimit=75".len()).any(|v|v==b"FPSLimit=75"));
         assert!(out.windows(b"UnlimitedFuel=0".len()).any(|v|v==b"UnlimitedFuel=0"));
+        assert!(out.windows(b"ALIAH=0".len()).any(|v|v==b"ALIAH=0"));
+        assert!(out.windows(b"FATAL=0".len()).any(|v|v==b"FATAL=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false,aliah:false,fatal:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -235,9 +274,30 @@ mod tests{
         assert!(s.contains("[Graphics]\r\nFPSLimit=60"));
         assert!(s.contains("[matrox]\r\nDither=0"));
         assert!(s.contains("[Cheats]\r\nUnlimitedFuel=0"));
+        assert!(s.contains("ALIAH=0"));
+        assert!(s.contains("FATAL=0"));
         assert!(!s.contains("[scorch]"));
         fs::write(&ini,b"[Graphics]\nFPSLimit=30\n[Cheats]\nUnlimitedFuel=1\n").unwrap();
         assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("not yet supported"));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn existing_cheats_and_unrelated_ini_keys_are_preserved() {
+        let p=fixture();
+        let ini=p.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Graphics]\nFPSLimit=45\n[Cheats]\nALIAH=1\nUserKey=preserve\nFATAL=0\n").unwrap();
+        ensure_defaults(&ini,false).unwrap();
+        let contents=fs::read_to_string(&ini).unwrap();
+        assert!(contents.contains("ALIAH=1"));
+        assert!(contents.contains("FATAL=0"));
+        assert!(contents.contains("UserKey=preserve"));
+        assert!(contents.contains("UnlimitedFuel=0"));
+        assert_eq!(contents.matches("ALIAH=").count(),1);
+        assert_eq!(contents.matches("FATAL=").count(),1);
+        let error=reject_unimplemented_cheats(&ini).unwrap_err();
+        assert!(error.contains("ALIAH"));
+        fs::write(&ini,b"[Cheats]\nFATAL=1\n").unwrap();
+        assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("FATAL"));
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

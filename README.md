@@ -111,3 +111,13 @@ now places `FPSLimit=60` in `[Graphics]` and adds a disabled
 `[Cheats] UnlimitedFuel=0` placeholder. The native fuel cheat is **not yet
 implemented** and an enabled option is rejected, rather than silently
 pretending to work.
+
+### Native in-game cheats (PR #36, experimental)
+
+`[Cheats]` now lists `ALIAH=0` (invulnerability) and
+`FATAL=0` (all weapons and ammunition), alongside `UnlimitedFuel=0`.
+The native codes are typed during gameplay. Automated activation via INI
+is not yet proven and enabling either option returns an explicit
+unsupported-feature error. Some third-party lists use `ALLAH`
+instead of `ALIAH` for invulnerability; the project preserves the
+user-requested `ALIAH` spelling until game testing resolves the ambiguity.

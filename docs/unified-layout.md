@@ -56,6 +56,8 @@ Dither=0
 
 [Cheats]
 UnlimitedFuel=0
+ALIAH=0
+FATAL=0
 ```
 
 - FPSLimit under `[Graphics]` is shared by retail and Matrox: 0 means no frame pacing,
@@ -154,3 +156,23 @@ than silently pretending the fuel is unlimited. This first INI entry is
 a reserved opt-in configuration until a version-specific patch is tested
 in-game. The known `FATAL` cheat grants weapons and ammunition and
 must not be falsely represented as infinite flight fuel.
+
+## 2026-11-19 — Native keyboard cheat codes
+
+New default `[Cheats]` keys in the launcher-root INI:
+
+- `ALIAH=0`: **invulnerability** (source spelling ALIAH; some code lists
+  instead say `ALLAH`). The in-game keyboard code is documented, but
+  automatic injection is not tested or implemented for the current two
+  renderers. The entry remains disabled by default.
+- `FATAL=0`: **all weapons and ammunition**. Native in-game code;
+  automated injection not yet verified. This is not infinite flight fuel.
+- `UnlimitedFuel=0`: still awaiting an authenticated native executable
+  fuel-consumption patch.
+
+Do not represent a `=1` INI toggle as a working cheat at this stage. The
+launcher rejects an enabled unimplemented code, explaining that users may
+**type the native code during gameplay**. Unknown entries, comments and
+existing player values are preserved by the INI migrator. The settings
+parser accepts only 0 and 1, rejects duplicate assignments and preserves
+read-only verification.

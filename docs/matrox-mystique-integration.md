@@ -198,3 +198,14 @@ See [unified layout implementation notes](unified-layout.md) for validation.
 - `[Cheats] UnlimitedFuel=0` is added as a reserved default; no verified
   unlimited fuel patch is yet available and `=1` is explicitly refused
   until a native game code patch has been validated.
+
+### Native keyboard cheats (development, 2026-11-19)
+
+`[Cheats]` in `ScorchedPlanetFix.ini` now documents
+`ALIAH=0` (invulnerability) and `FATAL=0` (weapons and full ammunition),
+both disabled by default. These are recognized as published keyboard cheat
+codes for Scorched Planet, not verified executable patches. Sources disagree
+whether invulnerability is spelled ALIAH or ALLAH. No automatic keyboard
+injection is yet implemented; turning either INI option to 1 is refused with
+an explanatory error, rather than silently failing. For now type the
+appropriate code manually **during gameplay**.

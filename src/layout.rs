@@ -19,8 +19,12 @@ FPSLimit=60\r\n\
 Dither=0\r\n\
 \r\n\
 [Cheats]\r\n\
-; Reserved (not yet implemented): enable only after a verified fuel patch\r\n\
-UnlimitedFuel=0\r\n";
+; Reserved: unlimited flight fuel (not implemented)\r\n\
+UnlimitedFuel=0\r\n\
+; ALIAH = invulnerability; code is entered manually in-game for now\r\n\
+ALIAH=0\r\n\
+; FATAL = all weapons and ammunition; entered manually in-game for now\r\n\
+FATAL=0\r\n";
 
 fn regular_directory(path:&Path)->Result<(),String>{
     let metadata=fs::symlink_metadata(path).map_err(|e|format!("Cannot inspect {}: {e}",path.display()))?;
