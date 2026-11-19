@@ -209,12 +209,23 @@ fn expected_files(image: &mut Image) -> Result<Vec<Entry>, String> {
     Ok(verified)
 }
 
+/// Never allow Matrox installation while a retail 3dfx installation exists.
+/// Use symlink_metadata so even dangling links block unsafe reuse.
+fn refuse_retail_installation(root: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(root.join("splanet")) {
+        Ok(_) => Err("A retail 3dfx edition is already installed. ScorchedPlanetFix manages only one edition; Matrox installation refused.".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Cannot inspect existing 3dfx installation: {e}")),
+    }
+}
+
 /// Accept the original user-owned ISO, raw Mode1/2352 IMG, or the safe
 /// CUE/BIN(IMG) descriptor already supported by the retail 3dfx importer.
 /// A CUE data track is normalized to a temporary 2048-byte ISO, which is
 /// always removed when the returned guard goes out of scope (also on failure).
 /// The same 66-file SHA-256 checks apply to every input format.
 pub fn install_media(root: &Path, source: &Path, bin_override: Option<&Path>) -> Result<(), String> {
+    refuse_retail_installation(root)?;
     if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
         if fs::symlink_metadata(&root.join(ORIGINAL_FOLDER)).is_ok() {
             matrox::verify_original(&root.join(ORIGINAL_FOLDER))?;
@@ -257,6 +268,7 @@ pub fn recognized(image: &Path) -> bool {
 /// Install the exact 66 original user-owned files, with transactional staging.
 /// Existing installations are verified and never overwritten.
 pub fn install(root: &Path, image: &Path) -> Result<(), String> {
+    refuse_retail_installation(root)?;
     let target = root.join(ORIGINAL_FOLDER);
     if fs::symlink_metadata(&target).is_ok() {
         matrox::verify_original(&target)?;
@@ -373,6 +385,21 @@ mod tests {
         assert!(!folder.join(ORIGINAL_FOLDER).exists());
         fs::remove_dir_all(folder).unwrap();
     }
+    #[test]
+    fn retail_install_blocks_matrox_media_without_touching_existing_files() {
+        let folder = std::env::temp_dir().join(format!("matrox-single-edition-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(folder.join("splanet")).unwrap();
+        fs::write(folder.join("splanet/keep.txt"), b"retail saved data").unwrap();
+        let image = folder.join("matrox.iso");
+        fs::write(&image, b"not a real disc").unwrap();
+        let err = install_media(&folder, &image, None).unwrap_err();
+        assert!(err.contains("only one edition"), "{err}");
+        assert!(!folder.join(ORIGINAL_FOLDER).exists());
+        assert_eq!(fs::read(folder.join("splanet/keep.txt")).unwrap(), b"retail saved data");
+        fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn missing_media_does_not_install() {
         let base = std::env::temp_dir()
