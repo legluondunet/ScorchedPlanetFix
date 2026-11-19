@@ -319,6 +319,40 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn cue_img_casefolded_track_is_normalized_then_rejected_safely() {
+        // The original user's CUE declares Scorched_Planet.IMG, while the
+        // Linux file is named Scorched_Planet.img. A synthetic CD proves that
+        // case folding and temporary ISO cleanup work on that exact layout.
+        const SYNC: [u8; 12] = [0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                0xff, 0xff, 0xff, 0];
+        let root = std::env::temp_dir()
+            .join(format!("matrox-cue-casefold-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let cue = root.join("Scorched_Planet.cue");
+        fs::write(&cue, b"FILE \\"Scorched_Planet.IMG\\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n").unwrap();
+        let mut bytes = vec![0u8; 20 * 2352];
+        for i in 0..20 {
+            let offset = i * 2352;
+            bytes[offset..offset + 12].copy_from_slice(&SYNC);
+            bytes[offset + 15] = 1;
+        }
+        let pvd = 16 * 2352 + 16;
+        bytes[pvd] = 1;
+        bytes[pvd + 1..pvd + 6].copy_from_slice(b"CD001");
+        bytes[pvd + 6] = 1;
+        fs::write(root.join("Scorched_Planet.img"), bytes).unwrap();
+        let error = install_media(&root, &cue, None).unwrap_err();
+        assert!(!error.contains("BIN file missing"), "{error}");
+        assert!(!root.join(ORIGINAL_FOLDER).exists());
+        assert!(!root.join(STAGING_FOLDER).exists());
+        for file in fs::read_dir(&root).unwrap() {
+            let name = file.unwrap().file_name().to_string_lossy().to_string();
+            assert!(!name.starts_with(".scorchedplanetfix-cue-"), "temporary CUE ISO leaked: {name}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn rejects_non_cue_companion_before_installing_anything() {
         let folder = std::env::temp_dir().join(format!("matrox-media-companion-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
