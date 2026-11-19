@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`631f0cf513fe5930c6a4c9439a518643c0b9ca1e72b956d258e59f623f586334`
+`bd7f48b514c3d60894edc0f1b6a350c70ca4ab54d47f21f2ef9b9ccbb2d5d067`
 
 No opaque precompiled Matrox driver is committed.
 

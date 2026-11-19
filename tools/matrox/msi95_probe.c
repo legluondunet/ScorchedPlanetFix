@@ -1078,7 +1078,7 @@ static void frame_limit(void){
     if(g_cap_target_fps==0u)return;
     if(g_cap_qpc_ready){
         MSI_LARGE_INTEGER ts;
-        MSI_INT64 interval=((MSI_INT64)g_cap_frequency+(MSI_INT64)g_cap_target_fps-1LL)/(MSI_INT64)g_cap_target_fps;
+        MSI_INT64 interval=(MSI_INT64)((g_cap_frequency+g_cap_target_fps-1u)/g_cap_target_fps);
         if(QueryPerformanceCounter(&ts)){
             if(g_cap_last_tick!=0){
                 MSI_INT64 deadline=g_cap_last_tick+interval;
