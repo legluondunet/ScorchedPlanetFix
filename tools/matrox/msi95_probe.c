@@ -694,6 +694,8 @@ static void clean(void){
 static void put16le(BYTE *p,unsigned v){p[0]=(BYTE)v;p[1]=(BYTE)(v>>8);}
 static void put32le(BYTE *p,unsigned v){put16le(p,v);put16le(p+2,v>>16);}
 static void capture_frame(const char *filename,unsigned bit){
+    /* Only explicit F12 can emit BMP files. Automatic debug calls are inert. */
+    if(!g_manual_capture_active)return;
     if((g_snapshot_mask&bit)||!g_initialized||!g_color||
        g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
     g_snapshot_mask|=bit;
@@ -736,6 +738,7 @@ static void capture_frame(const char *filename,unsigned bit){
 /* v0.25: 16-bit RGB565 BMPs of the *discarded samples* and the indexed
  * source texture, independent of the final color/ownership buffers. */
 static void capture_blue_diagnostic(const char*filename,int atlas){
+    if(!g_manual_capture_active)return;
     unsigned width=atlas?g_blue_atlas_width:640u;
     unsigned height=atlas?g_blue_atlas_height:400u;
     if(!g_initialized || (atlas&&!g_blue_atlas_valid) ||
@@ -793,6 +796,7 @@ static void capture_blue_diagnostic(const char*filename,int atlas){
  * grey = absent Z-plane atlas texel; black = no MSI raster coverage.
  * Never changes the real game framebuffer. */
 static void capture_ownership(const char *filename){
+    if(!g_manual_capture_active)return;
     if(!g_initialized || !g_color || !g_ownership || !g_ownership_bytes)return;
     const unsigned width=(unsigned)g_info.msiColor.Pitch/2;
     const unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
@@ -967,6 +971,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_info.msiTexture.pMem=(LPBYTE)g_texture;g_info.msiTexture.MemSize=(LONG)texsize;
     g_initialized=1;
     g_snapshot_mask=0;
+    logtext("AUTO_BMP_CAPTURE disabled: F12 manual screenshots only");
     g_state_valid=0;
     zero(g_texture_uploaded,sizeof(g_texture_uploaded));
     g_tex_uploads=g_palette_uploads=g_drawn_triangles=g_drawn_pixels=0;
@@ -1059,9 +1064,8 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     g_manual_capture_active=g_manual_capture_pending;
     g_manual_capture_pending=0;
     g_auto_blue_frame_samples=0;
-    g_capture_ownership=(g_frames==2999u || g_frames==3599u ||
-                         g_frames==4799u || g_frames==5999u ||
-                         g_manual_capture_active || g_auto_blue_pair_pending);
+    /* No automatic debug ownership tracking or BMP capture. */
+    g_capture_ownership=g_manual_capture_active;
     if(g_capture_ownership && g_ownership){
         zero(g_ownership,g_ownership_bytes);
         g_world_texture_samples=0;
@@ -1189,7 +1193,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         g_capture_ownership=0;
     }
     preview_present();
-    frame_limit(); /* user-configured maximum FPS from [scorch] */
+    frame_limit(); /* user-configured maximum FPS from [Graphics] */
     if(g_frames%120==0 && g_frames>360 && g_frames-g_last_triangle_frame>=120 && !g_no_geometry_logged){
         g_no_geometry_logged=1;
         lognum("NO_GEOMETRY_BEGIN elapsed_ms=",GetTickCount()-g_boot_tick,"frame=",g_frames);

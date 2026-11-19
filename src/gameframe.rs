@@ -392,7 +392,7 @@ mod tests{
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
             && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("60"))));
-        fs::write(base.join("ScorchedPlanetFix.ini"),b"[scorch]\nFPSLimit=120\n").unwrap();
+        fs::write(base.join("ScorchedPlanetFix.ini"),b"[Graphics]\nFPSLimit=120\n").unwrap();
         configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT"
             && val==Some(std::ffi::OsStr::new("120"))));

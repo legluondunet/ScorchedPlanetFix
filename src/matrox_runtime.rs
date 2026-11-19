@@ -2,7 +2,7 @@
 //! One Matrox Mystique OEM game installation in game/, sharing the standard
 //! CrimsonSkiesFix-style layout with retail 3dfx. No second runtime folder.
 //! The exact original OEM EXE and MSI95 are preserved as .bak files.
-use crate::{matrox, settings};
+use crate::{matrox, matrox_iso, settings};
 use sha2::{Digest,Sha256};
 use std::fs::{self,File,OpenOptions};
 use std::io::{Read,Write};
@@ -162,6 +162,7 @@ pub fn prepare(root: &Path)->Result<PathBuf,String>{
         fs::remove_file(&displaced)
             .map_err(|e|format!("MSI95 upgraded but stale rollback remains: {e}"))?;
     }
+    matrox_iso::update_generated_ini(&game)?;
     settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
     Ok(game)
 }

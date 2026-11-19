@@ -294,6 +294,7 @@ fn matrox_play(root: &Path, logger: &Logger,
     emit(logger, &mut sink, "Verifying Matrox Mystique OEM edition inside game/...");
     let runtime = matrox_runtime::prepare(root)?;
     layout::ensure_support_files(root,"matrox")?;
+    settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     emit(logger, &mut sink, &format!("Verified Matrox game: {}", runtime.display()));
     emit(logger, &mut sink, "Starting Matrox MSI95 backend (shared INI FPSLimit; no diagnostic time limit)...");
     logger.reset_renderer_log(root)?;
@@ -318,6 +319,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
     // missing FPS defaults; never overwrite a user's configured frame cap.
     settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
     layout::ensure_support_files(root,"retail")?;
+    settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
     logger.reset_renderer_log(root)?;
     let mut child=verify::launch_preverified(report,&game,logger.session_id(),
@@ -334,6 +336,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
 fn launch_unchecked(root: &Path, logger: &Logger,
                     mut sink: impl FnMut(&str)) -> Result<(), String> {
     let game = root.join(layout::GAME);
+    settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     // Even unchecked mode refuses conflicting installations, without
     // game file hashing, runtime preparation, installation or repair.
     if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {

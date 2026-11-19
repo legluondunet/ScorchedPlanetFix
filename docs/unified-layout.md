@@ -48,14 +48,17 @@ resolution. No extra `third_party/` or `dlls/` directory is required.
 `ScorchedPlanetFix.ini` lives next to the launcher, not in `game/`:
 
 ```ini
-[scorch]
+[Graphics]
 FPSLimit=60
 
 [matrox]
 Dither=0
+
+[Cheats]
+UnlimitedFuel=0
 ```
 
-- FPSLimit is shared by retail and Matrox: 0 means no frame pacing,
+- FPSLimit under `[Graphics]` is shared by retail and Matrox: 0 means no frame pacing,
   1..240 specifies an upper bound (60 by default).
 - Dither=0/1 affects only Matrox and is experimental.
 - Native game preferences stay in `game/splanet.ini` and are not mixed
@@ -120,3 +123,34 @@ overwriting existing user-edited reference files.
    unsupported files; ensure previous-layout directories remain intact.
 6. Do not merge PR #36 until CI **and** the requested on-device game
    tests have passed.
+
+## 2026-11-19 Matrox quality and BMP cleanup
+
+Fresh Matrox installs now write native `game/splanet.ini` with English language
+`language= 1`, quality video `HighQualityVideo= 1`, `gamma= 1.300000`
+and `settings= 0 2 1 1 5 95 127 0 0 5`, directly based on the
+player-provided INI tested with high graphics and shadows enabled.
+This native INI is independent from the fix-owned launcher INI.
+
+An older exact auto-generated Matrox native INI is upgraded to these values
+only when byte-for-byte identical to that known installer template.
+Custom/native player INIs and saved games are not overwritten.
+
+The clean-room MSI95 now disables **automatic** diagnostic BMP files
+(frame-number snapshots, blue-sprite diagnostics and automatic ownership
+coverage). F12 manual capture is still available by explicit request.
+The release-mode filename and directory are unchanged for manual captures.
+
+`[Graphics] FPSLimit=60` replaces the old `[scorch] FPSLimit`.
+The settings reader accepts old configurations during read-only verification;
+on a normal verified launch the migrator moves the legacy FPS value into the
+new section without changing the player's numeric limit. New configurations
+also include `[Cheats] UnlimitedFuel=0`, **disabled by default**.
+
+**Fuel cheat status:** no verified native unlimited-fuel code or trusted
+patch point has been established for this exact OEM executable.
+`UnlimitedFuel=1` produces an explicit unsupported-feature error rather
+than silently pretending the fuel is unlimited. This first INI entry is
+a reserved opt-in configuration until a version-specific patch is tested
+in-game. The known `FATAL` cheat grants weapons and ammunition and
+must not be falsely represented as infinite flight fuel.

@@ -184,3 +184,17 @@ Matrox-only RGB565 ordered dithering; Dither=0 is the default. Unknown
 settings are preserved; malformed or duplicate known settings are rejected.
 
 See [unified layout implementation notes](unified-layout.md) for validation.
+
+## 2026-11-19 — Matrox native defaults, no automatic BMP
+
+- The player supplied a working original `splanet.ini` with
+  `language= 1`, `HighQualityVideo= 1`, `gamma= 1.300000`,
+  `settings= 0 2 1 1 5 95 127 0 0 5` (maximum tested graphics/shadows).
+  Only fresh installs and exact unchanged installer-generated old INIs
+  are updated. Custom player native INIs are preserved.
+- The launcher INI now stores `[Graphics] FPSLimit=60` on both editions,
+  and still supports Matrox-only `[matrox] Dither=0`.
+- Automatic MSI95 BMP snapshots disabled; manual F12 remains opt-in.
+- `[Cheats] UnlimitedFuel=0` is added as a reserved default; no verified
+  unlimited fuel patch is yet available and `=1` is explicitly refused
+  until a native game code patch has been validated.

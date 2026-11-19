@@ -101,3 +101,13 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
 [v2.0.2 release notes](docs/release-notes-v2.0.2.md) · [v2.0.1 historical notes](docs/release-notes-v2.0.1.md) · [Pre-release audit checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+
+### Development branch — native Matrox configuration (19 November 2026)
+
+The experimental PR #36 now uses the player's tested English/maximum-quality
+Matrox native `splanet.ini` defaults. Automatic MSI95 BMP screenshots are
+disabled; manual F12 remains available. Root `ScorchedPlanetFix.ini`
+now places `FPSLimit=60` in `[Graphics]` and adds a disabled
+`[Cheats] UnlimitedFuel=0` placeholder. The native fuel cheat is **not yet
+implemented** and an enabled option is rejected, rather than silently
+pretending to work.

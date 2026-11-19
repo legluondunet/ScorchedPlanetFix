@@ -1,253 +1,252 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! User-owned ScorchedPlanetFix.ini beside the launcher, shared by all editions.
-//! Native game/splanet.ini is separate and never used for fix-specific options.
-use std::fs::{self, OpenOptions};
+//! Launcher-owned ScorchedPlanetFix.ini. The game's native splanet.ini is
+//! independent. [Graphics] applies to both renderers; [Matrox] and [Cheats]
+//! retain their own feature namespaces. Legacy [scorch] FPSLimit is migrated.
+use std::fs::{self,OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-const MAX_INI_SIZE: usize = 256 * 1024;
-pub const DEFAULT_FPS: u32 = 60;
-pub const MAX_FPS: u32 = 240;
+const MAX_INI_SIZE:usize=256*1024;
+pub const DEFAULT_FPS:u32=60;
+pub const MAX_FPS:u32=240;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GameSettings {
-    /// 0 disables frame pacing; 1..=240 caps the maximum frame rate.
-    pub fps_limit: u32,
-    pub dither: bool,
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct GameSettings{
+    pub fps_limit:u32,
+    pub dither:bool,
+    pub unlimited_fuel:bool,
 }
 impl Default for GameSettings {
-    fn default() -> Self { Self { fps_limit: DEFAULT_FPS, dither: false } }
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false}}
 }
-
-fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.is_file() || meta.file_type().is_symlink() {
-                return Err(format!("Configuration must be a regular INI file: {}", path.display()));
+#[derive(Default)]
+struct Presence{
+    graphics:bool,matrox:bool,cheats:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,unlimited_fuel:bool,
+    legacy_value:Option<u32>,
+}
+fn read_bytes(path:&Path)->Result<Option<Vec<u8>>,String>{
+    match fs::symlink_metadata(path){
+        Ok(meta)=>{
+            if !meta.is_file()||meta.file_type().is_symlink(){
+                return Err(format!("Configuration is not a regular file: {}",path.display()));
             }
-            if meta.len() > MAX_INI_SIZE as u64 {
-                return Err("ScorchedPlanetFix.ini exceeds the 256 KiB limit".into());
-            }
-            let bytes = fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
-            if bytes.len() > MAX_INI_SIZE {
-                return Err("ScorchedPlanetFix.ini exceeds the 256 KiB limit".into());
-            }
-            Ok(Some(bytes))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("Cannot inspect {}: {e}", path.display())),
+            if meta.len()>MAX_INI_SIZE as u64{return Err("ScorchedPlanetFix.ini exceeds 256 KiB".into());}
+            let data=fs::read(path).map_err(|e|e.to_string())?;
+            if data.len()>MAX_INI_SIZE{return Err("ScorchedPlanetFix.ini exceeds 256 KiB".into());}
+            Ok(Some(data))
+        },
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+        Err(e)=>Err(format!("Cannot inspect INI {}: {e}",path.display())),
     }
 }
-
-#[derive(Default)]
-struct Presence {
-    scorch: bool,
-    fps: bool,
-    matrox: bool,
-    dither: bool,
+fn key<'a>(line:&'a [u8])->Option<(&'a [u8],&'a [u8])>{
+    let pos=line.iter().position(|c|*c==b'=')?;
+    Some((line[..pos].trim_ascii(),line[pos+1..].trim_ascii()))
 }
-
-fn parse(bytes: &[u8]) -> Result<(GameSettings, Presence), String> {
-    let mut settings = GameSettings::default();
-    let mut present = Presence::default();
-    let mut section = 0u8;
-    for line in bytes.split(|c| *c == b'\n') {
-        let line = line.trim_ascii();
-        if line.is_empty() || line.starts_with(b";") || line.starts_with(b"#") { continue; }
-        if line.starts_with(b"[") && line.ends_with(b"]") {
-            section = if line.eq_ignore_ascii_case(b"[scorch]") {
-                present.scorch = true;
-                1
-            } else if line.eq_ignore_ascii_case(b"[matrox]") {
-                present.matrox = true;
-                2
-            } else { 0 };
+fn fps(value:&[u8])->Result<u32,String>{
+    if value.is_empty()||!value.iter().all(u8::is_ascii_digit){
+        return Err("INI: FPSLimit must be decimal 0..240".into());
+    }
+    let x=std::str::from_utf8(value).map_err(|e|e.to_string())?
+        .parse::<u32>().map_err(|e|e.to_string())?;
+    if x>MAX_FPS{return Err(format!("INI: FPSLimit must be 0..{MAX_FPS}"));}
+    Ok(x)
+}
+fn switch(value:&[u8],name:&str)->Result<bool,String>{
+    match value{
+        b"0"=>Ok(false),b"1"=>Ok(true),
+        _=>Err(format!("INI: {name} must be 0 or 1")),
+    }
+}
+fn section(line:&[u8])->u8{
+    if line.eq_ignore_ascii_case(b"[Graphics]"){1}
+    else if line.eq_ignore_ascii_case(b"[scorch]"){2}
+    else if line.eq_ignore_ascii_case(b"[matrox]"){3}
+    else if line.eq_ignore_ascii_case(b"[cheats]"){4}
+    else {0}
+}
+fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
+    let mut result=GameSettings::default();
+    let mut seen=Presence::default();
+    let mut current=0u8;
+    let mut graphics_fps=None;
+    for raw in data.split(|c|*c==b'\n'){
+        let line=raw.trim_ascii();
+        if line.is_empty()||line.starts_with(b";")||line.starts_with(b"#"){continue;}
+        if line.starts_with(b"[")&&line.ends_with(b"]"){
+            current=section(line);
+            match current{1=>seen.graphics=true,3=>seen.matrox=true,4=>seen.cheats=true,_=>{}}
             continue;
         }
-        let Some(eq) = line.iter().position(|b| *b == b'=') else { continue };
-        let key = line[..eq].trim_ascii();
-        let value = line[eq + 1..].trim_ascii();
-        if section == 1 && key.eq_ignore_ascii_case(b"FPSLimit") {
-            if present.fps { return Err("INI: duplicate [scorch] FPSLimit".into()); }
-            present.fps = true;
-            if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
-                return Err("INI: FPSLimit must be a decimal number (0..240)".into());
-            }
-            let text = std::str::from_utf8(value).map_err(|_| "INI: invalid FPSLimit")?;
-            let fps: u32 = text.parse().map_err(|_| "INI: invalid FPSLimit")?;
-            if fps > MAX_FPS {
-                return Err(format!("INI: FPSLimit must be between 0 and {MAX_FPS}"));
-            }
-            settings.fps_limit = fps;
-        } else if section == 2 && key.eq_ignore_ascii_case(b"Dither") {
-            if present.dither { return Err("INI: duplicate [matrox] Dither".into()); }
-            present.dither = true;
-            settings.dither = match value {
-                b"0" => false,
-                b"1" => true,
-                _ => return Err("INI: [matrox] Dither must be 0 or 1".into()),
-            };
+        let Some((name,value))=key(line) else {continue};
+        match current{
+            1 if name.eq_ignore_ascii_case(b"FPSLimit")=>{
+                if seen.graphics_fps{return Err("INI: duplicate [Graphics] FPSLimit".into());}
+                seen.graphics_fps=true;
+                graphics_fps=Some(fps(value)?);
+            },
+            2 if name.eq_ignore_ascii_case(b"FPSLimit")=>{
+                if seen.legacy_fps{return Err("INI: duplicate legacy [scorch] FPSLimit".into());}
+                seen.legacy_fps=true;
+                seen.legacy_value=Some(fps(value)?);
+            },
+            3 if name.eq_ignore_ascii_case(b"Dither")=>{
+                if seen.dither{return Err("INI: duplicate [matrox] Dither".into());}
+                seen.dither=true;result.dither=switch(value,"[matrox] Dither")?;
+            },
+            4 if name.eq_ignore_ascii_case(b"UnlimitedFuel")=>{
+                if seen.unlimited_fuel{return Err("INI: duplicate [Cheats] UnlimitedFuel".into());}
+                seen.unlimited_fuel=true;
+                result.unlimited_fuel=switch(value,"[Cheats] UnlimitedFuel")?;
+            },
+            _=>{},
         }
     }
-    Ok((settings, present))
+    result.fps_limit=graphics_fps.or(seen.legacy_value).unwrap_or(DEFAULT_FPS);
+    Ok((result,seen))
 }
-
-/// Missing fixer INI defaults to 60 FPS and Matrox dither OFF. Normal
-/// launcher startup creates it when needed; --verify and unchecked do not.
-pub fn read_settings(path: &Path) -> Result<GameSettings, String> {
-    match read_bytes(path)? {
-        Some(bytes) => Ok(parse(&bytes)?.0),
-        None => Ok(GameSettings::default()),
+pub fn read_settings(path:&Path)->Result<GameSettings,String>{
+    match read_bytes(path)?{
+        Some(bytes)=>Ok(parse(&bytes)?.0),
+        None=>Ok(GameSettings::default()),
     }
 }
-
-fn append_line(out: &mut Vec<u8>, line: &[u8]) {
-    if !out.is_empty() && !out.ends_with(b"\n") { out.extend_from_slice(b"\r\n"); }
-    out.extend_from_slice(line);
-    out.extend_from_slice(b"\r\n");
+fn append(out:&mut Vec<u8>,line:&[u8]){
+    if !out.is_empty()&&!out.ends_with(b"\n"){out.extend_from_slice(b"\r\n");}
+    out.extend_from_slice(line);out.extend_from_slice(b"\r\n");
 }
-
-/// Add missing opt-in settings while retaining every existing user value,
-/// comment, section and legacy non-UTF8 byte. Never overwrite a user choice.
-/// Called only during installation/preparation or verified normal launch;
-/// --verify and --launch-no-verify never call it.
-pub fn ensure_defaults(path: &Path, matrox: bool) -> Result<(), String> {
-    let existing = read_bytes(path)?;
-    let original = existing.as_deref().unwrap_or(b"");
-    let (_, present) = parse(original)?;
-    let add_fps = !present.fps;
-    let add_dither = matrox && !present.dither;
-    if !add_fps && !add_dither { return Ok(()); }
-
-    let mut out = Vec::with_capacity(original.len() + 96);
-    let mut current = 0u8;
-    let mut fps_added = false;
-    let mut dither_added = false;
-    for line in original.split_inclusive(|b| *b == b'\n') {
-        let trimmed = line.trim_ascii();
-        if trimmed.starts_with(b"[") && trimmed.ends_with(b"]") {
-            if current == 1 && add_fps && !fps_added {
-                append_line(&mut out, b"FPSLimit=60");
-                fps_added = true;
-            }
-            if current == 2 && add_dither && !dither_added {
-                append_line(&mut out, b"Dither=0");
-                dither_added = true;
-            }
-            current = if trimmed.eq_ignore_ascii_case(b"[scorch]") { 1 }
-                else if trimmed.eq_ignore_ascii_case(b"[matrox]") { 2 }
-                else { 0 };
+/// Create missing defaults and migrate the former [scorch] FPSLimit to
+/// [Graphics], preserving the actual player choice, comments, unrelated
+/// sections, and arbitrary legacy non-UTF8 bytes. Called only in verified
+/// normal launch / install. A read-only --verify never calls this function.
+pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
+    let existing=read_bytes(path)?;
+    let original=existing.as_deref().unwrap_or(b"");
+    let (before,seen)=parse(original)?;
+    let add_fps=!seen.graphics_fps;
+    let add_dither=matrox&&!seen.dither;
+    let add_fuel=!seen.unlimited_fuel;
+    if !add_fps&&!add_dither&&!add_fuel&&!seen.legacy_fps{return Ok(());}
+    let fpsline=format!("FPSLimit={}",before.fps_limit);
+    let mut out=Vec::with_capacity(original.len()+160);
+    let mut current=0u8;
+    let mut did_fps=false;
+    let mut did_dither=false;
+    let mut did_fuel=false;
+    let mut finish=|old:u8,out:&mut Vec<u8>|{
+        if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
+        if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
+        if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
+    };
+    for line in original.split_inclusive(|b|*b==b'\n'){
+        let trimmed=line.trim_ascii();
+        if trimmed.starts_with(b"[")&&trimmed.ends_with(b"]"){
+            finish(current,&mut out);
+            current=section(trimmed);
+        }
+        // Remove only the obsolete FPSLimit assignment from [scorch].
+        // All other native or historical [scorch] settings remain intact.
+        if current==2 && key(trimmed).is_some_and(|(name,_)|name.eq_ignore_ascii_case(b"FPSLimit")){
+            continue;
         }
         out.extend_from_slice(line);
     }
-    if current == 1 && add_fps && !fps_added {
-        append_line(&mut out, b"FPSLimit=60");
-        fps_added = true;
-    }
-    if current == 2 && add_dither && !dither_added {
-        append_line(&mut out, b"Dither=0");
-        dither_added = true;
-    }
-    if !present.scorch {
-        append_line(&mut out, b"[scorch]");
-    }
-    if add_fps && !fps_added {
-        append_line(&mut out, b"FPSLimit=60");
-    }
-    if matrox && !present.matrox {
-        append_line(&mut out, b"[matrox]");
-    }
-    if add_dither && !dither_added {
-        append_line(&mut out, b"Dither=0");
-    }
-    if out.len() > MAX_INI_SIZE { return Err("Adding settings would exceed INI size limit".into()); }
-    if parse(&out)?.0 != parse(original)?.0 {
-        return Err("INI migration changed an existing value; refusing".into());
-    }
-    let temporary = path.with_file_name(format!(
-        ".scorchedplanetfix-settings-{}-{}.tmp", std::process::id(),
+    finish(current,&mut out);
+    if !seen.graphics{append(&mut out,b"[Graphics]");}
+    if add_fps&&!did_fps{append(&mut out,fpsline.as_bytes());}
+    if matrox&&!seen.matrox{append(&mut out,b"[matrox]");}
+    if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
+    if !seen.cheats{append(&mut out,b"[Cheats]");}
+    if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
+    if out.len()>MAX_INI_SIZE{return Err("INI migration exceeds 256 KiB".into());}
+    if parse(&out)?.0!=before{return Err("INI migration unexpectedly changed a user setting".into());}
+    let temporary=path.with_file_name(format!(".scorchedplanetfix-ini-{}-{}.tmp",
+        std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?.as_nanos()));
-    let result = (|| -> Result<(), String> {
-        let mut file = OpenOptions::new().write(true).create_new(true)
-            .open(&temporary).map_err(|e| format!("Cannot stage INI defaults: {e}"))?;
-        file.write_all(&out).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        if existing.is_some() {
-            file.set_permissions(fs::metadata(path).map_err(|e| e.to_string())?.permissions())
-                .map_err(|e| e.to_string())?;
+            .map_err(|e|e.to_string())?.as_nanos()));
+    let result=(||->Result<(),String>{
+        let mut output=OpenOptions::new().write(true).create_new(true).open(&temporary)
+            .map_err(|e|format!("Cannot stage new INI: {e}"))?;
+        output.write_all(&out).map_err(|e|e.to_string())?;
+        output.sync_all().map_err(|e|e.to_string())?;
+        if existing.is_some(){
+            output.set_permissions(fs::metadata(path).map_err(|e|e.to_string())?.permissions())
+                .map_err(|e|e.to_string())?;
         }
-        drop(file);
-        fs::rename(&temporary, path).map_err(|e| format!("Cannot update game INI: {e}"))
+        drop(output);
+        fs::rename(&temporary,path).map_err(|e|format!("Cannot update root INI: {e}"))
     })();
-    if result.is_err() { let _ = fs::remove_file(&temporary); }
+    if result.is_err(){let _=fs::remove_file(&temporary);}
     result
 }
-
+/// Do not fake a working cheat: the existing published game cheats do not
+/// establish an unlimited-fuel memory or executable patch. Fail explicitly
+/// instead of silently launching with an ineffective option.
+pub fn reject_unimplemented_cheats(path:&Path)->Result<(),String>{
+    if read_settings(path)?.unlimited_fuel {
+        return Err("[Cheats] UnlimitedFuel=1 is not yet supported: no verified fuel consumption patch is available for this game executable. Keep UnlimitedFuel=0 until the cheat is implemented.".into());
+    }
+    Ok(())
+}
 #[cfg(test)]
-mod tests {
+mod tests{
     use super::*;
-
-    fn fixture() -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "scorched-ini-settings-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .unwrap().as_nanos()));
-        fs::create_dir_all(&path).unwrap();
-        path
+    fn fixture()->std::path::PathBuf{
+        let p=std::env::temp_dir().join(format!("scorched-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&p).unwrap();p
     }
-
     #[test]
-    fn fps_and_matrox_dither_are_independent_and_case_insensitive() {
-        let config = b"[SCORCH]\nvideo= video\nfpslimit = 120\n[Matrox]\nDITHER=1\n";
-        assert_eq!(parse(config).unwrap().0, GameSettings { fps_limit: 120, dither: true });
-        assert_eq!(parse(b"[scorch]\nFPSLimit=0\n").unwrap().0.fps_limit, 0);
-        assert_eq!(parse(b"[scorch]\n").unwrap().0, GameSettings::default());
-        for bad in [b"FPSLimit=-1".as_slice(), b"FPSLimit=241", b"FPSLimit=abc"] {
-            let mut bytes=b"[scorch]\n".to_vec();
-            bytes.extend_from_slice(bad);
-            assert!(parse(&bytes).is_err());
-        }
-        assert!(parse(b"[scorch]\nFPSLimit=60\nfpslimit=30").is_err());
-        assert!(parse(b"[matrox]\nDither=true").is_err());
-        assert!(parse(b"[matrox]\nDither=0\nDITHER=1").is_err());
+    fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
+        let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\n";
+        assert_eq!(parse(data).unwrap().0,GameSettings{
+            fps_limit:120,dither:true,unlimited_fuel:true});
+        assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
+        assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
+        assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
+        assert!(parse(b"[Graphics]\nFPSLimit=60\nfpslimit=30").is_err());
+        assert!(parse(b"[Cheats]\nUnlimitedFuel=2").is_err());
+        assert!(parse(b"[Cheats]\nUnlimitedFuel=1\nUnlimitedFuel=0").is_err());
     }
-
     #[test]
-    fn creates_only_missing_settings_and_preserves_users_ini() {
-        let dir = fixture();
-        let ini = dir.join("ScorchedPlanetFix.ini");
-        fs::write(&ini, b"[scorch]\r\nlanguage=2\r\n[Other]\r\nnotes=\xff\r\n[Matrox]\r\nDither=1\r\n").unwrap();
-        ensure_defaults(&ini, true).unwrap();
-        let bytes = fs::read(&ini).unwrap();
-        assert!(bytes.windows(11).any(|w| w == b"FPSLimit=60"));
-        assert!(bytes.windows(8).any(|w| w == b"Dither=1"));
-        assert!(bytes.windows(7).any(|w| w == b"notes=\xff"));
-        assert_eq!(read_settings(&ini).unwrap(), GameSettings { fps_limit: 60, dither: true });
-        ensure_defaults(&ini, true).unwrap();
-        assert_eq!(fs::read(&ini).unwrap(), bytes);
-        fs::write(&ini, b"[scorch]\nFPSLimit=45\n").unwrap();
-        ensure_defaults(&ini, false).unwrap();
-        assert_eq!(read_settings(&ini).unwrap().fps_limit, 45);
-        assert!(!fs::read(&ini).unwrap().windows(8).any(|w| w == b"[matrox]"));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn matrox_section_is_added_and_uncategorized_files_are_refused() {
-        let dir=fixture();
-        let ini=dir.join("ScorchedPlanetFix.ini");
-        fs::write(&ini,b"[scorch]\nvideo= video\n").unwrap();
+    fn legacy_fps_migrates_without_losing_player_values(){
+        let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
+        let original=b"[scorch]\r\nlanguage=2\r\nFPSLimit=75\r\n[Other]\r\nnotes=\xff\r\n[Matrox]\r\nDither=1\r\n";
+        fs::write(&ini,original).unwrap();
         ensure_defaults(&ini,true).unwrap();
-        let text=fs::read_to_string(&ini).unwrap();
-        assert!(text.contains("[matrox]\r\nDither=0\r\n"));
-        assert!(text.contains("FPSLimit=60\r\n"));
-        fs::remove_file(&ini).unwrap();
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings::default());
+        let out=fs::read(&ini).unwrap();
+        assert!(out.windows(b"notes=\xff".len()).any(|v|v==b"notes=\xff"));
+        assert!(out.windows(b"[Graphics]".len()).any(|v|v==b"[Graphics]"));
+        assert!(out.windows(b"FPSLimit=75".len()).any(|v|v==b"FPSLimit=75"));
+        assert!(out.windows(b"UnlimitedFuel=0".len()).any(|v|v==b"UnlimitedFuel=0"));
+        assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false});
         ensure_defaults(&ini,true).unwrap();
-        let restored=fs::read_to_string(&ini).unwrap();
-        assert!(restored.contains("FPSLimit=60"));
-        assert!(restored.contains("[matrox]"));
-        fs::remove_dir_all(dir).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),out);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn new_ini_has_graphics_matrox_and_disabled_cheat(){
+        let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
+        ensure_defaults(&ini,true).unwrap();
+        let s=fs::read_to_string(&ini).unwrap();
+        assert!(s.contains("[Graphics]\r\nFPSLimit=60"));
+        assert!(s.contains("[matrox]\r\nDither=0"));
+        assert!(s.contains("[Cheats]\r\nUnlimitedFuel=0"));
+        assert!(!s.contains("[scorch]"));
+        fs::write(&ini,b"[Graphics]\nFPSLimit=30\n[Cheats]\nUnlimitedFuel=1\n").unwrap();
+        assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("not yet supported"));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn modern_graphics_overrides_and_removes_legacy_value(){
+        let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Graphics]\nFPSLimit=30\n[scorch]\nFPSLimit=60\n[Cheats]\nUnlimitedFuel=0\n").unwrap();
+        ensure_defaults(&ini,false).unwrap();
+        assert_eq!(read_settings(&ini).unwrap().fps_limit,30);
+        assert_eq!(fs::read_to_string(&ini).unwrap().matches("FPSLimit=").count(),1);
+        fs::remove_dir_all(p).unwrap();
     }
 }

@@ -10,13 +10,17 @@ pub const CONFIG: &str = "ScorchedPlanetFix.ini";
 
 const INI_EXAMPLE: &str = "\
 ; ScorchedPlanetFix launcher settings (both supported game editions)\r\n\
-[scorch]\r\n\
-; Maximum FPS, 0 disables the limiter. Valid values: 0..240\r\n\
+[Graphics]\r\n\
+; Maximum FPS on every edition; 0 = unlimited, valid 0..240\r\n\
 FPSLimit=60\r\n\
 \r\n\
-[matrox]\r\n\
-; Experimental Matrox Mystique ordered RGB565 dithering, 0=off, 1=on\r\n\
-Dither=0\r\n";
+[Matrox]\r\n\
+; Experimental RGB565 ordered dithering, 0=off, 1=on\r\n\
+Dither=0\r\n\
+\r\n\
+[Cheats]\r\n\
+; Reserved (not yet implemented): enable only after a verified fuel patch\r\n\
+UnlimitedFuel=0\r\n";
 
 fn regular_directory(path:&Path)->Result<(),String>{
     let metadata=fs::symlink_metadata(path).map_err(|e|format!("Cannot inspect {}: {e}",path.display()))?;

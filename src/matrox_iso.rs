@@ -11,6 +11,50 @@ use std::path::{Path, PathBuf};
 
 const PAYLOAD: u64 = 2048;
 const ORIGINAL_FOLDER: &str = "game";
+const MATROX_DEFAULT_INI: &[u8] = b"[scorch]\r\nvideo= video\r\nlanguage= 1\r\ngamma= 1.300000\r\nHighQualityVideo= 1\r\nsettings= 0 2 1 1 5 95 127 0 0 5\r\n";
+// Exact PR #36 prior auto-generated INI; only this fingerprint may be migrated
+// automatically without overwriting custom keymaps, language, video or saves.
+const MATROX_OLD_GENERATED_INI: &[u8] =
+    b"[scorch]\r\nlanguage= 2\r\nvideo= video\r\nHighQualityVideo=1\r\nFPSLimit=60\r\n[matrox]\r\nDither=0\r\n";
+
+/// Upgrade an unmodified previous auto-generated Matrox INI only. Never
+/// change the user's real custom native INI or save state on re-launch.
+pub fn update_generated_ini(game:&Path)->Result<(),String>{
+    let path=game.join("splanet.ini");
+    let meta=fs::symlink_metadata(&path).map_err(|e|format!("Cannot inspect Matrox INI: {e}"))?;
+    if !meta.is_file()||meta.file_type().is_symlink(){
+        return Err("Matrox INI must be a regular file".into());
+    }
+    if meta.len()>256*1024{return Err("Matrox INI too large".into());}
+    let old=fs::read(&path).map_err(|e|format!("Cannot read Matrox INI: {e}"))?;
+    if old!=MATROX_OLD_GENERATED_INI{return Ok(());}
+    let new_file=game.join(".splanet.ini.scorchedplanetfix-upgrade");
+    let mut f=OpenOptions::new().write(true).create_new(true).open(&new_file)
+        .map_err(|e|format!("Cannot stage Matrox INI upgrade: {e}"))?;
+    let result=(||->Result<(),String>{
+        f.write_all(MATROX_DEFAULT_INI).map_err(|e|e.to_string())?;
+        f.sync_all().map_err(|e|e.to_string())?;
+        drop(f);
+        // Replace only the EXACT known auto-generated file, not another
+        // concurrently modified file. Windows-safe verified two-step swap.
+        if fs::read(&path).map_err(|e|e.to_string())?!=MATROX_OLD_GENERATED_INI {
+            return Err("Matrox INI modified during upgrade: refusing overwrite".into());
+        }
+        let rollback=game.join(".splanet.ini.scorchedplanetfix-rollback");
+        if fs::symlink_metadata(&rollback).is_ok(){
+            return Err("Unfinished Matrox INI rollback found; refusing overwrite".into());
+        }
+        fs::rename(&path,&rollback).map_err(|e|format!("Cannot prepare Matrox INI rollback: {e}"))?;
+        if let Err(e)=fs::rename(&new_file,&path){
+            let _=fs::rename(&rollback,&path);
+            return Err(format!("Cannot publish Matrox defaults: {e}"));
+        }
+        fs::remove_file(&rollback).map_err(|e|format!("Cannot clean old Matrox INI: {e}"))
+    })();
+    if result.is_err(){let _=fs::remove_file(&new_file);}
+    result
+}
+
 const STAGING_FOLDER: &str = ".scorchedplanet-matrox-installing";
 const MAX_DIR_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 25_000;
@@ -306,7 +350,10 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
                 return Err(format!("Matrox ISO content hash does not match OEM edition: {}", entry.path));
             }
         }
-        let ini = b"[scorch]\r\nlanguage= 2\r\nvideo= video\r\nHighQualityVideo=1\r\nFPSLimit=60\r\n[matrox]\r\nDither=0\r\n";
+        // Matrox defaults validated with the player's known-good native INI:
+        // English, high-quality movies, gamma 1.3, maximal graphics/shadows.
+        // FPS and Dither belong ONLY to root ScorchedPlanetFix.ini.
+        let ini = MATROX_DEFAULT_INI;
         fs::write(stage.join("splanet.ini"), ini).map_err(|e| e.to_string())?;
         matrox::verify_original(&stage)?;
         // Transform only the private staging tree into ONE playable game/.
@@ -399,6 +446,31 @@ mod tests {
         fs::remove_dir_all(folder).unwrap();
     }
 
+    #[test]
+    fn defaults_match_players_verified_english_maximum_graphics_and_shadows() {
+        let ini=std::str::from_utf8(MATROX_DEFAULT_INI).unwrap();
+        assert!(ini.contains("language= 1"));
+        assert!(ini.contains("gamma= 1.300000"));
+        assert!(ini.contains("HighQualityVideo= 1"));
+        assert!(ini.contains("settings= 0 2 1 1 5 95 127 0 0 5"));
+        assert!(!ini.contains("FPSLimit="));
+        assert!(!ini.contains("[matrox]"));
+    }
+    #[test]
+    fn exact_prior_generated_ini_upgrades_without_touching_custom_values() {
+        let root=std::env::temp_dir().join(format!("matrox-ini-upgrade-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let ini=root.join("splanet.ini");
+        fs::write(&ini,MATROX_OLD_GENERATED_INI).unwrap();
+        update_generated_ini(&root).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),MATROX_DEFAULT_INI);
+        fs::write(&ini,b"[scorch]\r\nlanguage= 2\r\nsettings= customized\r\n").unwrap();
+        update_generated_ini(&root).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),
+            b"[scorch]\r\nlanguage= 2\r\nsettings= customized\r\n");
+        fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn missing_media_does_not_install() {
         let base = std::env::temp_dir()
