@@ -243,6 +243,12 @@ fn validated_env(command: &mut Command) {
 /// timeout. The v0.35 MSI95 driver itself keeps the hard 60 FPS ceiling.
 pub fn spawn(root: &Path) -> Result<Child, String> {
     verify_prepared(root)?;
+    spawn_unchecked(root)
+}
+
+/// Debug-only launch: preserve Matrox's deterministic graphics defaults but
+/// do not verify data, prepare a runtime, or alter any installed files.
+pub fn spawn_unchecked(root: &Path) -> Result<Child, String> {
     let game = root.join(RUNTIME_FOLDER);
     let exe = game.join("splanetw.exe");
     let mut command = Command::new(&exe);
