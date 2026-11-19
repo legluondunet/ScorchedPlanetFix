@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_launch_auto_selects_matrox_without_preparing_and_keeps_retail_priority() {
+    fn unchecked_launch_auto_selects_matrox_and_rejects_two_installations() {
         let root = std::env::temp_dir()
             .join(format!("scorched-matrox-unchecked-selection-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -684,14 +684,38 @@ mod tests {
         assert!(err.contains("Cannot launch Matrox Mystique OEM"), "{err}");
         assert!(!root.join("scorchedplanet-matrox-runtime").exists());
         assert_eq!(fs::read(root.join("scorchedplanet-matrox/sentinel")).unwrap(), b"untouched");
-        // Both editions present: preserve retail v2 precedence without an
-        // edition-specific CLI flag, even with a Matrox OEM directory present.
+        // Both editions present: refuse every mode, never guess or overwrite.
         fs::create_dir_all(root.join("splanet")).unwrap();
         let err = session(&root, &mode, &logger, |_| {}).unwrap_err();
-        assert!(err.contains("Unable to launch unchecked game"), "{err}");
+        assert!(err.contains("Two game installations"), "{err}");
+        assert!(verify_only(&root, &logger, |_| {}).unwrap_err()
+            .contains("Two game installations"));
+        assert!(session(&root, &parse_args(&[]).unwrap(), &logger, |_| {})
+            .unwrap_err().contains("Two game installations"));
+        assert!(session(&root, &parse_args(&args(&["--install-only"])).unwrap(),
+            &logger, |_| {}).unwrap_err().contains("Two game installations"));
         assert!(!root.join("scorchedplanet-matrox-runtime").exists());
+        assert_eq!(fs::read(root.join("scorchedplanet-matrox/sentinel")).unwrap(), b"untouched");
         drop(logger);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_edition_must_be_unique() {
+        let root = std::env::temp_dir()
+            .join(format!("scorched-unique-edition-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(installation_kind(&root).unwrap(), None);
+        fs::create_dir(root.join("splanet")).unwrap();
+        assert_eq!(installation_kind(&root).unwrap(), Some(InstalledEdition::Retail3dfx));
+        fs::create_dir(root.join("scorchedplanet-matrox")).unwrap();
+        assert!(installation_kind(&root).unwrap_err().contains("Two game installations"));
+        assert!(root.join("splanet").exists());
+        assert!(root.join("scorchedplanet-matrox").exists());
+        fs::remove_dir(root.join("splanet")).unwrap();
+        assert_eq!(installation_kind(&root).unwrap(), Some(InstalledEdition::MatroxOem));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
