@@ -20,16 +20,12 @@ const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe --verbose
   ScorchedPlanetFix.exe --verify
   ScorchedPlanetFix.exe --launch-no-verify
-  ScorchedPlanetFix.exe --matrox-verify
-  ScorchedPlanetFix.exe --matrox-prepare
-  ScorchedPlanetFix.exe --matrox-play
-  ScorchedPlanetFix.exe --matrox-install image.iso|image.img|image.cue [track.bin|track.img]
-  ScorchedPlanetFix.exe --matrox-install-only image.iso|image.img|image.cue [track.bin|track.img]
   ScorchedPlanetFix.exe --help
   ScorchedPlanetFix.exe --version
 
-The executable finds splanet/ and CD images beside itself, not in the shell's
-current directory. An existing installation is verified before every launch.
+The executable finds retail 3dfx or Matrox installations and CD images beside
+itself, not in the shell's current directory. An existing installation is
+verified before normal launch. If both editions exist, retail 3dfx wins.
 No unknown, invalid or damaged installation is replaced automatically.
 --launch-no-verify is a direct, unverified launch; use only with trusted files.";
 
@@ -46,11 +42,6 @@ enum Mode {
     Inspect,
     VerifyOnly,
     LaunchUnchecked,
-    MatroxVerify,
-    MatroxPrepare,
-    MatroxPlay,
-    MatroxInstall,
-    MatroxInstallOnly,
     Help,
     Version,
 }
@@ -96,26 +87,6 @@ fn parse_args(args:&[OsString])->Result<CommandLine,String>{
         Some("--version") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Version,media:blank}),
         Some("--verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::VerifyOnly,media:blank}),
         Some("--launch-no-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::LaunchUnchecked,media:blank}),
-        Some("--matrox-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxVerify,media:blank}),
-        Some("--matrox-prepare") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxPrepare,media:blank}),
-        Some("--matrox-play") if filtered.len()==1=>Ok(CommandLine{mode:Mode::MatroxPlay,media:blank}),
-        Some("--matrox-install" | "--matrox-install-only") if (2..=3).contains(&filtered.len())=>{
-            let p = PathBuf::from(&filtered[1]);
-            let is_cue = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue"));
-            if !is_cue && !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso") || e.eq_ignore_ascii_case("img")) {
-                return Err("Matrox install requires .iso, raw Mode1/2352 .img, or .cue with its BIN/IMG track".into());
-            }
-            let bin = filtered.get(2).map(PathBuf::from);
-            if let Some(track) = &bin {
-                if !is_cue || !track.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin") || e.eq_ignore_ascii_case("img")) {
-                    return Err("An explicit .bin/.img companion is only supported after a Matrox .cue file".into());
-                }
-            }
-            Ok(CommandLine{
-                mode:if name==Some("--matrox-install"){Mode::MatroxInstall}else{Mode::MatroxInstallOnly},
-                media:Media{image:Some(p),bin},
-            })
-        },
         Some("--install-only") if filtered.len()==1=>Ok(CommandLine{mode:Mode::InstallOnly,media:blank}),
         Some("--inspect") if (2..=3).contains(&filtered.len())=>{
             let selected=filtered[1..].iter().map(|x|(*x).clone()).collect::<Vec<_>>();
@@ -216,9 +187,7 @@ pub fn run(arguments: &[OsString], root: &Path, logger: &Logger,
 /// Standalone --verify is always read-only and never launches a process.
 pub fn verify_only(root: &Path, logger: &Logger,
                    mut sink: impl FnMut(&str)) -> Result<(), String> {
-    // Preserve the 3dfx verification path when splanet/ already exists.
-    // In this groundwork stage, Matrox can only be audited read-only;
-    // installing and launching MSI95 will be integrated separately.
+    // The same edition precedence is used by all standard CLI operations.
     if !root.join("splanet").exists() && root.join("scorchedplanet-matrox").exists() {
         return matrox_verify(root, logger, sink);
     }
@@ -229,7 +198,7 @@ pub fn verify_only(root: &Path, logger: &Logger,
     Ok(())
 }
 
-/// Always read-only, including when both Matrox and 3dfx installations exist.
+/// Read-only verification for an automatically selected Matrox installation.
 fn matrox_verify(root: &Path, logger: &Logger,
                  mut sink: impl FnMut(&str)) -> Result<(), String> {
     let report = matrox::verify_original(&root.join("scorchedplanet-matrox"))?;
@@ -282,6 +251,19 @@ fn verify_and_play(root: &Path, logger: &Logger,
 fn launch_unchecked(root: &Path, logger: &Logger,
                     mut sink: impl FnMut(&str)) -> Result<(), String> {
     let game = root.join("splanet");
+    // Only folder presence is used to pick an edition. No file integrity
+    // inspection, runtime preparation, installation or repair happens here.
+    if !game.exists() && root.join("scorchedplanet-matrox").exists() {
+        let executable = root.join("scorchedplanet-matrox-runtime").join("splanetw.exe");
+        emit(logger, &mut sink,
+            "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
+        emit(logger, &mut sink,
+            &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
+        let mut child = matrox_runtime::spawn_unchecked(root)?;
+        emit(logger, &mut sink,
+            &format!("Matrox game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
+        return wait_for_game(&mut child, logger, sink);
+    }
     let executable = game.join("spvoodoo.exe");
     emit(logger, &mut sink,
         "WARNING: --launch-no-verify bypasses ALL game file existence/integrity checks and Glide DLL validation; no repair or installation will be attempted.");
@@ -397,34 +379,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         // checks; leave all filesystem resolution to Command::spawn.
         return launch_unchecked(root,logger,sink);
     }
-    // Matrox operations are explicitly selected, even if the retail 3dfx
-    // installation also exists. Both backends remain independent.
-    if cmd.mode == Mode::MatroxVerify {
-        return matrox_verify(root, logger, sink);
-    }
-    if cmd.mode == Mode::MatroxPrepare {
-        let runtime = matrox_runtime::prepare(root)?;
-        emit(logger, &mut sink, &format!("Matrox runtime ready: {}", runtime.display()));
-        return Ok(());
-    }
-    if cmd.mode == Mode::MatroxPlay {
-        return matrox_play(root, logger, sink);
-    }
-    if cmd.mode == Mode::MatroxInstall || cmd.mode == Mode::MatroxInstallOnly {
-        let chosen = cmd.media.image.as_ref().ok_or("Matrox CD path missing")?;
-        let source = if chosen.is_absolute() { chosen.clone() } else { root.join(chosen) };
-        let track = cmd.media.bin.as_ref().map(|raw| if raw.is_absolute() {
-            raw.clone()
-        } else {
-            root.join(raw)
-        });
-        matrox_iso::install_media(root, &source, track.as_deref())?;
-        emit(logger, &mut sink, &format!("Verified Matrox OEM CD installed from {}", source.display()));
-        if cmd.mode == Mode::MatroxInstallOnly {
-            return Ok(());
-        }
-        return matrox_play(root, logger, sink);
-    }
+    // Renderers are internal. Both editions share the same public CLI.
     let game = root.join("splanet");
     if game.is_symlink() {
         return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
@@ -470,7 +425,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             }
         }
         if matrox_images.len() > 1 {
-            return Err("Multiple Matrox OEM ISO/CUE/IMG images detected; use --matrox-install with an explicit path".into());
+            return Err("Multiple recognized Matrox OEM ISO/CUE/IMG images detected; leave only one disc image beside ScorchedPlanetFix.exe".into());
         }
         if let Some(image) = matrox_images.pop() {
             matrox_iso::install_media(root, &image, None)?;
@@ -496,45 +451,31 @@ pub fn help(version: &str) -> String {
 {USAGE}
 
 No arguments:
-  If splanet exists beside this EXE: verify the complete installation and play.
-  Otherwise, find one supported ISO or CUE/BIN beside this EXE, install,
-  verify the complete installation and play.
+  Detect an installed retail 3dfx or Matrox Mystique OEM edition, verify
+  and play. Otherwise detect one recognized ISO/CUE/BIN/IMG disc image,
+  install, prepare the matching renderer and play.
+  If both editions are installed, retail 3dfx takes priority.
   Damaged or unknown existing installs are never overwritten or launched.
 --inspect image.iso / image.cue [track.bin|track.img]:
   Inspect unsupported discs and write ScorchedPlanetFix_inspect.log.
 --verbose:
   Extra diagnostics, combinable with commands.
 --install-only:
-  Install from an automatically discovered ISO/CUE without launching, or
-  safely upgrade a recognized existing installation. User-modified EXEs
-  and unknown files are never overwritten.
-  A missing or different regular Glide DLL is moved to glide.dll.bak.
-  An existing regular glide.dll.bak is replaced, never multiplied.
+  Install the automatically recognized edition without launching or safely
+  migrate an existing installation. Original Matrox OEM data is never patched
+  in place. Retail Glide backup rules remain unchanged.
 --verify:
-  Read-only SHA-256 audit of splanet (3dfx) or an existing scorchedplanet-matrox
-  OEM directory and its prepared runtime (if present); never plays or modifies.
---matrox-verify / --matrox-prepare / --matrox-play:
-  Experimental OEM path, also selectable when 3dfx is installed. The first
-  preparation requires the hash-verified clean-room
-  ScorchedPlanetFix_MSI95_v035.dll beside the launcher (no original Matrox DLL).
-  It creates scorchedplanet-matrox-runtime without modifying OEM original files.
-  Matrox games run without the standalone probe's 300-second timeout.
-  The clean-room MSI95 DLL is embedded alongside GameFrame (no extra DLL needed).
-  Matrox ISO, raw IMG and CUE/IMG extraction is integrated.
---matrox-install image.iso|image.img|image.cue [track.bin|track.img]:
-  Verify and extract a recognized OEM CD, prepare the isolated runtime, then play.
---matrox-install-only image.iso|image.img|image.cue [track.bin|track.img]:
-  Verify and extract OEM original data without launching.
+  Read-only SHA-256 audit of the automatically selected installed edition,
+  including the Matrox prepared runtime if present; never plays or modifies.
+  GameFrame (retail) and MSI95 (Matrox) are bundled; no extra DLL is needed.
 --launch-no-verify:
-  Start splanet/spvoodoo.exe directly, without checking the presence,
-  integrity, hashes, or identity of game files or the Glide DLL.
-  Does not install, modify, migrate, or repair any files.
-  Requires an existing playable installation; errors come from Windows/Wine.
-  For trusted/debug installs only; untrusted game DLLs can be loaded.
+  Launch the selected installed edition without verifying game or renderer
+  hashes, installing, preparing, patching or repairing any files.
+  The Matrox runtime must already have been prepared. For trusted files only.
 --help / --version:
   Show usage or executable version without running the game.
 
-Only open-source bundled GameFrame is supported in v2.
+Retail 3dfx uses bundled GameFrame; Matrox OEM uses bundled open-source MSI95.
   At normal launch, after verifying immutable game files, an older or
   unknown regular splanet/glide.dll is moved to glide.dll.bak,
   replacing any previous regular backup rather than adding more files.
@@ -593,18 +534,6 @@ mod tests {
         }
         assert_eq!(parse_args(&args(&[])).unwrap().mode, Mode::Play);
         assert_eq!(parse_args(&args(&["--install-only"])).unwrap().mode, Mode::InstallOnly);
-        assert_eq!(parse_args(&args(&["--matrox-install", "oem.iso"])).unwrap().mode, Mode::MatroxInstall);
-        assert_eq!(parse_args(&args(&["--matrox-install-only", "oem.img"])).unwrap().mode, Mode::MatroxInstallOnly);
-        assert_eq!(parse_args(&args(&["--matrox-install-only", "Scorched_Planet.cue"])).unwrap().mode, Mode::MatroxInstallOnly);
-        assert_eq!(parse_args(&args(&["--matrox-install", "Scorched_Planet.cue", "Scorched_Planet.img"])).unwrap().media.bin,
-                   Some(PathBuf::from("Scorched_Planet.img")));
-        for (cmd, mode) in [
-            ("--matrox-play", Mode::MatroxPlay),
-            ("--matrox-prepare", Mode::MatroxPrepare),
-            ("--matrox-verify", Mode::MatroxVerify),
-        ] {
-            assert_eq!(parse_args(&args(&[cmd])).unwrap().mode, mode);
-        }
         assert_eq!(parse_args(&args(&["--launch-no-verify"])).unwrap().mode, Mode::LaunchUnchecked);
         assert_eq!(parse_args(&args(&["--inspect","DISC.CuE","DISC.BIN"])).unwrap().media.bin,
             Some(PathBuf::from("DISC.BIN")));
@@ -623,6 +552,8 @@ mod tests {
             vec!["disc.iso"],vec!["disc.cue"],vec!["--install-only","disc.iso"],
             vec!["--inspect"],vec!["--inspect","disc.iso","track.bin"],
             vec!["--verbose","--verbose"],
+            vec!["--matrox-verify"], vec!["--matrox-prepare"], vec!["--matrox-play"],
+            vec!["--matrox-install"], vec!["--matrox-install-only"],
             vec!["--matrox-install-only","disc.iso","track.img"],
             vec!["--matrox-install-only","disc.cue","track.iso"],
             vec!["--matrox-install","disc.cue","track.bin","fourth.img"]
@@ -634,10 +565,13 @@ mod tests {
     fn usage_has_no_legacy_launch_option() {
         let h = help("2.0.2-deadbeef");
         for word in ["2.0.2-deadbeef", "--install-only", "--verify", "--launch-no-verify",
-                     "--matrox-play", "--matrox-prepare", "--matrox-verify", "--matrox-install", "image.cue",
-                     "GameFrame", "image.iso", "image.cue",
+                     "Matrox", "MSI95", "GameFrame", "image.iso", "image.cue",
                      "glide.dll", "ScorchedPlanetFix_installer.log", "ScorchedPlanetFix.log"] {
             assert!(h.contains(word), "missing {word}");
+        }
+        for forbidden in ["--matrox-play", "--matrox-prepare", "--matrox-verify",
+                          "--matrox-install", "--matrox-install-only"] {
+            assert!(!h.contains(forbidden), "obsolete edition-specific flag: {forbidden}");
         }
         // Only the obsolete exact --launch command is prohibited;
         // the explicitly named --launch-no-verify opt-out is supported.
@@ -646,9 +580,8 @@ mod tests {
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
         // Regression: CLI help must match the current automatic migration path.
-        assert!(h.contains("moved to glide.dll.bak"));
         assert!(h.contains("glide.dll.bak"));
-        assert!(h.contains("An existing regular glide.dll.bak is replaced"));
+        assert!(h.contains("replacing any previous regular backup"));
         assert!(!h.contains("unique .bak name"));
         assert!(!h.contains("Existing backups are never overwritten"));
         assert!(h.contains("--verify is strictly read-only"));
