@@ -110,12 +110,12 @@ game or driver binary may be bundled.
 The launcher searches beside itself, independently of the shell's working
 directory. For the Matrox OEM CUE/IMG media, the CUE's data track is resolved
 automatically and case-insensitively on Linux/Wine. It recognizes exact supported
-disc profiles; modified or unrecognized media are refused. When both installed
-editions exist, the existing retail 3dfx installation takes priority to preserve
-v2.0 behavior. To use Matrox, place its CD image or installation beside a launcher
-without an existing retail 3dfx installation; there is **no edition-specific
-CLI flag**. Ambiguous multiple recognized Matrox images are refused rather than
-guessed. Neither original OEM files nor the original CD image are modified.
+disc profiles; modified or unrecognized media are refused. Only **one game edition** is managed per ScorchedPlanetFix folder. An existing
+installation is always reused and launched; the CD image is ignored for
+installation while an edition is already present. If both retail and Matrox
+installation directories appear, the launcher refuses to proceed, leaving
+both untouched. There is **no edition selection or edition-specific CLI flag**.
+Multiple distinct candidate CD images are also refused rather than guessed. Neither original OEM files nor the original CD image are modified.
 
 The clean-room MSI95 DLL is now **embedded in the executable**. No separate
 driver file is needed. A `--verify` command remains strictly read-only. The
@@ -125,18 +125,20 @@ Matrox installer never touches `splanet/` or its 3dfx GameFrame wrapper.
 
 ```text
 ScorchedPlanetFix.exe
-splanet/                       # Existing retail 3dfx, unchanged
-scorchedplanet-matrox/          # Original OEM files (immutable)
-scorchedplanet-matrox-runtime/  # Future patched OEM + bundled open MSI95
-state/                         # Matrox install manifest / receipts
+splanet/                       # Retail 3dfx installation (if this edition)
+# OR, never alongside splanet/:
+scorchedplanet-matrox/          # Original Matrox OEM files (immutable)
+scorchedplanet-matrox-runtime/  # Prepared Matrox runtime and open MSI95
+state/                          # Matrox installation receipts, if used
 ScorchedPlanetFix_installer.log
 ScorchedPlanetFix.log
 ```
 
-The two editions may coexist, but retail 3dfx always wins when both installed
-directories are present. The experimental PR supports Matrox runtime installation
-and launch using one executable with both open-source renderers embedded; native
-Windows and complete gameplay validation remain pending.
+Only one edition may be installed beside the launcher. A second installation
+is refused, and any accidental coexistence is reported as an error: there is
+no fallback, no priority and no automatic deletion. The experimental PR supports
+Matrox installation and launch with both open-source renderers embedded in one
+executable; Windows and full-gameplay regression validation remain pending.
 
 No new proprietary assets were committed. The manifest contains only original
 path names, sizes, and cryptographic fingerprints.
