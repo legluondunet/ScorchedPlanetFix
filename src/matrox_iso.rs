@@ -393,7 +393,8 @@ mod tests {
         fs::write(&image, b"not a real disc").unwrap();
         let err = install_media(&folder, &image, None).unwrap_err();
         assert!(err.contains("only one edition"), "{err}");
-        assert!(!folder.join(ORIGINAL_FOLDER).exists());
+        assert!(folder.join(ORIGINAL_FOLDER).is_dir(), "existing game/ must be preserved");
+        assert!(!folder.join(STAGING_FOLDER).exists(), "no Matrox stage must be created");
         assert_eq!(fs::read(folder.join("game/keep.txt")).unwrap(), b"retail saved data");
         fs::remove_dir_all(folder).unwrap();
     }
