@@ -632,6 +632,31 @@ mod tests {
     }
 
     #[test]
+    fn unchecked_launch_auto_selects_matrox_without_preparing_and_keeps_retail_priority() {
+        let root = std::env::temp_dir()
+            .join(format!("scorched-matrox-unchecked-selection-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("scorchedplanet-matrox")).unwrap();
+        fs::write(root.join("scorchedplanet-matrox/sentinel"), b"untouched").unwrap();
+        let logger = Logger::new(&root, "test").unwrap();
+        let mode = parse_args(&args(&["--launch-no-verify"])).unwrap();
+        // No retail install: Matrox is selected, but missing runtime is never
+        // silently prepared or verified in the explicit debug/unchecked mode.
+        let err = session(&root, &mode, &logger, |_| {}).unwrap_err();
+        assert!(err.contains("Cannot launch Matrox Mystique OEM"), "{err}");
+        assert!(!root.join("scorchedplanet-matrox-runtime").exists());
+        assert_eq!(fs::read(root.join("scorchedplanet-matrox/sentinel")).unwrap(), b"untouched");
+        // Both editions present: preserve retail v2 precedence without an
+        // edition-specific CLI flag, even with a Matrox OEM directory present.
+        fs::create_dir_all(root.join("splanet")).unwrap();
+        let err = session(&root, &mode, &logger, |_| {}).unwrap_err();
+        assert!(err.contains("Unable to launch unchecked game"), "{err}");
+        assert!(!root.join("scorchedplanet-matrox-runtime").exists());
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn matrox_only_does_not_accidentally_enter_3dfx_install_path() {
         let root = std::env::temp_dir()
             .join(format!("scorched-matrox-guard-test-{}", std::process::id()));
