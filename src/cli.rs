@@ -72,6 +72,16 @@ fn installation_kind(root: &Path) -> Result<Option<InstalledEdition>, String> {
             Err(e) => Err(format!("Cannot inspect installation {}: {e}", path.display())),
         }
     };
+    // A leftover prepared Matrox runtime is not a complete installation.
+    // Refuse to treat it as a clean folder for a different edition.
+    if !check(&matrox)? {
+        let runtime = root.join("scorchedplanet-matrox-runtime");
+        match fs::symlink_metadata(&runtime) {
+            Ok(_) => return Err("An orphaned Matrox runtime exists without its original game installation. No new edition will be installed until it is moved out of this folder.".into()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(format!("Cannot inspect Matrox runtime directory: {e}")),
+        }
+    }
     match (check(&retail)?, check(&matrox)?) {
         (false, false) => Ok(None),
         (true, false) => Ok(Some(InstalledEdition::Retail3dfx)),
