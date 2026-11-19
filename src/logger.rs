@@ -7,6 +7,11 @@ use std::fs::{File,OpenOptions};
 use std::io::Write;
 use std::path::{Path,PathBuf};
 use std::sync::{Arc,Mutex};
+use std::sync::atomic::{AtomicBool,Ordering};
+
+// The executable creates at most one log session. An error that happens before
+// Logger::new (notably an invalid CLI argument) must also replace prior runs.
+static SESSION_LOG_OPENED: AtomicBool = AtomicBool::new(false);
 use std::time::{SystemTime,UNIX_EPOCH};
 
 /// A unique, filesystem-safe identifier reused in the launcher and DLL logs.
@@ -24,12 +29,13 @@ pub struct Logger {
 impl Logger {
     pub fn new(root:&Path,version:&str)->Result<Self,String>{
         let path=root.join("ScorchedPlanetFix_installer.log");
-        let file=OpenOptions::new().create(true).append(true).open(&path)
+        let file=OpenOptions::new().create(true).write(true).truncate(true).open(&path)
             .map_err(|e|format!("Unable to create log file {}: {e}",path.display()))?;
         let result=Self{handle:Arc::new(Mutex::new(file)),path,session_id:new_session_id()};
         let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         result.write("---------------------------------------------");
         result.write(&format!("ScorchedPlanetFix {version} - session start UTC unix_time={} session_id={}",now.as_secs(),result.session_id));
+        SESSION_LOG_OPENED.store(true, Ordering::Release);
         Ok(result)
     }
     pub fn session_id(&self)->&str{ &self.session_id }
@@ -49,7 +55,17 @@ impl Logger {
         let candidates=[root,cwd.as_deref()];
         for directory in candidates.into_iter().flatten(){
             let path=directory.join("ScorchedPlanetFix_installer.log");
-            if let Ok(mut file)=OpenOptions::new().create(true).append(true).open(&path){
+            // Append only if this process has already started its own session.
+            // For startup argument errors, discard stale log lines from a
+            // previous invocation instead of manufacturing a cumulative log.
+            let mut options=OpenOptions::new();
+            options.create(true).write(true);
+            if SESSION_LOG_OPENED.load(Ordering::Acquire) {
+                options.append(true);
+            } else {
+                options.truncate(true);
+            }
+            if let Ok(mut file)=options.open(&path){
                 let safe=message.replace(['\r','\n']," ");
                 let _=writeln!(file,"ERROR: {safe}");
                 let _=file.flush();
@@ -66,6 +82,24 @@ impl Logger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn each_new_launcher_session_truncates_previous_log() {
+        let root=std::env::temp_dir().join(format!("scorched-log-reset-{}",new_session_id()));
+        std::fs::create_dir(&root).unwrap();
+        let first=Logger::new(&root,"test-first").unwrap();
+        let old_session=first.session_id().to_owned();
+        first.write("OLD_SESSION_SHOULD_NOT_BE_PRESENT");
+        drop(first);
+        let second=Logger::new(&root,"test-second").unwrap();
+        let content=std::fs::read_to_string(&second.path).unwrap();
+        assert!(content.contains("ScorchedPlanetFix test-second"), "{content}");
+        assert!(content.contains(&format!("session_id={}",second.session_id())));
+        assert!(!content.contains(&old_session));
+        assert!(!content.contains("OLD_SESSION_SHOULD_NOT_BE_PRESENT"));
+        assert_eq!(content.matches("session start UTC").count(),1);
+        drop(second);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn installer_log_is_separate_and_has_session_id(){
         let root=std::env::temp_dir().join(format!("scorched-log-{}",new_session_id()));
