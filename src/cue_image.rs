@@ -169,6 +169,13 @@ fn resolve_bin(cue:&Path, filename:&str)->Result<PathBuf,String>{
 fn data_track(cue:&Path,bin_override:Option<&Path>)->Result<DataTrack,String>{
     data_track_impl(cue,bin_override,true)
 }
+
+/// Resolve the referenced data-track file using the same strict CUE parser
+/// and symlink checks as the existing 3dfx installer. Used to avoid treating
+/// a CUE and its own raw IMG as two different Matrox discs during discovery.
+pub(crate) fn data_track_source(cue: &Path) -> Result<PathBuf, String> {
+    Ok(data_track(cue, None)?.file)
+}
 fn data_track_impl(cue:&Path,bin_override:Option<&Path>,
                    enforce_matching_name:bool)->Result<DataTrack,String>{
     let meta=fs::symlink_metadata(cue).map_err(|e|format!("Cannot read CUE file: {e}"))?;
