@@ -403,16 +403,12 @@ fn inspect_media(root:&Path,media:&Media,verbose:bool)->Result<(),String>{
 fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
            mut sink: impl FnMut(&str)) -> Result<(), String> {
     if cmd.mode == Mode::LaunchUnchecked {
-        // Deliberately bypass even the usual directory-presence and symlink
-        // checks; leave all filesystem resolution to Command::spawn.
         return launch_unchecked(root,logger,sink);
     }
-    // Renderers are internal. Both editions share the same public CLI.
+    // One ScorchedPlanetFix invocation manages exactly one installed edition.
+    let installed = installation_kind(root)?;
     let game = root.join("splanet");
-    if game.is_symlink() {
-        return Err("The splanet directory is a symlink; refusing to inspect or replace it".into());
-    }
-    if !game.exists() && root.join("scorchedplanet-matrox").exists() {
+    if installed == Some(InstalledEdition::MatroxOem) {
         if cmd.mode == Mode::InstallOnly {
             let runtime = matrox_runtime::prepare(root)?;
             emit(logger, &mut sink, &format!("Matrox runtime prepared: {}", runtime.display()));
@@ -420,7 +416,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         }
         return matrox_play(root, logger, sink);
     }
-    if game.exists() {
+    if installed == Some(InstalledEdition::Retail3dfx) {
         if cmd.media.image.is_some() {
             return Err("splanet already exists; refusing to overwrite it with a CD image".into());
         }
@@ -455,6 +451,18 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         if matrox_images.len() > 1 {
             return Err("Multiple recognized Matrox OEM ISO/CUE/IMG images detected; leave only one disc image beside ScorchedPlanetFix.exe".into());
         }
+        // A recognized Matrox disc must not win silently over a second
+        // ISO/CUE image potentially containing the retail 3dfx edition.
+        if !matrox_images.is_empty() {
+            let other_images = files.iter().filter(|path| {
+                path.extension().is_some_and(|ext|
+                    ext.eq_ignore_ascii_case("iso") || ext.eq_ignore_ascii_case("cue"))
+                && !matrox_images.contains(path)
+            }).count();
+            if other_images != 0 {
+                return Err("Multiple ISO/CUE disc images detected: leave only the desired edition beside ScorchedPlanetFix.exe".into());
+            }
+        }
         if let Some(image) = matrox_images.pop() {
             matrox_iso::install_media(root, &image, None)?;
             emit(logger, &mut sink, &format!("Matrox Mystique OEM automatically recognized and verified from {}", image.display()));
@@ -482,7 +490,9 @@ No arguments:
   Detect an installed retail 3dfx or Matrox Mystique OEM edition, verify
   and play. Otherwise detect one recognized ISO/CUE/BIN/IMG disc image,
   install, prepare the matching renderer and play.
-  If both editions are installed, retail 3dfx takes priority.
+  Only one installed edition is supported. Reuse the existing one even
+  if a CD image is present. When two installation folders are detected,
+  refuse without launching or modifying either installation.
   Damaged or unknown existing installs are never overwritten or launched.
 --inspect image.iso / image.cue [track.bin|track.img]:
   Inspect unsupported discs and write ScorchedPlanetFix_inspect.log.
