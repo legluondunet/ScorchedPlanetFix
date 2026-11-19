@@ -2,7 +2,7 @@
 //! Matrox Mystique OEM extraction from an original, user-owned ISO9660 disc.
 //! Supports 2048-byte ISO images and raw CloneCD Mode1/2352 IMG sectors.
 //! This code does not modify the source disc and never invokes its installer.
-use crate::matrox;
+use crate::{matrox, cue_image};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
@@ -209,6 +209,46 @@ fn expected_files(image: &mut Image) -> Result<Vec<Entry>, String> {
     Ok(verified)
 }
 
+/// Accept the original user-owned ISO, raw Mode1/2352 IMG, or the safe
+/// CUE/BIN(IMG) descriptor already supported by the retail 3dfx importer.
+/// A CUE data track is normalized to a temporary 2048-byte ISO, which is
+/// always removed when the returned guard goes out of scope (also on failure).
+/// The same 66-file SHA-256 checks apply to every input format.
+pub fn install_media(root: &Path, source: &Path, bin_override: Option<&Path>) -> Result<(), String> {
+    if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
+        if fs::symlink_metadata(&root.join(ORIGINAL_FOLDER)).is_ok() {
+            matrox::verify_original(&root.join(ORIGINAL_FOLDER))?;
+            return Ok(());
+        }
+        let temporary = cue_image::normalize_cue_with_bin(source, bin_override, root,
+            |_done, _total, _message| {}, |_message| {})?;
+        install(root, &temporary.path)
+    } else {
+        if bin_override.is_some() {
+            return Err("An explicit BIN/IMG companion is only valid with a .cue source".into());
+        }
+        if !source.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso") || e.eq_ignore_ascii_case("img")) {
+            return Err("Expected an ISO, raw IMG or CUE/BIN source".into());
+        }
+        install(root, source)
+    }
+}
+
+/// Structural disc recognition, not a substitute for the extraction SHA audit.
+/// CUE conversion is guarded and temporary; the original disc is never edited.
+pub fn recognized_media(root: &Path, source: &Path) -> bool {
+    if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
+        let temporary = cue_image::normalize_cue_with_bin(source, None, root,
+            |_done, _total, _message| {}, |_message| {});
+        match temporary {
+            Ok(temporary) => recognized(&temporary.path),
+            Err(_) => false,
+        }
+    } else {
+        recognized(source)
+    }
+}
+
 /// Read-only structural recognition. Full SHA-256 checks are performed during extraction.
 pub fn recognized(image: &Path) -> bool {
     open_image(image).and_then(|mut source| expected_files(&mut source)).is_ok()
@@ -278,6 +318,27 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rejects_non_cue_companion_before_installing_anything() {
+        let folder = std::env::temp_dir().join(format!("matrox-media-companion-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir(&folder).unwrap();
+        let err = install_media(&folder, &folder.join("invalid.iso"), Some(&folder.join("data.bin"))).unwrap_err();
+        assert!(err.contains("only valid with a .cue"), "{err}");
+        assert!(!folder.join(ORIGINAL_FOLDER).exists());
+        fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn refuses_cue_without_its_referenced_track() {
+        let folder = std::env::temp_dir().join(format!("matrox-cue-companion-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("disc.cue"), b"FILE \"missing.IMG\" BINARY\\n  TRACK 01 MODE1/2352\\n    INDEX 01 00:00:00\\n").unwrap();
+        assert!(!recognized_media(&folder, &folder.join("disc.cue")));
+        assert!(install_media(&folder, &folder.join("disc.cue"), None).is_err());
+        assert!(!folder.join(ORIGINAL_FOLDER).exists());
+        fs::remove_dir_all(folder).unwrap();
+    }
     #[test]
     fn missing_media_does_not_install() {
         let base = std::env::temp_dir()
