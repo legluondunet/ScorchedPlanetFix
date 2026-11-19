@@ -46,10 +46,12 @@ game or driver binary may be bundled.
    FadeLow runtime copy patch; 60 FPS/MSI95 graphics flags; no 300-second
    diagnostic process kill. Existing 3dfx GameFrame behavior is retained.
 2. **Completed, Windows CI-validated, runtime test pending:** native Rust
-   ISO9660/Joliet importer accepting Mode1/2352 raw CloneCD IMG and standard
-   2048-byte ISO sectors. Strict 66-file size and SHA-256 verification, no
+   ISO9660/Joliet importer accepting Mode1/2352 raw CloneCD IMG, standard
+   2048-byte ISO sectors, and original CUE/BIN or CUE/IMG descriptors through
+   the existing strict CUE data-track normalizer. The CUE and its referenced
+   IMG are deduplicated during automatic discovery. Strict 66-file size and SHA-256 verification, no
    arbitrary files accepted, staging and rollback before publication.
-   `--matrox-install image.iso|image.img` installs and plays;
+   `--matrox-install image.iso|image.img|image.cue [track.bin|track.img]` installs and plays;
    `--matrox-install-only` installs originals without playing; an unambiguous
    Matrox image beside the launcher is auto-detected on fresh installs.
 3. **Completed, Windows CI-validated:** reviewed 116,216-byte C source in
@@ -84,8 +86,10 @@ game or driver binary may be bundled.
 .\\ScorchedPlanetFix.exe --matrox-prepare
 .\\ScorchedPlanetFix.exe --matrox-play
 
-# New OEM CD image in ISO2048 or IMG2352 format
-.\\ScorchedPlanetFix.exe --matrox-install-only "Scorched Planet Matrox.iso"
+# New OEM CD image in ISO2048, raw IMG2352, or CUE/IMG format
+.\\ScorchedPlanetFix.exe --matrox-install-only "Scorched_Planet.cue"
+# The CUE data track is resolved relative to the CUE file (case-insensitive).
+# Optional explicit override: --matrox-install-only disc.cue disc.img
 .\\ScorchedPlanetFix.exe --matrox-verify
 .\\ScorchedPlanetFix.exe --matrox-play
 ```
