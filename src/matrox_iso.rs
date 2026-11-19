@@ -330,7 +330,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         let cue = root.join("Scorched_Planet.cue");
-        fs::write(&cue, b"FILE \\"Scorched_Planet.IMG\\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n").unwrap();
+        fs::write(&cue, b"FILE \"Scorched_Planet.IMG\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n").unwrap();
         let mut bytes = vec![0u8; 20 * 2352];
         for i in 0..20 {
             let offset = i * 2352;
