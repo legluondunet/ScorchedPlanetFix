@@ -5,7 +5,6 @@ use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox_ru
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
-use std::collections::BTreeSet;
 use std::fs::{File,OpenOptions};
 use std::io::Write;
 use isomage::{detect_and_parse_filesystem,TreeNode};
@@ -94,6 +93,39 @@ fn installation_kind(root: &Path) -> Result<Option<InstalledEdition>, String> {
         (true,true)=>Err("Two game editions detected inside game/. Exactly one game executable is supported; no files were changed.".into()),
         (false,false)=>Err("Unrecognized game/ installation: missing supported executable; refusing automatic overwrite".into()),
     }
+}
+
+/// Compare a CUE's resolved data track to files returned by read_dir().
+/// On Wine, an IMG declared as "Scorched_Planet.IMG" can resolve to the
+/// actual "Scorched_Planet.img" while retaining the name's original case.
+/// PathBuf's strict equality must not identify these as separate discs.
+fn same_disc_path(a: &Path, b: &Path) -> bool {
+    a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+}
+
+/// Do not independently count a CUE's own image as another CD. A filename
+/// collision differing only in case is ambiguous: never silently discard
+/// one of two genuinely different files in a case-sensitive directory.
+fn unreferenced_raw_images(files: &[PathBuf], tracks: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    for track in tracks {
+        let matches = files.iter().filter(|candidate|same_disc_path(candidate,track)).count();
+        if matches>1 {
+            return Err(format!(
+                "Ambiguous CUE data track (multiple case-insensitive matches): {}",
+                track.display()));
+        }
+    }
+    Ok(files.iter()
+        .filter(|path|path.extension().is_some_and(|ext|
+            ext.eq_ignore_ascii_case("iso") || ext.eq_ignore_ascii_case("img")))
+        .filter(|path|!tracks.iter().any(|track|same_disc_path(path,track)))
+        .cloned()
+        .collect())
+}
+
+fn describe_images(paths: &[PathBuf]) -> String {
+    paths.iter().map(|p|p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        .collect::<Vec<_>>().join(", ")
 }
 
 fn parse_media(args: &[OsString]) -> Result<Media, String> {
@@ -460,33 +492,43 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             .map(|found| found.map(|item| item.path()).map_err(|e| e.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         let mut matrox_images = Vec::new();
-        let mut cue_data_tracks = BTreeSet::new();
+        let mut cue_data_tracks = Vec::new();
         for path in &files {
             if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cue"))
                 && matrox_iso::recognized_media(root, path) {
-                cue_data_tracks.insert(cue_image::data_track_source(path)?);
+                let data_track=cue_image::data_track_source(path)?;
+                emit(logger,&mut sink,&format!("MEDIA: recognized Matrox CUE={} data_track={}",
+                    path.display(),data_track.display()));
+                cue_data_tracks.push(data_track);
                 matrox_images.push(path.clone());
             }
         }
-        for path in &files {
-            if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("iso") || ext.eq_ignore_ascii_case("img"))
-                && !cue_data_tracks.contains(path) && matrox_iso::recognized(path) {
-                matrox_images.push(path.clone());
+        for path in unreferenced_raw_images(&files,&cue_data_tracks)? {
+            if matrox_iso::recognized(&path) {
+                emit(logger,&mut sink,&format!("MEDIA: recognized standalone Matrox image={}",path.display()));
+                matrox_images.push(path);
             }
         }
         if matrox_images.len() > 1 {
-            return Err("Multiple recognized Matrox OEM ISO/CUE/IMG images detected; leave only one disc image beside ScorchedPlanetFix.exe".into());
+            return Err(format!(
+                "Multiple recognized Matrox OEM ISO/CUE/IMG images detected: {}. Leave only one independent disc image beside ScorchedPlanetFix.exe",
+                describe_images(&matrox_images)));
         }
         // A recognized Matrox disc must not win silently over a second
         // ISO/CUE image potentially containing the retail 3dfx edition.
         if !matrox_images.is_empty() {
-            let other_images = files.iter().filter(|path| {
-                path.extension().is_some_and(|ext|
-                    ext.eq_ignore_ascii_case("iso") || ext.eq_ignore_ascii_case("cue"))
-                && !matrox_images.contains(path)
-            }).count();
-            if other_images != 0 {
-                return Err("Multiple ISO/CUE disc images detected: leave only the desired edition beside ScorchedPlanetFix.exe".into());
+            let other_images=unreferenced_raw_images(&files,&cue_data_tracks)?
+                .into_iter().filter(|path|
+                    path.extension().is_some_and(|ext|ext.eq_ignore_ascii_case("iso"))
+                    && !matrox_images.contains(path))
+                .chain(files.iter().filter(|path|
+                    path.extension().is_some_and(|ext|ext.eq_ignore_ascii_case("cue"))
+                    && !matrox_images.contains(path)).cloned())
+                .collect::<Vec<_>>();
+            if !other_images.is_empty() {
+                return Err(format!(
+                    "Multiple ISO/CUE disc images detected (other candidates: {}). Leave only the desired edition beside ScorchedPlanetFix.exe",
+                    describe_images(&other_images)));
             }
         }
         if let Some(image) = matrox_images.pop() {
@@ -660,6 +702,35 @@ mod tests {
         let m = Media { image: Some(PathBuf::from("disc.ISO")), bin: None };
         assert_eq!(media_arguments(&m, root), vec![root.join("disc.ISO").into_os_string()]);
     }
+    #[test]
+    fn cue_img_case_mismatch_is_one_disc_and_independent_iso_remains() {
+        let root=Path::new(r"C:\Games\ScorchedPlanetFix");
+        let listed=vec![
+            root.join("Scorched_Planet.cue"),
+            root.join("Scorched_Planet.img"),
+            root.join("Another_edition.iso"),
+        ];
+        let tracks=vec![root.join("Scorched_Planet.IMG")];
+        assert!(same_disc_path(&tracks[0],&listed[1]));
+        assert_ne!(tracks[0],listed[1],"regression requires case-sensitive PathBuf comparison");
+        assert_eq!(unreferenced_raw_images(&listed,&tracks).unwrap(),
+            vec![root.join("Another_edition.iso")]);
+        assert_eq!(describe_images(&listed[1..]),"Scorched_Planet.img, Another_edition.iso");
+        let unique=unreferenced_raw_images(&listed[..2],&tracks).unwrap();
+        assert!(unique.is_empty(),"the CUE's own IMG must not be a second disc");
+    }
+    #[test]
+    fn distinct_disc_images_and_ambiguous_casing_are_not_silently_ignored() {
+        let root=Path::new(r"C:\Games\ScorchedPlanetFix");
+        let tracks=vec![root.join("SCORCHED_PLANET.IMG")];
+        let listed=vec![root.join("scorched_planet.img"),root.join("second.img")];
+        assert_eq!(unreferenced_raw_images(&listed,&tracks).unwrap(),
+            vec![root.join("second.img")]);
+        let collision=vec![root.join("SCORCHED_PLANET.IMG"),root.join("scorched_planet.img")];
+        assert!(unreferenced_raw_images(&collision,&tracks).unwrap_err()
+            .contains("Ambiguous CUE data track"));
+    }
+
     #[test]
     fn existing_unverified_install_is_never_replaced_by_media() {
         let root = std::env::temp_dir().join(format!("scorched-autostart-test-{}", std::process::id()));
