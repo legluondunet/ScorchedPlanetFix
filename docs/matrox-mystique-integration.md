@@ -73,10 +73,19 @@ game or driver binary may be bundled.
    successful session without the driver log. Startup mouse protection
    suppressed nine early events, becoming ready at frame 155; FPS cap was
    active at 60 maximum, with 1,171 paced frames at frame 6300.
-6. **Still pending:** fresh Rust ISO/IMG install under Wine, Windows 11
-   and Proton end-to-end runs; Alt-Tab, videos, saves, full missions,
-   performance and 3dfx regression tests. **No release or merge until these
-   pass.**
+6. **Fresh CUE/IMG install validated under Wine-staging 11.19 (2026-11-19):**
+   The user-installed ISO9660 Mode1/2352 data track from
+   `Scorched_Planet.cue` and its companion `Scorched_Planet.img`, without
+   the standalone Go installer. The Rust launcher published the original OEM
+   directory, `--matrox-verify` accepted all 66 original files / 315,947,520
+   bytes, and `--matrox-play` started the clean-room MSI95 runtime.
+   The driver recorded 3,305 frames / 68,496 ms, 1,114,647 triangles,
+   291,970 Z-planes, 738,571 modulated textured triangles, 972 FPS-cap
+   waited frames at frame 3300, and an orderly `msiExit` with
+   `SHUTDOWN_COMPLETE elapsed_ms=5`. No first-chance exceptions reported.
+7. **Still pending:** Windows 11 and Proton end-to-end runs; Alt-Tab,
+   cinematics, saves, full missions, performance and 3dfx regression tests.
+   **No release or merge until these pass.**
 
 ### Development commands
 
