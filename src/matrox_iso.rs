@@ -356,8 +356,9 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
         let ini = MATROX_DEFAULT_INI;
         fs::write(stage.join("splanet.ini"), ini).map_err(|e| e.to_string())?;
         matrox::verify_original(&stage)?;
-        // Transform only the private staging tree into ONE playable game/.
-        // Preserve the two authenticated original binaries as .bak files.
+        // Transform the verified private stage into ONE playable game/.
+        // Keep only the original EXE .bak. The proprietary OEM DLL was
+        // already authenticated and is not retained after replacement.
         matrox_runtime::prepare_staged(&stage,root)?;
         if fs::symlink_metadata(&target).is_ok() {
             return Err("Matrox install target appeared while staging; refusing overwrite".into());

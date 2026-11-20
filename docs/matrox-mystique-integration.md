@@ -150,9 +150,9 @@ ScorchedPlanetFix/
   `game/spvoodoo.exe.bak` and embedded GameFrame `game/glide.dll`.
 - Matrox Mystique: `game/splanetw.exe`, original authenticated
   `game/splanetw.exe.bak`, embedded clean-room `game/msi95.dll`,
-  and original proprietary `game/msi95.dll.bak` retained as DATA ONLY,
-  never loaded by the game. All remaining 64 OEM immutable resources retain
-  their exact original hashes and paths. This replaces the former separate
+  without preserving the proprietary OEM `msi95.dll` as a backup.
+  The remaining 65 original ISO entries, including `splanetw.exe.bak`,
+  retain their authenticated hashes and paths. This replaces the former separate
   source and runtime trees; game copies and saves are never duplicated.
 - No `dlls/` or `third_party/` directory is created. Windows/Wine finds
   the required DLL alongside the active executable without search-path hacks.
@@ -222,8 +222,8 @@ remains active independently.
 `game/splanetw.exe.bak` is the exact original 840704-byte Matrox OEM EXE
 and is required by the current immutable-manifest SHA-256 audit. The
 patched and unpatched executables are verified separately; there is no
-fallback to the backup for launching. Likewise `msi95.dll.bak` holds
-the original OEM proprietary driver as audit data only, not loaded.
+fallback to the backup for launching. The proprietary OEM MSI95.dll is
+authenticated from the CD and no longer kept as a backup.
 
 ## Automatic logging on first actual game play (2026-11-20)
 
@@ -262,10 +262,10 @@ The 2026-11-20 F12 multi-capture DLL has a new binary hash. The former
 migration procedure only recognized a single legacy driver hash and
 rejected intermediate CI builds as `Modified or unsupported Matrox runtime`.
 
-Now `prepare` first performs the **complete** 66-file immutable
-OEM check (including authenticated `splanetw.exe.bak` and
-`msi95.dll.bak` originals) plus the exact patched
-`game/splanetw.exe` check. Only if all these checks pass does it
+Now `prepare` authenticates **65 retained immutable original CD files**
+(including `splanetw.exe.bak`; the proprietary OEM MSI95 was checked
+on initial media extraction and is not retained) plus the patched
+`game/splanetw.exe` check. Only after these checks does it
 safely update/repair the installer-owned `game/msi95.dll`. A temporary
 staged and rollback DLL is verified and cleared after success. This
 is a generic safe update for later source revisions, without
@@ -277,8 +277,8 @@ option remains strictly non-mutating.
 
 The launcher manages `game/msi95.dll` as its own runtime component,
 independently of the identity of whatever previously occupied the path.
-After validating the 66 OEM reference files, preserved proprietary
-`msi95.dll.bak`, original `splanetw.exe.bak`, the patched EXE, and
+After validating the 65 original files retained in the installed tree,
+including `splanetw.exe.bak`, the patched EXE, and
 native configuration safety, it uses the active DLL's SHA-256 only
 to determine whether it is *identical* to the embedded version.
 If yes, it **does not rewrite the file**. Otherwise, it installs the
@@ -297,8 +297,8 @@ leave identical content untouched, and restore missing DLLs. No permanent
 backup of the superseded active renderer is created. Its previous contents
 are kept only in a temporary rollback path during verified replacement;
 rollback is deleted on success. Any existing legacy `glide.dll.bak` file
-remains untouched. The Matrox original `msi95.dll.bak` remains protected
-as a distinct OEM-reference file, not a backup of an installer-built DLL.
+remains untouched. Matrox does not keep any proprietary DLL backup:
+an exact legacy `msi95.dll.bak` is cleaned up after verification.
 
 ## 2026-11-20: Matrox scene-transition null-pointer crash — diagnostic only
 
@@ -392,3 +392,29 @@ Unknown patched EXEs and incomplete rollback transactions are refused.
 This eliminates the proven NULL dereference while retaining
 the game's original NULL-handler behavior, but **must be checked
 in live Wine/Windows gameplay before considering PR #36 mergeable**.
+
+## No persistent DLL backups + repeated briefing clicks (2026-11-20)
+
+The proprietary original `msi95.dll` is one of 66 hashes authenticated
+against the user-owned Matrox ISO at initial installation, but is then
+deleted from the private staging tree and replaced with the clean-room
+renderer. The installed OEM audit therefore checks the other **65**
+original CD entries (including the original `splanetw.exe.bak`).
+No `msi95.dll.bak` is created or required. During upgrade, an obsolete
+legacy backup is removed only if SHA-256 proves that it is precisely the
+original driver; a foreign file is preserved without overwriting.
+
+Repeated clicks on the mission briefing reproduce a new crash in
+`splanetw.exe` at `0x004858CE` (`mov ecx,[eax+0x44]`) with `EAX=2`.
+The original function takes an object pointer from its indexed list at
+`[esi+0x0C]` without checking alignment. The experimental new patch
+uses a 13-byte verified `CC` code cave at `0x00485853` and replaces the
+three-byte dereference at `0x004858CE` with a short jump. If an entry is
+not DWORD-aligned (the observed `EAX=2`), it is skipped through the
+function's ordinary `ecx!=1` path; aligned pointers retain the original
+`mov ecx,[eax+0x44]`. Total changed bytes: 16. The resulting exact
+patched EXE SHA-256 is
+`8bcded21d84b5d3cb8e4567bb32e6b038d168b632bdf081e4faebfcfdd50b710`.
+The loader supports transactional upgrades from both earlier recognized
+patched EXE hashes. This is not a proven resolution of the underlying
+source of invalid list entries and requires live Wine/Windows tests.

@@ -14,7 +14,7 @@ const OEM_FILES: usize = 66;
 const OEM_TOTAL_BYTES: u64 = 315_947_520;
 const ORIGINAL_EXE: &str =
     "1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894";
-const ORIGINAL_MSI95: &str =
+pub(crate) const ORIGINAL_MSI95: &str =
     "71b9921d8225403299fc73932a49ce5d3c1261a3bf7a852a3659d3f81cee3d9e";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -71,21 +71,18 @@ fn regular_not_symlink(path: &Path) -> Result<std::fs::Metadata, String> {
     Ok(meta)
 }
 
-/// Authenticate the immutable OEM game and the two preserved original
-/// .bak files without making claims about the active installer-patched EXE
-/// or the installer-owned MSI95.dll. Used ONLY before a controlled upgrade
-/// of the exact previous patched EXE hash; ordinary --verify still requires
-/// the latest patched EXE and embedded renderer hashes.
+/// Authenticate all immutable installed OEM resources and the original EXE
+/// backup. The original OEM driver is authenticated at ISO extraction time
+/// and intentionally DISCARDED on install: no DLL backup is needed. The
+/// installed audit checks 65 original resources (of 66 entries on the CD),
+/// excluding the installer-owned active MSI95 DLL.
 pub fn verify_installed_oem(folder:&Path)->Result<VerifiedOem,String>{
     verify_reference(folder,true)
 }
 
-/// Audit the playable Matrox install in game/ using the complete OEM
-/// reference manifest for immutable resources and exact original backups.
-/// The patched executable and clean-room MSI95 must also match expected hashes.
-/// Full immutable-game audit independent of the launcher-owned MSI95 driver.
-/// Refuse to replace a renderer unless the OEM original driver backup,
-/// executable backup, patched executable, and every CD resource authenticate.
+/// Authenticate the immutable installed game files (65 CD resources plus
+/// the original EXE backup, excluding the replaced OEM driver) and the
+/// installer-patched game EXE. The active MSI95.dll is verified separately.
 pub fn verify_installed_game(folder: &Path, patched_exe_hash: &str)
     -> Result<VerifiedOem, String> {
     let report = verify_reference(folder, true)?;
@@ -110,9 +107,10 @@ pub fn verify_installed(folder: &Path, patched_exe_hash: &str, driver_hash: &str
     Ok(report)
 }
 
-/// Read-only SHA-256 audit of the 66 immutable original Matrox OEM files.
-/// The user's splanet.ini and future local saves are deliberately excluded.
-/// Every intermediate directory is inspected without following symlinks.
+/// Read-only SHA-256 audit: 66 original files on CD; 65 immutable original
+/// files on the installed game (original MSI95.dll replaced and discarded).
+/// The user's splanet.ini and future saves are deliberately excluded.
+ /// All intermediate directories are checked for symlinks.
 pub fn verify_original(folder: &Path) -> Result<VerifiedOem, String> {
     verify_reference(folder,false)
 }
@@ -127,6 +125,10 @@ fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, Strin
     let mut checked = 0;
     let mut bytes = 0;
     for (expected_sha, expected_size, rel) in entries {
+        // The original proprietary MSI95 driver is verified on the user's
+        // ISO before extraction. Once installed it is no longer needed,
+        // and there is intentionally no game/msi95.dll.bak to verify.
+        if installed && rel=="msi95.dll" {continue;}
         let relative = Path::new(rel);
         let mut part = folder.to_path_buf();
         if let Some(parent) = relative.parent() {
@@ -139,8 +141,8 @@ fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, Strin
                 }
             }
         }
-        let path = if installed && matches!(rel,"splanetw.exe"|"msi95.dll") {
-            folder.join(format!("{rel}.bak"))
+        let path = if installed && rel=="splanetw.exe" {
+            folder.join("splanetw.exe.bak")
         } else { folder.join(relative) };
         let meta = regular_not_symlink(&path)?;
         if meta.len() != expected_size {
@@ -182,6 +184,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn installed_audit_excludes_original_oem_dll_but_keeps_exe_backup(){
+        let entries=manifest_entries().unwrap();
+        assert_eq!(entries.iter().filter(|entry|entry.2!="msi95.dll").count(),65);
+        assert!(entries.iter().any(|e|e.2=="splanetw.exe" && e.0==ORIGINAL_EXE));
+        assert!(entries.iter().any(|e|e.2=="msi95.dll" && e.0==ORIGINAL_MSI95),
+            "Full original ISO fingerprint must remain strict");
+    }
     #[test]
     fn read_only_validation_rejects_missing_originals() {
         let missing = std::env::temp_dir()

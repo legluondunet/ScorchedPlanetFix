@@ -20,7 +20,6 @@ ScorchedPlanetFix/
     splanetw.exe                 [Matrox only]
     splanetw.exe.bak             [Matrox original backup]
     msi95.dll                    [Matrox clean-room driver only]
-    msi95.dll.bak                [Matrox original proprietary driver backup]
     splanet.ini                  [the game's original native INI]
     ...                          [game resources, video, saves]
   state/
@@ -207,8 +206,9 @@ patches are applied to `game/splanetw.exe`. It is NOT a launcher fallback.
 The currently implemented 66-file OEM verification authenticates this exact
 original backup by SHA-256, and separately verifies the patched active EXE;
 removing it without redesigning that audit would make `--verify` fail.
-The original proprietary `game/msi95.dll.bak` is preserved for the same
-manifest audit and is never loaded at runtime. No automatic deletion.
+The original proprietary MSI95 is authenticated during ISO installation
+and then discarded. The installed manifest deliberately omits this replaced
+DLL; an exact historical `game/msi95.dll.bak` is deleted on upgrade.
 
 ## One-time first-play logs (2026-11-20)
 
@@ -258,8 +258,9 @@ and both the preserved original EXE/driver backups plus active patched EXE,
 then replaces the **installer-owned** active DLL automatically if its hash
 differs or the DLL is missing. A temporary rollback file is deleted
 after success; no permanent backup of the provided driver is kept.
-`game/msi95.dll.bak` is the original proprietary Matrox file and
-must remain untouched.
+No installed proprietary DLL backup is required. A historical
+`game/msi95.dll.bak` is removed only when its SHA-256 matches the exact
+authenticated original OEM DLL; other files are preserved.
 
 The operation also works in `--install-only`, but not in read-only
 `--verify`. Custom savegames and the native `game/splanet.ini` are
@@ -278,9 +279,9 @@ considered user data, so the installer leaves it untouched.
 
 Nonregular DLLs, symlinks and occupied transaction paths are refused.
 `--verify` remains read-only and `--launch-no-verify` never modifies
-renderer components. This policy is common to the retail and Matrox
-installer-managed renderer files, while original proprietary Matrox
-`msi95.dll.bak` remains an authenticated CD reference.
+renderer components. This policy is common to retail and Matrox
+installer-managed DLLs; an obsolete `msi95.dll.bak` from an earlier
+Matrox installation is safely cleaned up if its OEM hash is exact.
 
 ## Matrox game NULL guard installation and upgrade (2026-11-20)
 
@@ -300,3 +301,21 @@ copyrighted game assets.
 guarded EXE; `--install-only` is allowed to upgrade.
 The patch must be validated by user gameplay after the confirmed
 access-violation fix, and PR #36 is still experimental.
+
+## Matrox original DLL is never backed up (2026-11-20)
+
+The installer retains `game/splanetw.exe.bak` to authenticate the original
+OEM executable, but no longer keeps any DLL backup. The original proprietary
+`msi95.dll` remains one of the **66 files validated on the user's ISO**;
+for an installed game it is replaced by the embedded clean-room DLL and
+therefore excluded from the **65 remaining immutable CD entries**.
+An old `game/msi95.dll.bak` from a previous installation is automatically
+deleted only if its checksum exactly matches the OEM CD manifest; unknown
+or user-customized backups are left untouched. Same noncumulative logs,
+no change to saves or native INI.
+
+The OEM Matrox EXE additionally receives an experimental 16-byte guard for
+misaligned briefing object pointers (observed `EAX=2`, fault at
+`0x004858CE`) on repeated briefing clicks. Exact historical install-patched
+EXEs are upgraded transactionally; the protected original `.exe.bak`
+is unchanged. This patch remains pending in-game confirmation.

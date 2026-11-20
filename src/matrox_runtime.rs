@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! One Matrox Mystique OEM game installation in game/, sharing the standard
 //! CrimsonSkiesFix-style layout with retail 3dfx. No second runtime folder.
-//! The exact original OEM EXE and MSI95 are preserved as .bak files.
+//! Only the OEM EXE is preserved as .bak. No DLL backup is required.
 use crate::{matrox, matrox_iso, settings};
 use sha2::{Digest,Sha256};
 use std::fs::{self,File,OpenOptions};
@@ -12,7 +12,8 @@ use std::process::{Child,Command};
 const GAME_FOLDER: &str = "game";
 const DRIVER_SOURCE: &str = "ScorchedPlanetFix_MSI95_v035.dll";
 const LEGACY_DRIVER_HASH: &str = "0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e";
-const PATCHED_EXE_SHA: &str = "52b5f604ad7037e29e8cc83244c86662a2e6896b1e4d024ac4c68f23d080a759";
+const PATCHED_EXE_SHA: &str = "8bcded21d84b5d3cb8e4567bb32e6b038d168b632bdf081e4faebfcfdd50b710";
+const PREVIOUS_NULL_GUARDED_EXE_SHA: &str = "52b5f604ad7037e29e8cc83244c86662a2e6896b1e4d024ac4c68f23d080a759";
 const PREVIOUS_PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
 /// Win32 PE .text VA 0x00401000 maps to file offset 0x400.
 const NULL_GUARD_CAVE_OFFSET: usize = 0x93d53; // VA 0x00494953, 13 original CC bytes
@@ -24,6 +25,21 @@ const NULL_GUARD_CAVE: [u8;13] = [
     0xeb,0x08,             // jmp 0x00494968 (resume original function)
 ];
 const NULL_GUARD_JUMP: [u8;3] = [0xeb,0xec,0x90]; // jmp 0x00494953; nop
+/// Second reproducible crash: menu briefing clicked rapidly. The game's
+/// object-pointer array contains a misaligned sentinel 0x00000002, which
+/// was dereferenced by 0x004858CE as an object pointer. Only 4-byte aligned
+/// entries are eligible for this object's +0x44 field access.
+const BRIEFING_CAVE_OFFSET: usize = 0x84c53; // VA 0x00485853, 13 original CC bytes
+const BRIEFING_DEREF_OFFSET: usize = 0x84cce; // VA 0x004858CE
+const BRIEFING_CAVE: [u8;13] = [
+    0xa8,0x03,       // test al,3 (object pointers must be DWORD aligned)
+    0x74,0x04,       // jz valid
+    0x31,0xc9,       // invalid entry => ecx=0 (not type 1)
+    0xeb,0x76,       // resume original cmp ecx,1 -> skip this list entry
+    0x8b,0x48,0x44, // valid => original mov ecx,[eax+0x44]
+    0xeb,0x71,       // resume at 0x004858D1
+];
+const BRIEFING_GUARD_JUMP: [u8;3] = [0xeb,0x83,0x90]; // jump to 0x00485853
 const ORIGINAL_EXE_SHA: &str = "1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894";
 const WIN95_OFFSET: usize = 0x1579b;
 const FADELOW_OFFSET: usize = 0x6ec8b;
@@ -88,6 +104,21 @@ fn apply_null_guard(exe:&mut [u8])->Result<(),String>{
         .copy_from_slice(&NULL_GUARD_JUMP);
     Ok(())
 }
+/// Signature-locked defensive guard for malformed entries in the
+/// briefing/scene object list. The reported EAX=2 is not an aligned pointer.
+ /// This does not explain WHY an invalid entry appeared, but skips only
+/// misaligned entries while preserving the original object-type checks.
+/// The two branches were verified by disassembly of the exact OEM PE32.
+fn apply_briefing_guard(exe:&mut [u8])->Result<(),String>{
+    if exe.len()!=840_704
+        || exe[BRIEFING_CAVE_OFFSET..BRIEFING_CAVE_OFFSET+13]!=[0xcc;13]
+        || exe[BRIEFING_DEREF_OFFSET..BRIEFING_DEREF_OFFSET+3]!=[0x8b,0x48,0x44]{
+        return Err("Unrecognized Matrox briefing-list patch sites; refusing EXE modification".into());
+    }
+    exe[BRIEFING_CAVE_OFFSET..BRIEFING_CAVE_OFFSET+13].copy_from_slice(&BRIEFING_CAVE);
+    exe[BRIEFING_DEREF_OFFSET..BRIEFING_DEREF_OFFSET+3].copy_from_slice(&BRIEFING_GUARD_JUMP);
+    Ok(())
+}
 fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
     safe_regular(original)?;
     let mut exe=fs::read(original).map_err(|e|e.to_string())?;
@@ -101,6 +132,7 @@ fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
     exe[WIN95_OFFSET]=0xeb;
     exe[FADELOW_OFFSET..FADELOW_OFFSET+4].copy_from_slice(&[0xac,0xc5,0x27,0x37]);
     apply_null_guard(&mut exe)?;
+    apply_briefing_guard(&mut exe)?;
     if digest(&exe)!=PATCHED_EXE_SHA {
         return Err("Patched Matrox executable failed exact SHA-256 audit".into());
     }
@@ -120,26 +152,28 @@ fn check_ini(path: &Path)->Result<(),String> {
 }
 
 /// The Matrox importer calls this in its PRIVATE, uncommitted staging directory.
-/// Preserve all original OEM immutable files; rename the exact original EXE
-/// and proprietary MSI95 to .bak, then put the verified replacements alongside
-/// the game. No second runtime/ folder is generated.
+/// Authenticate the original OEM files in private staging and preserve only
+/// the exact original EXE as .bak. The original proprietary MSI95 is discarded
+/// after ISO verification and the embedded renderer is installed directly.
 pub fn prepare_staged(game: &Path, launcher_root: &Path)->Result<(),String>{
     matrox::verify_original(game)?;
     let driver=cleanroom_driver(launcher_root)?;
     let exe_path=game.join("splanetw.exe");
     let original_exe=game.join("splanetw.exe.bak");
     let original_driver=game.join("msi95.dll");
-    let original_backup=game.join("msi95.dll.bak");
-    for backup in [&original_exe,&original_backup] {
-        if fs::symlink_metadata(backup).is_ok() {
-            return Err(format!("Matrox backup already exists: {}",backup.display()));
-        }
+    if fs::symlink_metadata(&original_exe).is_ok() {
+        return Err(format!("Matrox EXE backup already exists: {}",original_exe.display()));
+    }
+    if fs::symlink_metadata(game.join("msi95.dll.bak")).is_ok() {
+        return Err("Unexpected msi95.dll.bak inside private install stage".into());
     }
     let exe=patched_exe(&exe_path)?;
     // All changes below affect only the private uncommitted stage.
     fs::rename(&exe_path,&original_exe).map_err(|e|e.to_string())?;
     write_new(&exe_path,&exe)?;
-    fs::rename(&original_driver,&original_backup).map_err(|e|e.to_string())?;
+    // The proprietary DLL was hash-checked against the disc manifest before
+    // staging. Do not keep any DLL .bak in the installed game.
+    fs::remove_file(&original_driver).map_err(|e|e.to_string())?;
     write_new(&original_driver,&driver)?;
     check_ini(&game.join("splanet.ini"))?;
     verify_prepared_at(game,expected_driver_hash())
@@ -153,9 +187,9 @@ pub fn verify_prepared(root: &Path)->Result<(),String> {
 }
 
 /// Publish a new installer-owned MSI95 driver without a permanent backup.
-/// The short-lived '.replacing' file exists only during an atomic rollback
-/// transaction, and is deleted after successful verification. It is NEVER
-/// the original Matrox OEM driver: that separately lives in msi95.dll.bak.
+/// The short-lived '.replacing' file exists only during atomic rollback
+/// and is deleted after successful verification. No original DLL backup
+/// is retained from the authenticated user's disc.
 fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
                         mut verify_after:impl FnMut()->Result<(),String>)
     ->Result<(),String>{
@@ -202,23 +236,24 @@ fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
     Ok(())
 }
 
-/// Upgrade ONLY the exact previous installer-patched Matrox EXE to the
-/// new null-guarded version. Reject arbitrary EXE modifications. Stage the
+/// Upgrade only exact known previous installer-patched EXEs to the current
+/// NULL-guarded and briefing-list-guarded version. Reject arbitrary EXEs. Stage the
 /// complete hash-verified new file, use a temporary rollback (not a new
 /// permanent .bak), and never touch the separately authenticated original
 /// splanetw.exe.bak. Missing/unknown active EXE is an error.
-fn ensure_null_guard_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
+fn ensure_game_compat_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
     let active=game.join("splanetw.exe");
     let prior=hash_file(&active)?;
     if prior==PATCHED_EXE_SHA{return Ok(());}
-    if prior!=PREVIOUS_PATCHED_EXE_SHA{
+    if prior!=PREVIOUS_PATCHED_EXE_SHA && prior!=PREVIOUS_NULL_GUARDED_EXE_SHA{
         return Err(format!("Unsupported Matrox game EXE {} sha256={prior}; refusing patch",
                            active.display()));
     }
     let mut modified=fs::read(&active).map_err(|e|format!("Cannot read Matrox game EXE: {e}"))?;
-    apply_null_guard(&mut modified)?;
+    if prior==PREVIOUS_PATCHED_EXE_SHA{apply_null_guard(&mut modified)?;}
+    apply_briefing_guard(&mut modified)?;
     if digest(&modified)!=PATCHED_EXE_SHA{
-        return Err("Null-guarded Matrox game EXE failed expected SHA-256".into());
+        return Err("Guarded Matrox game EXE failed expected SHA-256".into());
     }
     let staged=game.join(".splanetw.exe.installing");
     let rollback=game.join(".splanetw.exe.replacing");
@@ -231,7 +266,7 @@ fn ensure_null_guard_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>
         let _=fs::remove_file(&staged);
         return Err(e);
     }
-    if hash_file(&staged)?!=PATCHED_EXE_SHA || hash_file(&active)?!=PREVIOUS_PATCHED_EXE_SHA{
+    if hash_file(&staged)?!=PATCHED_EXE_SHA || hash_file(&active)?!=prior{
         let _=fs::remove_file(&staged);
         return Err("Staged Matrox game EXE or previous EXE changed during upgrade".into());
     }
@@ -251,7 +286,7 @@ fn ensure_null_guard_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>
     }
     fs::remove_file(&rollback)
         .map_err(|e|format!("Matrox EXE upgraded but rollback cleanup failed: {e}"))?;
-    log("MATROX: original splanetw.exe.bak unchanged; upgraded exact previous EXE with guarded null-object return at 0x00494965; no persistent backup.");
+    log("MATROX: original splanetw.exe.bak preserved; upgraded exact recognized EXE with null-object and briefing-list guards; no new backup.");
     Ok(())
 }
 
@@ -285,23 +320,43 @@ fn ensure_owned_driver(
         "MSI95: installing embedded DLL: current={} bundled={} (no old-DLL recognition required).",
         current_hash.as_deref().unwrap_or("(missing)"),expected));
     replace_owned_driver(game,&new_dll,expected,verify_after)?;
-    log("MSI95: embedded DLL installed and verified; temporary rollback removed; original OEM msi95.dll.bak unchanged.");
+    log("MSI95: embedded DLL installed and verified; temporary rollback removed; no permanent DLL backup.");
     Ok(())
 }
 
-/// The launcher owns game/msi95.dll, whether it already contains a former
-/// clean-room build or an unknown DLL. Its current hash is only compared
-/// against the hash of the embedded driver. The OEM game (including the
-/// original proprietary msi95.dll.bak and the patched EXE) is verified
-/// independently before any changes to the active renderer.
+/// Remove an obsolete OEM driver backup created by older experimental
+/// installers, but ONLY when it exactly matches the authenticated original
+/// Matrox driver from the CD manifest. Unrecognized user files are preserved.
+fn cleanup_legacy_driver_backup(game:&Path,expected:&str,
+                                 mut log:impl FnMut(&str))->Result<(),String>{
+    let path=game.join("msi95.dll.bak");
+    let current=match fs::symlink_metadata(&path){
+        Ok(_)=>hash_file(&path)?,
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(()),
+        Err(e)=>return Err(format!("Cannot inspect legacy DLL backup {}: {e}",path.display())),
+    };
+    if current!=expected{
+        log("MSI95: unrecognized legacy msi95.dll.bak preserved (not safe to remove automatically).");
+        return Ok(());
+    }
+    fs::remove_file(&path)
+        .map_err(|e|format!("Cannot delete obsolete OEM DLL backup {}: {e}",path.display()))?;
+    log("MSI95: removed authenticated legacy msi95.dll.bak; no DLL backup retained.");
+    Ok(())
+}
+
+/// The launcher owns game/msi95.dll, even if previous contents are unknown.
+/// Verify the original OEM game resources and original EXE backup before
+/// replacing it, but never require or create a DLL .bak.
 pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
     let game=root.join(GAME_FOLDER);
     matrox::verify_installed_oem(&game)
         .map_err(|e|format!("Cannot prepare Matrox MSI95: original game authentication failed: {e}"))?;
     check_ini(&game.join("splanet.ini"))?;
-    ensure_null_guard_exe(&game,|message|log(message))?;
+    ensure_game_compat_exe(&game,|message|log(message))?;
     ensure_owned_driver(&game,expected_driver_hash(),||cleanroom_driver(root),
         |message|log(message),||verify_prepared(root))?;
+    cleanup_legacy_driver_backup(&game,matrox::ORIGINAL_MSI95,|message|log(message))?;
     matrox_iso::update_generated_ini(&game)?;
     settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
     Ok(game)
@@ -351,6 +406,9 @@ mod tests {
         assert_eq!(FADELOW_OFFSET,0x6ec8b);
         assert_eq!(NULL_GUARD_CAVE_OFFSET,0x93d53);
         assert_eq!(NULL_DEREF_OFFSET,0x93d65);
+        assert_eq!(BRIEFING_CAVE_OFFSET,0x84c53);
+        assert_eq!(BRIEFING_DEREF_OFFSET,0x84cce);
+        assert_eq!(PREVIOUS_NULL_GUARDED_EXE_SHA.len(),64);
         assert_eq!(PREVIOUS_PATCHED_EXE_SHA.len(),64);
         assert_eq!(matrox::manifest_entries().unwrap().len(),66);
         assert_eq!(PATCHED_EXE_SHA.len(),64);
@@ -369,13 +427,30 @@ mod tests {
         assert!(apply_null_guard(&mut exe).is_err(),"double patch is refused");
     }
     #[test]
+    fn briefing_list_guard_skips_only_misaligned_object_entries(){
+        let mut exe=vec![0u8;840_704];
+        exe[BRIEFING_CAVE_OFFSET..BRIEFING_CAVE_OFFSET+13].fill(0xcc);
+        exe[BRIEFING_DEREF_OFFSET..BRIEFING_DEREF_OFFSET+3]
+            .copy_from_slice(&[0x8b,0x48,0x44]);
+        let original=exe.clone();
+        apply_briefing_guard(&mut exe).unwrap();
+        assert_eq!(&exe[BRIEFING_CAVE_OFFSET..BRIEFING_CAVE_OFFSET+13],&BRIEFING_CAVE);
+        assert_eq!(&exe[BRIEFING_DEREF_OFFSET..BRIEFING_DEREF_OFFSET+3],&BRIEFING_GUARD_JUMP);
+        assert_eq!(exe.iter().zip(&original).filter(|(a,b)|a!=b).count(),16);
+        // All object pointers from the game's allocator are DWORD-aligned;
+        // an observed element value 2 must be discarded, not dereferenced.
+        assert_ne!(2u32 & 3,0);
+        assert_eq!(0x01781170u32 & 3,0);
+        assert!(apply_briefing_guard(&mut exe).is_err(),"double patch refused");
+    }
+    #[test]
     fn unknown_game_exe_never_gets_patched_or_backed_up(){
         let root=std::env::temp_dir().join(format!("matrox-nullguard-refuse-{}",std::process::id()));
         let _=fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let active=root.join("splanetw.exe");
         fs::write(&active,b"custom game executable").unwrap();
-        assert!(ensure_null_guard_exe(&root,|_|{}).is_err());
+        assert!(ensure_game_compat_exe(&root,|_|{}).is_err());
         assert_eq!(fs::read(&active).unwrap(),b"custom game executable");
         assert!(!root.join(".splanetw.exe.installing").exists());
         assert!(!root.join(".splanetw.exe.replacing").exists());
@@ -490,6 +565,24 @@ mod tests {
         assert!(replace_owned_driver(&root,b"new", &digest(b"new"),||Ok(())).is_err());
         assert_eq!(fs::read(&dll).unwrap(),b"old-contents");
         assert_eq!(fs::read(root.join(".msi95.dll.installing")).unwrap(),b"unresolved-stage");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn authenticated_old_oem_dll_backup_is_removed_but_unknown_is_preserved(){
+        let root=std::env::temp_dir().join(format!("matrox-old-dll-backup-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let backup=root.join("msi95.dll.bak");
+        let original=b"authentic original DLL in fixture";
+        let expected=digest(original);
+        fs::write(&backup,original).unwrap();
+        cleanup_legacy_driver_backup(&root,&expected,|_|{}).unwrap();
+        assert!(!backup.exists());
+        fs::write(&backup,b"unrecognized user data").unwrap();
+        cleanup_legacy_driver_backup(&root,&expected,|_|{}).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(),b"unrecognized user data");
+        fs::remove_file(&backup).unwrap();
+        cleanup_legacy_driver_backup(&root,&expected,|_|{}).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

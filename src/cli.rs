@@ -284,7 +284,7 @@ fn matrox_verify(root: &Path, logger: &Logger,
                  mut sink: impl FnMut(&str)) -> Result<(), String> {
     matrox_runtime::verify_prepared(root)?;
     let _ = settings::read_settings(&root.join(layout::CONFIG))?;
-    emit(logger, &mut sink, "Matrox game/: all immutable OEM files, original backups, patched EXE and clean-room MSI95 DLL verified.");
+    emit(logger, &mut sink, "Matrox game/: immutable OEM resources (65 installed originals), original EXE backup, patched EXE and embedded MSI95 DLL verified.");
     Ok(())
 }
 

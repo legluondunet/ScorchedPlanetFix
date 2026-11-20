@@ -128,9 +128,10 @@ A fresh root `ScorchedPlanetFix.ini` now includes human-readable comments
 for every option and `[Debug] Log=0`. Use `Log=1` to enable a new
 noncumulative runtime log for GameFrame or Matrox. The installer's own
 noncumulative `ScorchedPlanetFix_installer.log` remains available in either
-mode. Matrox's `splanetw.exe.bak` and `msi95.dll.bak` are exact, audited
-OEM originals retained for safe original-content verification; they are never
-used to launch or render. Deleting them invalidates the current verifier.
+mode. Matrox's original executable remains authenticated at
+`game/splanetw.exe.bak`, but proprietary DLL backups are no longer
+created or required; the original MSI95 is verified against the user's
+CD during extraction and discarded.
 
 ### First-run diagnostic collection (2026-11-20)
 
@@ -156,10 +157,11 @@ the menu transparency and world rendering issues.
 
 A prior clean-room MSI95.dll may come from any experimental PR #36 build,
 and its SHA-256 necessarily differs when the source or compilation changes.
-The launcher now authenticates **all 66 OEM reference files**, including the
-original proprietary driver `game/msi95.dll.bak`, the original executable
-`game/splanetw.exe.bak`, and the hash-locked patched executable, *before*
-automatically replacing a different/missing `game/msi95.dll` with the DLL
+The launcher authenticates **all 66 OEM reference files on the source CD**
+before installation. For an existing installation, it authenticates the
+**65 preserved original files** (including `game/splanetw.exe.bak`) and
+the hash-locked patched executable, *before* automatically replacing a
+different/missing `game/msi95.dll` with the DLL
 embedded in the new ScorchedPlanetFix.exe. A temporary staging/rollback
 transaction protects against errors; no new persistent `.bak` is made for
 the launcher-owned DLL. All assets, saves and native INI values are preserved.
@@ -182,8 +184,9 @@ compares its SHA-256 with the DLL embedded in the running installer:
 - **Missing:** restore the embedded DLL.
 - A temporary rollback protects against failed updates; it is removed after
   successful verification. No persistent backup for launcher-supplied DLLs.
-- The *separate* `game/msi95.dll.bak` remains the original proprietary
-  Matrox driver, authenticated and never overwritten.
+- No proprietary DLL backup is created. The original Matrox MSI95 is
+  verified from the user-owned CD and omitted from the installed tree.
+  An old authenticated `msi95.dll.bak` is cleaned up automatically.
 - A symlink or non-regular file is rejected rather than followed for safety.
 
 The explicit read-only `--verify` mode never performs replacements.
@@ -229,3 +232,16 @@ rejected, and the strict read-only `--verify` option performs no migration.
 **The patch is experimentally justified by disassembly and crash logs,
 but its gameplay impact is not yet verified under Wine/Windows.
 PR #36 remains draft and unmerged pending real-world validation.**
+
+### Repeated-click crash in Matrox briefing (experimental guard, 2026-11-20)
+
+Repeated clicking on the mission briefing can lead to an object-list entry
+with value `0x00000002` being dereferenced as a pointer at `0x004858CE`.
+The exact OEM PE32 disassembly shows a loop that fails to validate entry
+alignment. A **16-byte** signature-verified guard now skips DWORD-misaligned
+entries, preserving the original iteration and behavior for aligned pointers.
+This is defensive: it does not yet explain how the invalid entry enters
+the list, and requires gameplay testing. The installer upgrades exact known
+prior patched EXEs automatically, preserving `splanetw.exe.bak` and never
+creating a DLL backup. A fresh ISO install produces the guarded executable
+directly, without bundling game code.
