@@ -71,6 +71,26 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         r = self.parse("msiExit total_frames= 512 triangles= 123\nSHUTDOWN_COMPLETE elapsed_ms= 5\n")
         self.assertEqual(r["status"], "clean_exit_heap_unknown")
 
+    def test_space_guard_decision_samples_preserve_crash_classification(self):
+        r = self.parse("""msiInit width=640 height=400 planes=16 zbuffer=0 debug=0
+TRANSITION_SPACE_CHAR_EVAL frame=40 heap_live=12 heap_age_ms=95 scene_global=0x00000000 signature_ok=1 callback_depth=0 suppress=1
+TRANSITION_SPACE_CHAR_IGNORED count=1 frame=40
+TRANSITION_SPACE_CHAR_EVAL frame=75 heap_live=12 heap_age_ms=1600 scene_global=0x00F40920 signature_ok=1 callback_depth=0 suppress=0
+msiExit total_frames=100 triangles=150
+MSI_HEAP_TRACKER exit_live=0 peak_live=12
+SHUTDOWN_COMPLETE elapsed_ms=8
+""")
+        self.assertEqual(r["status"], "clean_exit")
+        self.assertEqual(r["space_char_evaluations"], 2)
+        self.assertEqual(r["space_char_suppressed"], 1)
+        self.assertEqual(r["last_space_char_evaluation"]["suppress"], 0)
+        self.assertEqual(r["last_space_char_evaluation"]["heap_age_ms"], 1600)
+        broken = self.parse("""TRANSITION_SPACE_CHAR_EVAL frame=58 heap_live=18 heap_age_ms=78 scene_global=0x00000000 signature_ok=1 callback_depth=0 suppress=0
+FIRST_CHANCE_AV #1 code=0xC0000005 ip=0x0046D76D operation=0 address=0x0000000C
+""")
+        self.assertEqual(broken["status"], "crash_observed")
+        self.assertEqual(broken["space_char_suppressed"], 0)
+
     def test_missing_file(self):
         r = analyzer.parse_log(Path("totally_nonexistent_scorched_runtime_log.txt"))
         self.assertEqual(r["status"], "unreadable")
