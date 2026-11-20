@@ -91,6 +91,39 @@ FIRST_CHANCE_AV #1 code=0xC0000005 ip=0x0046D76D operation=0 address=0x0000000C
         self.assertEqual(broken["status"], "crash_observed")
         self.assertEqual(broken["space_char_suppressed"], 0)
 
+    def test_runtime_host_metadata_from_standalone_log(self):
+        native = self.parse("""SYS-OS: runtime=Windows native
+SYS-WINE: not detected
+SYS-HOST: OS=Windows
+SYS-PROTON: not detected (native Windows)
+msiInit width=640 height=400 planes=16 zbuffer=0 debug=0
+msiExit total_frames=40 triangles=80
+MSI_HEAP_TRACKER exit_live=0 peak_live=0
+SHUTDOWN_COMPLETE elapsed_ms=2
+""")
+        self.assertEqual(native["runtime_platform"], "Windows native")
+        self.assertIsNone(native["runtime_wine_version"])
+        self.assertEqual(native["runtime_host_os"], "Windows")
+        self.assertEqual(native["runtime_proton_hint"], "not detected (native Windows)")
+        self.assertEqual(native["status"], "clean_exit")
+
+        wine = self.parse("""SYS-OS: runtime=Wine (Win32 compatibility layer)
+SYS-WINE: version=11.19
+SYS-HOST: OS=Linux
+SYS-PROTON: Steam compatibility environment=yes (environment hint, unverified)
+msiInit width=640 height=400 planes=16 zbuffer=0 debug=0
+FIRST_CHANCE_AV #1 code=0xC0000005 ip=0x0048302D operation=0 address=0x0000000C
+""")
+        self.assertEqual(wine["runtime_platform"], "Wine (Win32 compatibility layer)")
+        self.assertEqual(wine["runtime_wine_version"], "11.19")
+        self.assertEqual(wine["runtime_host_os"], "Linux")
+        self.assertTrue(wine["runtime_proton_hint"].startswith("Steam compatibility environment=yes"))
+        self.assertEqual(wine["status"], "crash_observed")
+
+        old = self.parse("msiInit width=640 height=400 planes=16 zbuffer=0 debug=0\n")
+        self.assertIsNone(old["runtime_platform"])
+        self.assertIsNone(old["runtime_proton_hint"])
+
     def test_missing_file(self):
         r = analyzer.parse_log(Path("totally_nonexistent_scorched_runtime_log.txt"))
         self.assertEqual(r["status"], "unreadable")
