@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`d96af5eab55009b6cb2c6fe64bed15340565697ce50d4fc0dc0e0a84195a41de`
+`a439db1acb947646b5fdf7a9f19ef2d7ae542b3c1adeb2c9864c1ae0401194c9`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -293,3 +293,36 @@ the earlier intermittent AVs have been eliminated.
 
 Mark every manual test `PASS`, `FAIL`, or `NOT RUN`; never infer a
 particular gameplay navigation path from a renderer log alone.
+
+
+## CRT-correct 4:3 presentation (2026-11-20)
+
+The Matrox OEM game still creates its original **640x400 RGB565**
+framebuffer, an 8:5 *sample grid* historically displayed on a 4:3 CRT
+with non-square pixels (source pixel aspect 5:6). The previous preview
+mistakenly kept square pixels, displaying 8:5. On an 8:5 Windows desktop
+(e.g. scaled 1536x960 logical pixels over a 1920x1200 physical display),
+that filled the entire screen and stretched HUD/world horizontally.
+
+The preview now presents the whole 640x400 source as a **4:3 image** in a
+centered GDI rectangle; any unused window area is painted black.
+Borderless fullscreen is retained. At a 1536x960 *logical* desktop, the
+viewport is **1280x960** with **128px sidebars**; at physical 1920x1200,
+assuming the same 125% desktop scaling, these correspond to 1600x1200 and
+160px sidebars. At 1920x1080 without DPI virtualization, the viewport is
+1440x1080 with 240px sidebars. The last values are geometric expectations,
+not claims of live visual verification.
+
+Only `preview_blit`'s GDI presentation rectangle and black-bar painting
+change. There are **no changes** to framebuffer dimensions, shaders,
+textures, geometry, game EXE, Windows focus handling or mouse/keyboard
+callback coordinates. A single `PREVIEW_VIEWPORT display_aspect=4:3`
+line reports the actual rectangle with `[Debug] Log=1` (or first run).
+
+**Post-build validation required:** Matrox OEM on native Windows and Wine,
+check HUD/menus/circles visually (no sideways stretch), pillarbox widths,
+click targets near both left and right image edges, Alt-Tab and returning,
+normal mission/menu/quit, and no AV. If mouse hit targets are displaced,
+fix the guest input-space transformation separately with live evidence; do
+not blindly modify game input in the aspect-ratio fix. Retail 3dfx/GameFrame
+is unaffected in source but still needs its independent regression test.
