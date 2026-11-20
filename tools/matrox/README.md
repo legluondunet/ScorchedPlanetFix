@@ -80,3 +80,32 @@ The crash remains **unresolved pending instruction decoding and reproduction
 of the exact menu transition**. Changes to F12 capture handling are a possible
 regression window, but no `MANUAL_CAPTURE` requests occurred in the crash
 log, so no causal attribution has been established.
+
+## Crash investigation: null first argument, caller trace (2026-11-20)
+
+Latest reported Wine run (`ScorchedPlanetFix(20261120-134450).log`) has a repeated
+access violation at `splanetw.exe+0x94965`, reading `0x24` from address
+`NULL`. The previously added instruction-byte trace establishes:
+
+```asm
+0x00494960: push esi
+0x00494961: mov esi,[esp+8]   ; first function argument
+0x00494965: mov eax,[esi+0x24]  ; crashes because esi=0
+```
+
+The stack at fault: `[esp+0]=0x0187F080` (saved ESI),
+`[esp+4]=0x004186AA` (caller return address), and
+`[esp+8]=0x00000000` (null first argument).
+The failure reproduces at frame **1227**, ~42 seconds, and previously at
+frame **498**. No F12 capture occurred. **234** texture heap allocations and
+**46** recognized frees are logged in the latest run; no allocator failures
+or heap-count cap rejections. An animation/frame-dependent workaround is
+not justified.
+
+A read-only VEH diagnostic now additionally records `AV_CALLER` and
+`AV_CALLER_CODE`: the raw saved ESI, caller return address, candidate
+first argument, and 48 bytes centered on the caller return address.
+This will identify the call instruction immediately before
+`0x004186AA`, helping us determine the actual origin of the null object.
+Do not skip the crashing function or synthesize a fake object without
+understanding the game logic. Root cause is still unresolved.

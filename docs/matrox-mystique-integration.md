@@ -319,3 +319,22 @@ the faulting EIP as `AV_CODE before16_and_after16=` to permit x86 opcode
 analysis. The launcher now reports the actual crash status accurately.
 No speculative memory patches or silent AV swallowing are implemented.
 **Root cause not yet established and PR #36 must not be merged.**
+
+## Identified crash instruction (2026-11-20, second Wine test)
+
+A second logged Matrox session reaches frame 1227 (~41.99 seconds)
+before repeating the **identical** fault from an earlier session at frame
+498: `EIP=0x00494965`, read from `0x00000024` with `ESI=0`.
+The logged faulting bytes decode to `push esi; mov esi,[esp+8];
+mov eax,[esi+0x24]`. The function receives a **NULL first argument**;
+the caller return address is `0x004186AA`. This is a precise direct
+null-dereference in the game executable, not a DLL installation failure.
+
+The wrapper did not report any invalid allocation/texture-heap exhaustion,
+and the user did not press F12. The repeated failure at different frame
+counts means that we must diagnose the call site, not just add a time-based
+hack. The next non-invasive MSI95 diagnostics are `AV_CALLER` and
+`AV_CALLER_CODE` (48 bytes centered at the return address), written only
+for debug-enabled first-chance access violations. Do not patch the game
+or ignore the AV before interpreting the caller's code path. PR #36
+remains draft/unmerged.

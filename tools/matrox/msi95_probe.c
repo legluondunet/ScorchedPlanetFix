@@ -445,6 +445,35 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
       /* Read only the faulting instruction window on a first-chance AV.
        * Never change executable bytes or exception-handling semantics.
        * Keep this trace guarded by the normal Debug Log=1 condition. */
+      /* Capture the caller's stack and code around its return address.
+       * This is read-only and does not patch/skip the crash. In the known
+       * 0x00494965 case, [esp+8] is the invalid first function argument. */
+      if(readable_span((void*)ctx->Esp,12u)){
+        const DWORD *sp=(const DWORD*)ctx->Esp;
+        DWORD ret=sp[1];
+        char caller[200];k=0;
+        putstr(caller,&k,"AV_CALLER saved_esi=");puthex(caller,&k,sp[0]);
+        putstr(caller,&k," return=");puthex(caller,&k,ret);
+        putstr(caller,&k," first_arg=");puthex(caller,&k,sp[2]);
+        caller[k]=0;
+        WriteFile(g_log,caller,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+        if(ret>=24u && readable_span((void*)(ret-24u),48u)){
+          static const char hex_digits[]="0123456789ABCDEF";
+          const BYTE* code=(const BYTE*)(ret-24u);
+          char caller_bytes[220];k=0;
+          putstr(caller_bytes,&k,"AV_CALLER_CODE before24_and_after24=");
+          for(unsigned i=0;i<48u;i++){
+            if(i==24u)putstr(caller_bytes,&k," |");
+            caller_bytes[k++]=' ';
+            caller_bytes[k++]=hex_digits[(code[i]>>4)&15u];
+            caller_bytes[k++]=hex_digits[code[i]&15u];
+          }
+          caller_bytes[k]=0;
+          WriteFile(g_log,caller_bytes,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
+      }
       if(ctx->Eip>=16u && readable_span((void*)(ctx->Eip-16u),32u)){
         static const char hex_digits[]="0123456789ABCDEF";
         const BYTE* code=(const BYTE*)(ctx->Eip-16u);
