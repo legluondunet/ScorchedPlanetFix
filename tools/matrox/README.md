@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`a439db1acb947646b5fdf7a9f19ef2d7ae542b3c1adeb2c9864c1ae0401194c9`
+`a6cbffdf48359d4a2da8c94647844db1ed8c25eb47080a918055895872dfaa47`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -326,3 +326,37 @@ normal mission/menu/quit, and no AV. If mouse hit targets are displaced,
 fix the guest input-space transformation separately with live evidence; do
 not blindly modify game input in the aspect-ratio fix. Retail 3dfx/GameFrame
 is unaffected in source but still needs its independent regression test.
+
+
+## Narrow OEM scene-transition Space-character guard (2026-11-20)
+
+An *early, rapid double Space* on native Windows 11 after the 4:3 preview
+change reproduced game AV `splanetw.exe!0046D76D` at frame 58, 2.734 s
+after startup. The source code's original instruction sequence reads a
+game-owned pointer from `[0x0050DCD0]` and dereferences `[EDX+0x0c]`.
+The game pointer was NULL at the exception; 18 texture heaps were live,
+no tracker overflow/OOM. `WM_CHAR(0x20)` was the last guest input event,
+15 ms before the AV and shortly after the new scene allocated heaps.
+The same crash address had also occurred previously under Wine without
+that particular last input, so this is **not a proven universal cause**.
+
+A narrowly scoped **experimental compatibility guard** drops ONLY
+`WM_CHAR` carrying a Space character (U+0020), when ALL are true:
+the original hash-verified OEM instruction signature matches, its
+global `0x0050DCD0` is currently NULL, at least one MSI95 texture heap
+is live, the game is initialized, and a successful texture allocation
+occurred within the previous 250 ms. Other character messages,
+`WM_KEYDOWN/UP`, all mouse messages, focus/Alt-Tab and game graphics
+remain unchanged. The guard is active even when `[Debug] Log=0`
+(the new `g_last_heap_alloc_tick` state does not depend on logging).
+With logging, `TRANSITION_SPACE_CHAR_IGNORED count=... frame=...`
+records any intercepted character.
+
+**Do not claim the original engine crash is fixed without live testing.**
+Replay the exact rapid-Space startup sequence under Windows using the
+new build, verify the new guard log appears (or report that it does not),
+verify the game subsequently renders normally, then try normal intro
+skipping, menu selection and clean exit. Separately verify Wine and the
+retail 3dfx/GameFrame edition: the earlier Wine `0046D76D` crash without
+a preceding `WM_CHAR` is not addressed by this guard. No OEM game
+instructions or global pointers are modified by this change.
