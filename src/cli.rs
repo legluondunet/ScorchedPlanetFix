@@ -292,7 +292,7 @@ fn matrox_verify(root: &Path, logger: &Logger,
 fn matrox_play(root: &Path, logger: &Logger,
                mut sink: impl FnMut(&str)) -> Result<(), String> {
     emit(logger, &mut sink, "Verifying Matrox Mystique OEM edition inside game/...");
-    let runtime = matrox_runtime::prepare(root)?;
+    let runtime = matrox_runtime::prepare(root,|message|emit(logger,&mut sink,message))?;
     layout::ensure_support_files(root,"matrox")?;
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     emit(logger, &mut sink, &format!("Verified Matrox game: {}", runtime.display()));
@@ -500,7 +500,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
     let game = root.join(layout::GAME);
     if installed == Some(InstalledEdition::MatroxOem) {
         if cmd.mode == Mode::InstallOnly {
-            let runtime = matrox_runtime::prepare(root)?;
+            let runtime = matrox_runtime::prepare(root,|message|emit(logger,&mut sink,message))?;
             layout::ensure_support_files(root,"matrox")?;
             emit(logger, &mut sink, &format!("Matrox game prepared: {}", runtime.display()));
             return Ok(());

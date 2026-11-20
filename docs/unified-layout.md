@@ -248,3 +248,19 @@ restarts. The driver skips a serial if **either** file exists and
 opens new files with `CREATE_NEW` as a final guard against overwrites.
 It ignores F12 autorepeat until the key is released. Automatic BMP
 capture and the default `[Debug] Log=0` are unchanged.
+
+## Upgrade of the installer-owned Matrox driver (2026-11-20)
+
+Old copies of `game/msi95.dll` from our prior experimental builds must
+NOT cause `Modified or unsupported Matrox runtime` after upgrading only
+ScorchedPlanetFix.exe. The installer now authenticates the 66 OEM files
+and both the preserved original EXE/driver backups plus active patched EXE,
+then replaces the **installer-owned** active DLL automatically if its hash
+differs or the DLL is missing. A temporary rollback file is deleted
+after success; no permanent backup of the provided driver is kept.
+`game/msi95.dll.bak` is the original proprietary Matrox file and
+must remain untouched.
+
+The operation also works in `--install-only`, but not in read-only
+`--verify`. Custom savegames and the native `game/splanet.ini` are
+never modified by this DLL update.

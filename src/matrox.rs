@@ -74,20 +74,30 @@ fn regular_not_symlink(path: &Path) -> Result<std::fs::Metadata, String> {
 /// Audit the playable Matrox install in game/ using the complete OEM
 /// reference manifest for immutable resources and exact original backups.
 /// The patched executable and clean-room MSI95 must also match expected hashes.
-pub fn verify_installed(folder: &Path, patched_exe_hash: &str, driver_hash: &str)
+/// Full immutable-game audit independent of the launcher-owned MSI95 driver.
+/// Refuse to replace a renderer unless the OEM original driver backup,
+/// executable backup, patched executable, and every CD resource authenticate.
+pub fn verify_installed_game(folder: &Path, patched_exe_hash: &str)
     -> Result<VerifiedOem, String> {
     let report = verify_reference(folder, true)?;
-    let verify_modified = |relative: &str, hash: &str| -> Result<(), String> {
-        let path=folder.join(relative);
-        regular_not_symlink(&path)?;
-        let bytes=fs::read(&path).map_err(|e| e.to_string())?;
-        if format!("{:x}",Sha256::digest(&bytes)) != hash {
-            return Err(format!("Modified or unsupported Matrox runtime: {}",path.display()));
-        }
-        Ok(())
-    };
-    verify_modified("splanetw.exe",patched_exe_hash)?;
-    verify_modified("msi95.dll",driver_hash)?;
+    verify_modified(folder,"splanetw.exe",patched_exe_hash)?;
+    Ok(report)
+}
+
+fn verify_modified(folder:&Path,relative:&str,hash:&str)->Result<(),String>{
+    let path=folder.join(relative);
+    regular_not_symlink(&path)?;
+    let bytes=fs::read(&path).map_err(|e|e.to_string())?;
+    if format!("{:x}",Sha256::digest(&bytes))!=hash{
+        return Err(format!("Modified or unsupported Matrox runtime: {}",path.display()));
+    }
+    Ok(())
+}
+
+pub fn verify_installed(folder: &Path, patched_exe_hash: &str, driver_hash: &str)
+    -> Result<VerifiedOem, String> {
+    let report=verify_installed_game(folder,patched_exe_hash)?;
+    verify_modified(folder,"msi95.dll",driver_hash)?;
     Ok(report)
 }
 

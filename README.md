@@ -151,3 +151,20 @@ Existing screenshots are preserved across launches and the files are
 opened with the Windows no-overwrite `CREATE_NEW` flag. Release F12
 between captures. Attach both files with matching numbers when reporting
 the menu transparency and world rendering issues.
+
+### Automatic update of the installer-owned Matrox MSI95 DLL (2026-11-20)
+
+A prior clean-room MSI95.dll may come from any experimental PR #36 build,
+and its SHA-256 necessarily differs when the source or compilation changes.
+The launcher now authenticates **all 66 OEM reference files**, including the
+original proprietary driver `game/msi95.dll.bak`, the original executable
+`game/splanetw.exe.bak`, and the hash-locked patched executable, *before*
+automatically replacing a different/missing `game/msi95.dll` with the DLL
+embedded in the new ScorchedPlanetFix.exe. A temporary staging/rollback
+transaction protects against errors; no new persistent `.bak` is made for
+the launcher-owned DLL. All assets, saves and native INI values are preserved.
+
+A normal launch or `--install-only` updates the driver as needed. The
+read-only `--verify` mode still checks without modifying anything, and
+`--launch-no-verify` retains its existing unchecked semantics. Runtime
+messages explicitly record the old/new DLL hashes when an upgrade occurs.

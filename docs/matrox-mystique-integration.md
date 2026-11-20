@@ -255,3 +255,20 @@ protected; the scan skips a serial if either filename exists and the
 final `CreateFileA(..., CREATE_NEW, ...)` never replaces previous data.
 F12 keyboard repeats are ignored until the key is released.
 No automatic BMP snapshots are enabled.
+
+## Safe automatic clean-room MSI95 upgrade from earlier PR #36 builds
+
+The 2026-11-20 F12 multi-capture DLL has a new binary hash. The former
+migration procedure only recognized a single legacy driver hash and
+rejected intermediate CI builds as `Modified or unsupported Matrox runtime`.
+
+Now `prepare` first performs the **complete** 66-file immutable
+OEM check (including authenticated `splanetw.exe.bak` and
+`msi95.dll.bak` originals) plus the exact patched
+`game/splanetw.exe` check. Only if all these checks pass does it
+safely update/repair the installer-owned `game/msi95.dll`. A temporary
+staged and rollback DLL is verified and cleared after success. This
+is a generic safe update for later source revisions, without
+hardcoding every transient CI-produced DLL SHA-256. Original backups,
+saves, and custom `splanet.ini` are kept. The read-only `--verify`
+option remains strictly non-mutating.

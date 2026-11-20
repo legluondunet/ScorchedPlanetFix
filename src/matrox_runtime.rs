@@ -121,46 +121,86 @@ pub fn verify_prepared(root: &Path)->Result<(),String> {
     verify_prepared_at(&root.join(GAME_FOLDER),expected_driver_hash())
 }
 
-/// Existing new-layout installations may have a previous known MSI95 renderer.
-/// Replace ONLY an authenticated older driver with rollback, never touch
-/// unknown DLLs, game data, player saves or the original MSI95 .bak backup.
-pub fn prepare(root: &Path)->Result<PathBuf,String>{
+/// Publish a new installer-owned MSI95 driver without a permanent backup.
+/// The short-lived '.replacing' file exists only during an atomic rollback
+/// transaction, and is deleted after successful verification. It is NEVER
+/// the original Matrox OEM driver: that separately lives in msi95.dll.bak.
+fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
+                        mut verify_after:impl FnMut()->Result<(),String>)
+    ->Result<(),String>{
+    let current=game.join("msi95.dll");
+    let staged=game.join(".msi95.dll.installing");
+    let displaced=game.join(".msi95.dll.replacing");
+    for item in [&staged,&displaced]{
+        if fs::symlink_metadata(item).is_ok(){
+            return Err(format!("Interrupted MSI95 update; inspect {}",item.display()));
+        }
+    }
+    let old_exists=match fs::symlink_metadata(&current){
+        Ok(_)=>{safe_regular(&current)?;true},
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>false,
+        Err(e)=>return Err(format!("Cannot inspect MSI95 driver {}: {e}",current.display())),
+    };
+    if let Err(e)=write_new(&staged,desired){
+        let _=fs::remove_file(&staged);return Err(e);
+    }
+    if hash_file(&staged)?!=expected{
+        let _=fs::remove_file(&staged);
+        return Err("Staged MSI95 checksum mismatch".into());
+    }
+    if old_exists {
+        if let Err(e)=fs::rename(&current,&displaced){
+            let _=fs::remove_file(&staged);
+            return Err(format!("Cannot stage previous MSI95 driver for rollback: {e}"));
+        }
+    }
+    if let Err(e)=fs::rename(&staged,&current){
+        if old_exists{let _=fs::rename(&displaced,&current);}
+        let _=fs::remove_file(&staged);
+        return Err(format!("Cannot publish installer-owned MSI95 DLL: {e}"));
+    }
+    if let Err(e)=verify_after(){
+        let _=fs::remove_file(&current);
+        if old_exists{let _=fs::rename(&displaced,&current);}
+        return Err(format!("MSI95 update verification failed; previous driver restored if present: {e}"));
+    }
+    if old_exists {
+        fs::remove_file(&displaced)
+            .map_err(|e|format!("MSI95 upgraded but temporary rollback remains: {e}"))?;
+    }
+    Ok(())
+}
+
+/// A working, hash-locked OEM installation may use a prior build of OUR OWN
+/// open-source DLL. The bundled MSI95 is the installer's file: repair/update
+/// it automatically, without needing a whitelist for each CI binary hash.
+/// This is safe only AFTER all 66 original resources + original OEM driver
+/// and EXE backups and the patched EXE are independently authenticated.
+/// Never change a custom game executable, original backup, or user resources.
+pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
     let game=root.join(GAME_FOLDER);
-    if let Err(current_error)=verify_prepared(root) {
-        if expected_driver_hash()==LEGACY_DRIVER_HASH {
+    if let Err(current_error)=verify_prepared(root){
+        matrox::verify_installed_game(&game,PATCHED_EXE_SHA)
+            .map_err(|e|format!("Cannot update MSI95: original game authentication failed: {e}"))?;
+        check_ini(&game.join("splanet.ini"))?;
+        let current=game.join("msi95.dll");
+        let driver_current=match fs::symlink_metadata(&current){
+            Ok(_)=>Some(hash_file(&current)?),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
+            Err(e)=>return Err(format!("Cannot inspect MSI95: {e}")),
+        };
+        // If the bundled driver already matches, do not attempt a spurious
+        // repair. The original verification error must then be reported.
+        if driver_current.as_deref()==Some(expected_driver_hash()){
             return Err(current_error);
         }
-        verify_prepared_at(&game,LEGACY_DRIVER_HASH).map_err(|_|current_error)?;
         let replacement=cleanroom_driver(root)?;
-        let current=game.join("msi95.dll");
-        let staged=game.join(".msi95.dll.installing");
-        let displaced=game.join(".msi95.dll.replacing");
-        for item in [&staged,&displaced] {
-            if fs::symlink_metadata(item).is_ok() {
-                return Err(format!("Interrupted MSI95 upgrade; inspect {}",item.display()));
-            }
-        }
-        write_new(&staged,&replacement)?;
-        if hash_file(&staged)?!=expected_driver_hash() {
-            let _=fs::remove_file(&staged);
-            return Err("Staged MSI95 checksum mismatch".into());
-        }
-        if let Err(e)=fs::rename(&current,&displaced) {
-            let _=fs::remove_file(&staged);
-            return Err(format!("Cannot prepare MSI95 rollback: {e}"));
-        }
-        if let Err(e)=fs::rename(&staged,&current) {
-            let _=fs::rename(&displaced,&current);
-            let _=fs::remove_file(&staged);
-            return Err(format!("Cannot publish new MSI95 driver: {e}"));
-        }
-        if let Err(e)=verify_prepared(root) {
-            let _=fs::remove_file(&current);
-            let _=fs::rename(&displaced,&current);
-            return Err(format!("MSI95 update verification failed; original restored: {e}"));
-        }
-        fs::remove_file(&displaced)
-            .map_err(|e|format!("MSI95 upgraded but stale rollback remains: {e}"))?;
+        log(&format!(
+            "MSI95: original OEM files and patched EXE authenticated; updating installer-owned driver from {} to {}.",
+            driver_current.as_deref().unwrap_or("(missing)"),expected_driver_hash()));
+        replace_owned_driver(&game,&replacement,expected_driver_hash(),
+                             ||verify_prepared(root))?;
+        log("MSI95: automatic update verified; original game/msi95.dll.bak preserved; no new permanent backup.");
     }
     matrox_iso::update_generated_ini(&game)?;
     settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
@@ -241,9 +281,53 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
     #[test]
+    fn replacing_installer_driver_never_leaves_a_permanent_backup(){
+        let root=std::env::temp_dir().join(format!("msi95-upgrade-test-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let active=root.join("msi95.dll");
+        let old=b"earlier trusted installer driver";
+        let replacement=b"new bundled driver";
+        let expected=digest(replacement);
+        fs::write(&active,old).unwrap();
+        replace_owned_driver(&root,replacement,&expected,
+            ||{if hash_file(&active)?==expected{Ok(())}
+               else{Err("unexpected new driver".into())}}).unwrap();
+        assert_eq!(fs::read(&active).unwrap(),replacement);
+        assert!(!root.join(".msi95.dll.replacing").exists());
+        assert!(!root.join(".msi95.dll.installing").exists());
+        assert!(!root.join("msi95.dll.bak").exists(),
+            "The installer-supplied DLL must never receive a permanent .bak");
+        // If the verification fails, roll back in place, without losing the
+        // previous DLL or creating a permanent backup.
+        let err=replace_owned_driver(&root,b"another variant",&digest(b"another variant"),
+            ||Err("artificial verification rejection".into())).unwrap_err();
+        assert!(err.contains("artificial verification rejection"));
+        assert_eq!(fs::read(&active).unwrap(),replacement);
+        assert!(!root.join(".msi95.dll.replacing").exists());
+        fs::remove_file(&active).unwrap();
+        replace_owned_driver(&root,replacement,&expected,||Ok(())).unwrap();
+        assert_eq!(fs::read(&active).unwrap(),replacement);
+        assert!(!root.join("msi95.dll.bak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interrupted_staging_refuses_to_overwrite_any_file(){
+        let root=std::env::temp_dir().join(format!("msi95-staging-test-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let dll=root.join("msi95.dll");
+        fs::write(&dll,b"old-contents").unwrap();
+        fs::write(root.join(".msi95.dll.installing"),b"unresolved-stage").unwrap();
+        assert!(replace_owned_driver(&root,b"new", &digest(b"new"),||Ok(())).is_err());
+        assert_eq!(fs::read(&dll).unwrap(),b"old-contents");
+        assert_eq!(fs::read(root.join(".msi95.dll.installing")).unwrap(),b"unresolved-stage");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn missing_game_does_not_create_second_runtime(){
         let root=std::env::temp_dir().join(format!("matrox-missing-{}",std::process::id()));
-        assert!(prepare(&root).is_err());
+        assert!(prepare(&root,|_|{}).is_err());
         assert!(!root.join(GAME_FOLDER).exists());
     }
 }
