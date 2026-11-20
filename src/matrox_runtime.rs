@@ -12,7 +12,18 @@ use std::process::{Child,Command};
 const GAME_FOLDER: &str = "game";
 const DRIVER_SOURCE: &str = "ScorchedPlanetFix_MSI95_v035.dll";
 const LEGACY_DRIVER_HASH: &str = "0d31c8f95e0387c959a59c57d57f29f4b599cd9b3469b0e2fce3383982a3946e";
-const PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
+const PATCHED_EXE_SHA: &str = "52b5f604ad7037e29e8cc83244c86662a2e6896b1e4d024ac4c68f23d080a759";
+const PREVIOUS_PATCHED_EXE_SHA: &str = "333de76b4cf4d358fd86cc1abbf5eda0ac95a101a23053d2764a00275f127be6";
+/// Win32 PE .text VA 0x00401000 maps to file offset 0x400.
+const NULL_GUARD_CAVE_OFFSET: usize = 0x93d53; // VA 0x00494953, 13 original CC bytes
+const NULL_DEREF_OFFSET: usize = 0x93d65; // VA 0x00494965, mov eax,[esi+0x24]
+const NULL_GUARD_CAVE: [u8;13] = [
+    0x85,0xf6,             // test esi,esi
+    0x0f,0x84,0x8e,0,0,0,  // je 0x004949e9 (original NULL-return branch)
+    0x8b,0x46,0x24,        // mov eax,[esi+0x24]
+    0xeb,0x08,             // jmp 0x00494968 (resume original function)
+];
+const NULL_GUARD_JUMP: [u8;3] = [0xeb,0xec,0x90]; // jmp 0x00494953; nop
 const ORIGINAL_EXE_SHA: &str = "1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894";
 const WIN95_OFFSET: usize = 0x1579b;
 const FADELOW_OFFSET: usize = 0x6ec8b;
@@ -58,6 +69,25 @@ fn cleanroom_driver(root: &Path) -> Result<Vec<u8>,String> {
     }
     Ok(bytes)
 }
+/// The original 1996 function 0x00494960 already has an intentional
+/// NULL-input branch at 0x004949E9 (log error and return zero), but reads
+/// [esi+0x24] at 0x00494965 BEFORE testing esi. In Wine logs we proved
+/// esi=0 and its caller is 0x0042DB41. The following 16-byte, hash-locked
+/// local patch performs the NULL test before dereferencing, then resumes
+/// the original function for all non-NULL objects. The 13-byte code cave
+/// was entirely CC padding in the exact authenticated OEM EXE.
+fn apply_null_guard(exe:&mut [u8])->Result<(),String>{
+    if exe.len()!=840_704
+        || exe[NULL_GUARD_CAVE_OFFSET..NULL_GUARD_CAVE_OFFSET+13]!=[0xcc;13]
+        || exe[NULL_DEREF_OFFSET..NULL_DEREF_OFFSET+3]!=[0x8b,0x46,0x24] {
+        return Err("Unrecognized Matrox null-guard patch sites; refusing EXE modification".into());
+    }
+    exe[NULL_GUARD_CAVE_OFFSET..NULL_GUARD_CAVE_OFFSET+13]
+        .copy_from_slice(&NULL_GUARD_CAVE);
+    exe[NULL_DEREF_OFFSET..NULL_DEREF_OFFSET+3]
+        .copy_from_slice(&NULL_GUARD_JUMP);
+    Ok(())
+}
 fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
     safe_regular(original)?;
     let mut exe=fs::read(original).map_err(|e|e.to_string())?;
@@ -70,6 +100,7 @@ fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
     }
     exe[WIN95_OFFSET]=0xeb;
     exe[FADELOW_OFFSET..FADELOW_OFFSET+4].copy_from_slice(&[0xac,0xc5,0x27,0x37]);
+    apply_null_guard(&mut exe)?;
     if digest(&exe)!=PATCHED_EXE_SHA {
         return Err("Patched Matrox executable failed exact SHA-256 audit".into());
     }
@@ -171,6 +202,59 @@ fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
     Ok(())
 }
 
+/// Upgrade ONLY the exact previous installer-patched Matrox EXE to the
+/// new null-guarded version. Reject arbitrary EXE modifications. Stage the
+/// complete hash-verified new file, use a temporary rollback (not a new
+/// permanent .bak), and never touch the separately authenticated original
+/// splanetw.exe.bak. Missing/unknown active EXE is an error.
+fn ensure_null_guard_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
+    let active=game.join("splanetw.exe");
+    let prior=hash_file(&active)?;
+    if prior==PATCHED_EXE_SHA{return Ok(());}
+    if prior!=PREVIOUS_PATCHED_EXE_SHA{
+        return Err(format!("Unsupported Matrox game EXE {} sha256={prior}; refusing patch",
+                           active.display()));
+    }
+    let mut modified=fs::read(&active).map_err(|e|format!("Cannot read Matrox game EXE: {e}"))?;
+    apply_null_guard(&mut modified)?;
+    if digest(&modified)!=PATCHED_EXE_SHA{
+        return Err("Null-guarded Matrox game EXE failed expected SHA-256".into());
+    }
+    let staged=game.join(".splanetw.exe.installing");
+    let rollback=game.join(".splanetw.exe.replacing");
+    for path in [&staged,&rollback]{
+        if fs::symlink_metadata(path).is_ok(){
+            return Err(format!("Interrupted Matrox game EXE upgrade; inspect {}",path.display()));
+        }
+    }
+    if let Err(e)=write_new(&staged,&modified){
+        let _=fs::remove_file(&staged);
+        return Err(e);
+    }
+    if hash_file(&staged)?!=PATCHED_EXE_SHA || hash_file(&active)?!=PREVIOUS_PATCHED_EXE_SHA{
+        let _=fs::remove_file(&staged);
+        return Err("Staged Matrox game EXE or previous EXE changed during upgrade".into());
+    }
+    if let Err(e)=fs::rename(&active,&rollback){
+        let _=fs::remove_file(&staged);
+        return Err(format!("Cannot stage old Matrox EXE for rollback: {e}"));
+    }
+    if let Err(e)=fs::rename(&staged,&active){
+        let restored=fs::rename(&rollback,&active);
+        let _=fs::remove_file(&staged);
+        return Err(format!("Cannot publish null-guarded Matrox EXE: {e}; restore={restored:?}"));
+    }
+    if let Err(e)=hash_file(&active).and_then(|sha|
+        if sha==PATCHED_EXE_SHA{Ok(())}else{Err("Unexpected Matrox EXE SHA-256".into())}){
+        let restored=fs::remove_file(&active).and_then(|_|fs::rename(&rollback,&active));
+        return Err(format!("Matrox EXE upgrade verification failed: {e}; restore={restored:?}"));
+    }
+    fs::remove_file(&rollback)
+        .map_err(|e|format!("Matrox EXE upgraded but rollback cleanup failed: {e}"))?;
+    log("MATROX: original splanetw.exe.bak unchanged; upgraded exact previous EXE with guarded null-object return at 0x00494965; no persistent backup.");
+    Ok(())
+}
+
 /// The active MSI95 is installer-managed: its current hash is used ONLY
 /// to detect equality with the embedded DLL, never as a recognition/allowlist
 /// test. Even an arbitrary, unrecognized DLL is replaced. This helper must
@@ -212,9 +296,10 @@ fn ensure_owned_driver(
 /// independently before any changes to the active renderer.
 pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
     let game=root.join(GAME_FOLDER);
-    matrox::verify_installed_game(&game,PATCHED_EXE_SHA)
+    matrox::verify_installed_oem(&game)
         .map_err(|e|format!("Cannot prepare Matrox MSI95: original game authentication failed: {e}"))?;
     check_ini(&game.join("splanet.ini"))?;
+    ensure_null_guard_exe(&game,|message|log(message))?;
     ensure_owned_driver(&game,expected_driver_hash(),||cleanroom_driver(root),
         |message|log(message),||verify_prepared(root))?;
     matrox_iso::update_generated_ini(&game)?;
@@ -264,8 +349,38 @@ mod tests {
     fn offsets_manifest_and_driver_identity_are_stable(){
         assert_eq!(WIN95_OFFSET,0x1579b);
         assert_eq!(FADELOW_OFFSET,0x6ec8b);
+        assert_eq!(NULL_GUARD_CAVE_OFFSET,0x93d53);
+        assert_eq!(NULL_DEREF_OFFSET,0x93d65);
+        assert_eq!(PREVIOUS_PATCHED_EXE_SHA.len(),64);
         assert_eq!(matrox::manifest_entries().unwrap().len(),66);
         assert_eq!(PATCHED_EXE_SHA.len(),64);
+    }
+    #[test]
+    fn null_guard_changes_only_the_13_byte_cave_and_three_byte_deref(){
+        let mut exe=vec![0u8;840_704];
+        exe[NULL_GUARD_CAVE_OFFSET..NULL_GUARD_CAVE_OFFSET+13].fill(0xcc);
+        exe[NULL_DEREF_OFFSET..NULL_DEREF_OFFSET+3].copy_from_slice(&[0x8b,0x46,0x24]);
+        let before=exe.clone();
+        apply_null_guard(&mut exe).unwrap();
+        assert_eq!(&exe[NULL_GUARD_CAVE_OFFSET..NULL_GUARD_CAVE_OFFSET+13],&NULL_GUARD_CAVE);
+        assert_eq!(&exe[NULL_DEREF_OFFSET..NULL_DEREF_OFFSET+3],&NULL_GUARD_JUMP);
+        let changed=exe.iter().zip(&before).filter(|(a,b)|a!=b).count();
+        assert_eq!(changed,16);
+        assert!(apply_null_guard(&mut exe).is_err(),"double patch is refused");
+    }
+    #[test]
+    fn unknown_game_exe_never_gets_patched_or_backed_up(){
+        let root=std::env::temp_dir().join(format!("matrox-nullguard-refuse-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let active=root.join("splanetw.exe");
+        fs::write(&active,b"custom game executable").unwrap();
+        assert!(ensure_null_guard_exe(&root,|_|{}).is_err());
+        assert_eq!(fs::read(&active).unwrap(),b"custom game executable");
+        assert!(!root.join(".splanetw.exe.installing").exists());
+        assert!(!root.join(".splanetw.exe.replacing").exists());
+        assert!(!root.join("splanetw.exe.bak").exists());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn environment_gets_shared_root_ini_values(){

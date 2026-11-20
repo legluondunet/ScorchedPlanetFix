@@ -281,3 +281,22 @@ Nonregular DLLs, symlinks and occupied transaction paths are refused.
 renderer components. This policy is common to the retail and Matrox
 installer-managed renderer files, while original proprietary Matrox
 `msi95.dll.bak` remains an authenticated CD reference.
+
+## Matrox game NULL guard installation and upgrade (2026-11-20)
+
+The installer-managed `game/splanetw.exe` now receives a narrowly
+scoped, signature-verified 16-byte guard for the previously crashing
+NULL resource at `0x00494965`, dispatching it to the game's own
+NULL-return handler at `0x004949E9`. The original Matrox executable
+is always preserved at `game/splanetw.exe.bak` as the immutable OEM
+reference, *not* as a newly written backup. Existing versions that
+have the exact old installer-patched EXE SHA-256 are upgraded
+automatically via temporary staging and rollback; other modified
+executables are rejected. New installations get the guarded
+binary directly from the user's ISO, never from bundled
+copyrighted game assets.
+
+`--verify` remains read-only and strictly checks the current
+guarded EXE; `--install-only` is allowed to upgrade.
+The patch must be validated by user gameplay after the confirmed
+access-violation fix, and PR #36 is still experimental.

@@ -199,3 +199,33 @@ The experimental MSI95 now records instruction bytes near the fault in
 modify the game or intercept fault handling. The launcher accurately
 identifies status `0xC0000005` as a crash. Native gameplay testing and
 review of the instruction trace are required before merging PR #36.
+
+### Matrox OEM scene-transition NULL guard (2026-11-20)
+
+Two Wine 11.19 sessions demonstrate a deterministic **game-owned** access
+violation at `splanetw.exe+0x94965` (read of `0x00000024` when `ESI=0`).
+Analysis of the exact original OEM game EXE from the user's CD identifies
+the call path `0x0042DB41 → 0x004186A0 → 0x00494960`: a resource cleanup
+path checks an unrelated state value, then attempts to dispose of a NULL
+resource handle. The game function contains an *existing* NULL-argument
+handler at `0x004949E9`, but dereferences the handle **before** reaching
+that check.
+
+The installer now applies a targeted, signature-verified 16-byte NULL
+guard to this function (no other game binary edits). It inserts a guard
+in the verified unused 13-byte INT3 code cave immediately preceding
+the function, branches to the *existing* NULL handler on NULL input,
+and resumes the original code unchanged for non-NULL input.
+No proprietary code or full game EXE is bundled. The executable must
+match the exact authenticated OEM original SHA-256.
+
+For existing installations, the exact previous installer-patched
+`game/splanetw.exe` (SHA-256 `333de76b...`) is automatically upgraded
+in place to the guarded SHA-256 `52b5f604...` using a verified temporary
+rollback transaction. No new `.bak` is created; the authentic original
+`game/splanetw.exe.bak` is preserved. Unknown/custom executables are
+rejected, and the strict read-only `--verify` option performs no migration.
+
+**The patch is experimentally justified by disassembly and crash logs,
+but its gameplay impact is not yet verified under Wine/Windows.
+PR #36 remains draft and unmerged pending real-world validation.**

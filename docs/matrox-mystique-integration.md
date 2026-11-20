@@ -338,3 +338,57 @@ hack. The next non-invasive MSI95 diagnostics are `AV_CALLER` and
 for debug-enabled first-chance access violations. Do not patch the game
 or ignore the AV before interpreting the caller's code path. PR #36
 remains draft/unmerged.
+
+## Fixing the verified game null dereference (2026-11-20)
+
+A previous runtime trace showed `0x00494965` reading address
+`0x00000024` with `ESI=0` after a scene transition. Offline
+disassembly of the exact OEM original `SPLANETW.EXE`, SHA-256
+`1f268420...`, reveals the call chain:
+
+```asm
+0x0042DB32  mov eax,[0x004C7B5C]    ; unrelated state flag
+0x0042DB37  test eax,eax
+0x0042DB39  je 0x0042DB50
+0x0042DB3B  mov eax,[0x004B98C4]    ; resource pointer, can be NULL
+0x0042DB40  push eax
+0x0042DB41  call 0x004186A0
+0x004186A0  mov eax,[esp+4]
+0x004186A4  push eax
+0x004186A5  call 0x00494960
+0x00494960  push esi
+0x00494961  mov esi,[esp+8]
+0x00494965  mov eax,[esi+0x24]      ; erroneous dereference BEFORE NULL test
+0x0049497C  test esi,esi            ; existing NULL test, too late
+0x0049497E  je 0x004949E9          ; existing handler (return zero)
+```
+
+The first argument is confirmed NULL in both traces; when the
+`0x004C7B5C` state is nonzero but the separate `0x004B98C4`
+resource pointer is zero, this incorrectly calls the cleanup function.
+The binary's existing NULL handler at `0x004949E9` makes a targeted
+guard preferable to an unconditional skip or invented object.
+
+A **16-byte** precise, old-hash-locked patch is applied before execution:
+13 originally unused `CC` bytes at file offset `0x93D53` (VA
+`0x00494953`) become `test esi,esi; je existing_null_handler;
+mov eax,[esi+0x24]; jmp resume`; the original three-byte dereference
+at file offset `0x93D65` becomes `jmp code_cave; nop`.
+The trampoline is statically validated with x86 objdump on an exact
+copy of the authenticated original EXE. Both the original OEM and
+previous patched game EXE fingerprints are known:
+`original=1f268420...`; `previous=333de76b...`;
+`guarded=52b5f604ad7037e29e8cc83244c86662a2e6896b1e4d024ac4c68f23d080a759`.
+
+Initial disc extraction installs the guarded EXE directly.
+On an existing verified OEM installation the launcher first audits
+all 66 immutable disc resources and both original `.bak` files,
+then permits upgrade **only from the exact previous patched
+EXE fingerprint**, using a temporary stage and rollback. There is
+no added permanent backup, no user saves/config changes, and
+`game/splanetw.exe.bak` stays byte-identical to the original CD.
+Unknown patched EXEs and incomplete rollback transactions are refused.
+
+This eliminates the proven NULL dereference while retaining
+the game's original NULL-handler behavior, but **must be checked
+in live Wine/Windows gameplay before considering PR #36 mergeable**.

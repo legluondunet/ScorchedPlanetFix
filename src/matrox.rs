@@ -71,6 +71,15 @@ fn regular_not_symlink(path: &Path) -> Result<std::fs::Metadata, String> {
     Ok(meta)
 }
 
+/// Authenticate the immutable OEM game and the two preserved original
+/// .bak files without making claims about the active installer-patched EXE
+/// or the installer-owned MSI95.dll. Used ONLY before a controlled upgrade
+/// of the exact previous patched EXE hash; ordinary --verify still requires
+/// the latest patched EXE and embedded renderer hashes.
+pub fn verify_installed_oem(folder:&Path)->Result<VerifiedOem,String>{
+    verify_reference(folder,true)
+}
+
 /// Audit the playable Matrox install in game/ using the complete OEM
 /// reference manifest for immutable resources and exact original backups.
 /// The patched executable and clean-room MSI95 must also match expected hashes.
