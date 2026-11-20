@@ -348,7 +348,8 @@ mod tests{
         fs::write(&ini,b"[Debug]\r\nLog=1\r\n[Graphics]\r\nFPSLimit=30\r\n").unwrap();
         ensure_defaults(&ini,true).unwrap();
         assert!(read_settings(&ini).unwrap().log);
-        assert_eq!(fs::read_to_string(&ini).unwrap().matches("Log=").count(),1);
+        assert_eq!(fs::read_to_string(&ini).unwrap().lines()
+            .filter(|line|line.trim_start().starts_with("Log=")).count(),1);
         let before=fs::read(&ini).unwrap();
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),before);
