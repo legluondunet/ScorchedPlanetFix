@@ -22,6 +22,10 @@ pub const EN_ES_IT_FADELOW_SHA256: &str =
 /// EN/ES/IT FadeLow + media check patch: six bytes, owner-validated in Wine.
 pub const EN_ES_IT_FADELOW_NOCD_SHA256: &str =
     "66c705a77d290d4bed6abdb4b8b065337aaeb50f9e4480090bbe2dfd5006d35c";
+/// Former authenticated FR/DE six-byte patch: checks the CD only after
+/// expensive drive enumeration. Allow verified migration, never as final.
+pub const FR_DE_PREVIOUS_PATCHED_SHA256: &str =
+    "426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c";
 pub const BACKUP_SUFFIX: &str = ".bak";
 const LEGACY_BACKUP_SUFFIX: &str = ".ScorchedPlanetFix-original.bak";
 pub const TARGET_VA: u32 = 0x0044_95CD;
@@ -42,6 +46,8 @@ pub struct FadeProfile {
     pub target_offset: usize,
     /// Each edition uses its own verified media-gate instruction location.
     pub media_gate: Option<MediaGate>,
+    /// Authenticated CD drive-scan entry point; FR/DE only.
+    pub media_probe_bypass: Option<MediaProbeBypass>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +56,15 @@ pub struct MediaGate {
     pub file_offset: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaProbeBypass {
+    pub va: u32,
+    pub file_offset: usize,
+}
+/// Original function: sub esp,0x118; push ebx/esi/edi; ... plain ret.
+/// Replacement: mov eax,1; ret. No scan; no stack arguments.
+const MEDIA_PROBE_ORIGINAL: [u8;6] = [0x81,0xec,0x18,0x01,0x00,0x00];
+const MEDIA_PROBE_REPLACEMENT: [u8;6] = [0xb8,0x01,0x00,0x00,0x00,0xc3];
 const MEDIA_GATE_ORIGINAL: [u8;2] = [0x33,0xc0];
 const MEDIA_GATE_REPLACEMENT: [u8;2] = [0xb0,0x01];
 pub const US_PROFILE: FadeProfile = FadeProfile {
@@ -57,6 +72,7 @@ pub const US_PROFILE: FadeProfile = FadeProfile {
     patched_hash: US_FADELOW_NOCD_SHA256,
     target_va: TARGET_VA, target_offset: TARGET_FILE_OFFSET,
     media_gate: Some(MediaGate {va: 0x0043_581B, file_offset: 0x34C1B}),
+    media_probe_bypass: None,
 };
 pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
     label: "EN/ES/IT 1.06",
@@ -64,13 +80,15 @@ pub const EN_ES_IT_PROFILE: FadeProfile = FadeProfile {
     patched_hash: EN_ES_IT_FADELOW_NOCD_SHA256,
     target_va: 0x0044_93AD, target_offset: 0x487AD,
     media_gate: Some(MediaGate {va: 0x0043_562B, file_offset: 0x34A2B}),
+    media_probe_bypass: None,
 };
 pub const FR_DE_PROFILE: FadeProfile = FadeProfile {
     label: "FR/DE 1.06 (FadeLow + CD check fix)",
     original_hash: "eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72",
-    patched_hash: "426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c",
+    patched_hash: "2a6051d3d48707ccda5368b7eda579fa6b4a118f9ede26831934c08c232c525e",
     target_va: 0x0044_966D, target_offset: 0x48A6D,
     media_gate: Some(MediaGate {va: 0x0043_58BB, file_offset: 0x34CBB}),
+    media_probe_bypass: Some(MediaProbeBypass {va: 0x0043_5800, file_offset: 0x34C00}),
 };
 /// Alternate FR/DE CD image submitted by the owner (2026-10-31).
 /// The six-byte change is verified against the exact original PE layout and
@@ -81,6 +99,7 @@ pub const FR_DE_ALT_PROFILE: FadeProfile = FadeProfile {
     patched_hash: "8bf4a328f403502495d40f9b1e8c32767b7386efddbf90d7562167f5c8267454",
     target_va: 0x0044_93AD, target_offset: 0x487AD,
     media_gate: Some(MediaGate {va: 0x0043_562B, file_offset: 0x34A2B}),
+    media_probe_bypass: None,
 };
 pub const SUPPORTED_PROFILES: [FadeProfile; 4] = [US_PROFILE, EN_ES_IT_PROFILE, FR_DE_PROFILE, FR_DE_ALT_PROFILE];
 
@@ -89,6 +108,8 @@ fn legacy_fadelow_hash(profile: FadeProfile) -> Option<&'static str> {
         Some(FADELOW_SHA256)
     } else if profile.original_hash == EN_ES_IT_PROFILE.original_hash {
         Some(EN_ES_IT_FADELOW_SHA256)
+    } else if profile.original_hash == FR_DE_PROFILE.original_hash {
+        Some(FR_DE_PREVIOUS_PATCHED_SHA256)
     } else {
         None
     }
@@ -255,6 +276,13 @@ fn patch_with_hashes_for(data: &[u8], source: &str, target: &str, profile: FadeP
         }
         changed[gate_offset..gate_offset+2].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
     }
+    if let Some(probe)=profile.media_probe_bypass {
+        let offset=pe_site_offset(data,probe.va,probe.file_offset,6)?;
+        if data[offset..offset+6]!=MEDIA_PROBE_ORIGINAL {
+            return Err("Original media-probe function prologue does not match".into());
+        }
+        changed[offset..offset+6].copy_from_slice(&MEDIA_PROBE_REPLACEMENT);
+    }
     if changed.len() != data.len() || sha256_hex(&changed) != target {
         return Err("Patched file SHA-256 mismatch".into());
     }
@@ -415,7 +443,11 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
                 Some(p) if hash == p.original_hash => format!("ORIGINAL {}", p.label),
                 Some(p) if hash == p.patched_hash => format!("PATCHED {}", p.label),
                 Some(p) if legacy_fadelow_hash(p)==Some(hash.as_str()) =>
-                    format!("{} LEGACY FADELOW (CD check unpatched)",p.label),
+                    if p==FR_DE_PROFILE {
+                        format!("{} OLD NO-CD PATCH (slow CD scan; run --install-only)",p.label)
+                    } else {
+                        format!("{} LEGACY FADELOW (CD check unpatched)",p.label)
+                    },
                 _ => "UNKNOWN/UNSUPPORTED".into(),
             };
             Ok(format!("Executable: {state}\nSHA-256: {hash}\nBackup: {} ({})",
@@ -438,13 +470,13 @@ pub fn execute(action: Action, exe: &Path, output: Option<&Path>, confirmed: boo
                 if backed.is_none() { return Err("Already patched but verified original backup is missing".into()); }
                 return Ok(format!("FadeLow {} already patched; verified backup exists.",p.label));
             }
-            // Upgrade a legacy US or EN/ES/IT FadeLow-only executable without
-            // touching its original backup or user saves. Rebuild the entire
-            // six-byte patch from the original, never from a guessed byte state.
+            // Upgrade recognized old patches using ONLY the SHA-verified
+            // original backup (including FR/DE's older six-byte patch).
+            // Never layer speculative patches on an unknown executable.
             let upgrading_legacy=legacy_fadelow_hash(p)==Some(hash.as_str());
             let (original,patch)=if upgrading_legacy {
                 let original=backed.as_ref().ok_or(
-                    "Cannot upgrade the legacy FadeLow patch: verified original .bak backup is missing")?;
+                    "Cannot upgrade recognized old patch: verified original .bak backup is missing")?;
                 let patch=patch_with_hashes_for(original,p.original_hash,p.patched_hash,p)?;
                 (original.clone(),patch)
             }else{
@@ -596,13 +628,15 @@ mod tests {
     #[test] fn legacy_en_es_it_fadelow_can_only_be_upgraded_from_verified_original(){
         assert_eq!(legacy_fadelow_hash(EN_ES_IT_PROFILE),Some(EN_ES_IT_FADELOW_SHA256));
         assert_eq!(legacy_fadelow_hash(US_PROFILE),Some(FADELOW_SHA256));
-        assert_eq!(legacy_fadelow_hash(FR_DE_PROFILE),None);
+        assert_eq!(legacy_fadelow_hash(FR_DE_PROFILE),Some(FR_DE_PREVIOUS_PATCHED_SHA256));
         assert_ne!(EN_ES_IT_FADELOW_SHA256,EN_ES_IT_PROFILE.patched_hash);
         assert_eq!(profile_from_hash(EN_ES_IT_FADELOW_SHA256),Some(EN_ES_IT_PROFILE));
         assert!(profile_from_hash("5373c7b24389556b7466932695e7e2d1076531105f9bb879749e783a64898d90").is_none());
     }
     #[test] fn fr_de_profile_requires_combined_fix() {
         assert_eq!(FR_DE_PROFILE.media_gate, Some(MediaGate{va:0x4358BB,file_offset:0x34CBB}));
+        assert_eq!(FR_DE_PROFILE.media_probe_bypass,Some(MediaProbeBypass{va:0x435800,file_offset:0x34C00}));
+        assert_eq!(profile_from_hash(FR_DE_PREVIOUS_PATCHED_SHA256),Some(FR_DE_PROFILE));
         assert_eq!(profile_from_hash(FR_DE_PROFILE.original_hash),Some(FR_DE_PROFILE));
         assert_eq!(profile_from_hash(FR_DE_PROFILE.patched_hash),Some(FR_DE_PROFILE));
         // The earlier FR/DE FadeLow-only candidate is NOT eligible.
@@ -615,16 +649,22 @@ mod tests {
         // Original verified file offsets map VA -> file offset by (VA - 0xC00).
         raw[FR_DE_PROFILE.target_offset..FR_DE_PROFILE.target_offset+4].copy_from_slice(&ORIGINAL_BYTES);
         raw[0x34CBB..0x34CBD].copy_from_slice(&MEDIA_GATE_ORIGINAL);
+        raw[0x34C00..0x34C06].copy_from_slice(&MEDIA_PROBE_ORIGINAL);
         let mut wanted=raw.clone();
         wanted[FR_DE_PROFILE.target_offset..FR_DE_PROFILE.target_offset+4].copy_from_slice(&FADELOW_BYTES);
         wanted[0x34CBB..0x34CBD].copy_from_slice(&MEDIA_GATE_REPLACEMENT);
+        wanted[0x34C00..0x34C06].copy_from_slice(&MEDIA_PROBE_REPLACEMENT);
         let result=patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE)
             .expect("six-byte FR/DE synthetic patch");
         assert_eq!(result,wanted);
         let changes:Vec<_>=raw.iter().zip(&result).enumerate()
             .filter(|(_, (before,after))|before!=after).map(|(i,_)|i).collect();
-        assert_eq!(changes,vec![0x34CBB,0x34CBC,0x48A6D,0x48A6E,0x48A6F,0x48A70]);
+        assert_eq!(changes,vec![0x34C00,0x34C01,0x34C02,0x34C05,
+            0x34CBB,0x34CBC,0x48A6D,0x48A6E,0x48A6F,0x48A70]);
         raw[0x34CBB]=0x90;
+        assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE).is_err());
+        raw[0x34CBB]=MEDIA_GATE_ORIGINAL[0];
+        raw[0x34C00]=0x90;
         assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE).is_err());
     }
     #[test] fn only_validated_profiles_are_eligible() {
