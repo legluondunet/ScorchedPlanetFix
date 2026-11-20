@@ -27,6 +27,15 @@ jobs:
           path: third_party/game-frame
           persist-credentials: false
 
+      - name: Test offline MSI95 log triage (synthetic fixtures, no game data)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_runtime_log.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage tests failed' }
+          python -m py_compile tools/matrox/analyze_runtime_log.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage syntax check failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
