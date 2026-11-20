@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`504bb89fae112292293eb0deca7cd6a05680d3c5a0d1c4c3fee7f3d51ca2b722`
+`d96af5eab55009b6cb2c6fe64bed15340565697ce50d4fc0dc0e0a84195a41de`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -213,3 +213,29 @@ underlying game-side NULL-list condition. No new game EXE patch or
 exception bypass was introduced. Verify under Wine with fast repeated
 clicks in the briefing and normal mission/menu exit, and leave PR #36
 unmerged pending validation.
+
+## Game global NULL at splanetw.exe:0x0046D76D (2026-11-20)
+
+An independent Wine-staging 11.19 crash at frame 527, 10.62 s, reads
+`[EDX+0x0C]` with `EDX=0` from the original game image, *outside* both
+`msiEndFrame` and the OEM WndProc callback. An independently recorded
+OEM instruction window shows `mov edx,[0x0050DCD0]` before the fault;
+the adjacent global `0x0050DCC0` is updated immediately before the
+invalid dereference. Texture tracker live/peak=80/81, no heap OOM or rejected
+allocations. Nested input deferral was observed earlier, but no reentrancy
+was active at the actual fault; causal origin remains unknown.
+
+With `[Debug] Log=1`, the clean-room MSI95 now records the **raw** global
+pointer and counter when the tracked pointer changes, at selected frame
+intervals and during game callbacks/texture transitions. At the exact AV
+it captures `AV_GAME_GLOBAL_50DCD0` and `AV_GAME_STACK first12`, plus
+existing `AV_INPUT_CONTEXT`/`AV_HEAP_TRACKER`. This probe checks the
+actual bytes of the OEM `mov edx,[0x0050DCD0]` and `cmp [edx+0x0C],eax`
+before enabling itself. It makes no assumption about the global's semantic
+type and never modifies original game data, event timing or exceptions.
+
+**Next test:** reproduce the same transition, preserve the new log and
+Wine fault. Compare pointer snapshots to learn if it becomes NULL earlier
+during a scene change or was already NULL before the fault. Avoid adding
+a speculative binary guard or categorizing this as the old scene-manager
+`0x0048302D` crash until game control flow is established.
