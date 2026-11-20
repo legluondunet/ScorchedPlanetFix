@@ -86,7 +86,18 @@ fn main() {
         let info = init(640, 400, 16, 0, 0, guest_wndproc);
         assert!(!info.is_null(), "msiInit framebuffer setup failed");
         let hwnd = FindWindowA(b"MSI95_Class\0".as_ptr(), ptr::null());
-        assert!(!hwnd.is_null(), "MSI95 preview HWND not created");
+        if hwnd.is_null() {
+            // GitHub-hosted Windows runners lack an interactive Win32 desktop.
+            // Only the CI opt-in may skip the GUI-dependent runtime check.
+            // A normal interactive Windows run must still fail explicitly.
+            if std::env::var("SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE").as_deref() == Ok("1") {
+                println!("MSI95_INPUT_PUMP_SMOKE_SKIP headless CI: no preview HWND");
+                assert_ne!(exit(), 0, "msiExit failed after headless initialization");
+                assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 DLL");
+                return;
+            }
+            panic!("MSI95 preview HWND not created on an interactive desktop");
+        }
         assert_ne!(PostMessageA(hwnd, WM_KEYDOWN, FIRST_KEY, 0), 0,
             "Could not enqueue initial input");
         // Outer frame handles A; its guest callback queues B..Y and
