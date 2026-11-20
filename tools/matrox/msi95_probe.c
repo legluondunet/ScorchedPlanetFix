@@ -301,6 +301,11 @@ static unsigned g_last_forwarded_msg = 0;
 static unsigned g_last_forwarded_frame = 0;
 static DWORD g_last_forwarded_tick = 0;
 static unsigned g_focus_filtered_events = 0;
+/* Nested game callbacks may render another frame before returning to their
+ * outer WM_LBUTTONDOWN handler. Prevent recursively pumping more input during
+ * that nested msiEndFrame; messages stay in the Win32 queue for the next
+ * outermost frame. This prevents a proven triple WndProc reentry path. */
+static unsigned g_inner_input_pumps_deferred = 0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -780,8 +785,25 @@ static void preview_present(void){
     DWORD preview_tick=GetTickCount();
     MSG_MIN msg;
     unsigned pumps=0;
-    while(pumps<32 && g_preview && PeekMessageA(&msg,g_preview,0,0,PM_REMOVE)){
-        TranslateMessage(&msg);DispatchMessageA(&msg);pumps++;
+    /* A game callback may itself render one or more MSI95 frames. Pumping
+     * Win32 events again during those frames recursively calls the original
+     * OEM WndProc before the previous event has finished: observed
+     * endframe_depth=2, guest_callback_depth=3 at briefing AV 0048585B.
+     * Leave all pending messages untouched until the outer game frame.
+     * Framebuffer presentation remains unchanged even on nested calls. */
+    if(g_endframe_depth==1u && g_guest_callback_depth==0u){
+        while(pumps<32 && g_preview && PeekMessageA(&msg,g_preview,0,0,PM_REMOVE)){
+            TranslateMessage(&msg);DispatchMessageA(&msg);pumps++;
+        }
+    }else{
+        g_inner_input_pumps_deferred++;
+        if(g_inner_input_pumps_deferred<=8u ||
+           g_inner_input_pumps_deferred%100u==0u){
+            lognum("NESTED_INPUT_PUMP_DEFERRED count=",
+                   g_inner_input_pumps_deferred,"endframe_depth=",g_endframe_depth);
+            lognum("NESTED_INPUT_PUMP_CONTEXT callback_depth=",
+                   g_guest_callback_depth,"frame=",g_frames);
+        }
     }
     if(!g_preview)return;
     HDC dc=GetDC(g_preview);
@@ -791,6 +813,8 @@ static void preview_present(void){
         lognum("PREVIEW_PRESENT frames=",g_frames,"successful_blits=",g_preview_presented);
         lognum("GAME_WINDOW_EVENTS forwarded=",g_guest_messages,"input_msgs=",g_input_messages);
         lognum("FOCUS_FILTER_STATS ignored_for_guest=",g_focus_filtered_events,NULL,0);
+        lognum("INPUT_PUMP_STATS nested_deferred=",g_inner_input_pumps_deferred,
+               "frame=",g_frames);
     }
 }
 static void clean(void){
