@@ -292,6 +292,14 @@ static HWND g_preview = NULL;
 static WINWNDPROC g_guest_window_proc = NULL;
 static unsigned g_guest_messages = 0;
 static unsigned g_input_messages = 0;
+/* Diagnostic only: identify whether a game AV happens while a Win32 event
+ * is synchronously forwarded from preview_present/msiEndFrame. Do not
+ * delay, suppress or rearrange user input or game callbacks. */
+static unsigned g_guest_callback_depth = 0;
+static unsigned g_endframe_depth = 0;
+static unsigned g_last_forwarded_msg = 0;
+static unsigned g_last_forwarded_frame = 0;
+static DWORD g_last_forwarded_tick = 0;
 static unsigned g_focus_filtered_events = 0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
@@ -459,6 +467,21 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
           putstr(info,&k," flags=");puthex(info,&k,p[0]);
         }else putstr(info,&k," inaccessible");
         info[k]=0;WriteFile(g_log,info,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+      }
+      { char events[320];k=0;
+        putstr(events,&k,"AV_INPUT_CONTEXT endframe_depth=");
+        putunsigned(events,&k,g_endframe_depth);
+        putstr(events,&k," guest_callback_depth=");
+        putunsigned(events,&k,g_guest_callback_depth);
+        putstr(events,&k," last_msg=");
+        puthex(events,&k,g_last_forwarded_msg);
+        putstr(events,&k," last_frame=");
+        putunsigned(events,&k,g_last_forwarded_frame);
+        putstr(events,&k," last_msg_age_ms=");
+        putunsigned(events,&k,g_last_forwarded_tick ?
+                    GetTickCount()-g_last_forwarded_tick : 0xFFFFFFFFu);
+        events[k]=0;WriteFile(g_log,events,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
       }
       { char heap[240];k=0;
@@ -697,8 +720,15 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         }
     }
     if(g_guest_window_proc){
+        LRESULT result;
         g_guest_messages++;
-        return CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
+        g_last_forwarded_msg=msg;
+        g_last_forwarded_frame=g_frames;
+        g_last_forwarded_tick=GetTickCount();
+        g_guest_callback_depth++;
+        result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
+        g_guest_callback_depth--;
+        return result;
     }
     return DefWindowProcA(hwnd,msg,wparam,lparam);
 }
@@ -1312,6 +1342,7 @@ static void frame_limit(void){
 BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     (void)Dump;(void)Frame;(void)Wait;
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
+    g_endframe_depth++;
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
@@ -1387,6 +1418,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("PERF_COST state_ms=",g_state_ms,"triangles=",g_triangles);
     }
     if(g_frames<6||g_frames%120==0)lognum("msiEndFrame frame=",g_frames,"triangles_total=",g_triangles);
+    g_endframe_depth--;
     return TRUE;
 }
 /* Matrox's original MSI95.dll (OEM 1996 binary) has separate branches at
