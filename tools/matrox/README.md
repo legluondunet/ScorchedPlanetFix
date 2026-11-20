@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`50998ccfda4dd42f759c1e6cff843e1fec2bd02aa0f21c3d41ec17a3ca05a02d`
+`504bb89fae112292293eb0deca7cd6a05680d3c5a0d1c4c3fee7f3d51ca2b722`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -187,3 +187,29 @@ This tests whether scene-list faults occur synchronously inside the
 preview's forwarding of OEM events from `msiEndFrame`, or later during
 game-owned teardown. No input or exception handling behavior is changed.
 The age `4294967295` means no forwarded event occurred yet.
+
+## Nested input-message pump correction (2026-11-20)
+
+The user reproduced a briefing crash on Wine-staging 11.19 at
+`splanetw.exe:0x0048585B` (`EAX=0`, read `0x44`). The read-only
+AV probe showed `endframe_depth=2 guest_callback_depth=3` with the most
+recent message `WM_LBUTTONDOWN (0x0201)`. This is direct evidence of
+recursive OEM WndProc dispatch from the MSI95 software renderer's own
+Win32 message pump. The prior small EXE alignment guard cannot reject
+a NULL pointer, but its game-side provenance is not yet explained.
+
+The preview now pumps pending Win32 messages **only in the outermost
+`msiEndFrame` and outside an active game WndProc callback**. Nested
+frames continue to render without consuming any input messages: queued
+events are delivered later from the ordinary outer frame pump, with
+original order and event content preserved. Existing early-mouse
+initialization checks, F12, focus isolation and teardown remain
+unchanged. Diagnostic `NESTED_INPUT_PUMP_DEFERRED` and
+`INPUT_PUMP_STATS` messages count deferred nested pumps. The
+`AV_INPUT_CONTEXT` read-only diagnostics remain active.
+
+This guards a now-confirmed reentrancy mechanism, not the unknown
+underlying game-side NULL-list condition. No new game EXE patch or
+exception bypass was introduced. Verify under Wine with fast repeated
+clicks in the briefing and normal mission/menu exit, and leave PR #36
+unmerged pending validation.
