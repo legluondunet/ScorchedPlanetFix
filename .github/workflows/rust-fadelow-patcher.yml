@@ -122,6 +122,9 @@ jobs:
             $env:MATROX_MSI_LOG = '0'
             $env:MATROX_MSI_FPS_LIMIT = '0'
             $env:MATROX_MSI_BORDERLESS = '0'
+            # Hosted Windows CI cannot provide a desktop HWND. Runtime GUI
+            # assertions remain strict when the smoke is run locally.
+            $env:SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE = '1'
             & $exe
             if ($LASTEXITCODE -ne 0) { throw 'MSI95 x86 recursive callback regression failed' }
           } finally {
@@ -129,6 +132,7 @@ jobs:
             Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
             Remove-Item Env:MATROX_MSI_FPS_LIMIT -ErrorAction SilentlyContinue
             Remove-Item Env:MATROX_MSI_BORDERLESS -ErrorAction SilentlyContinue
+            Remove-Item Env:SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE -ErrorAction SilentlyContinue
           }
 
       - name: Build and test Windows x64 launcher with embedded GameFrame
