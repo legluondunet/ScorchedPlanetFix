@@ -80,3 +80,39 @@ all other settings identical. Compare actual visual delay, both timing
 markers and `SCORCHED_MENU_PROBE` intervals. If the 30 FPS cap changes
 the delay, this implicates frame-rate-sensitive sequencing but does not
 alone prove the old fade loop is the cause.
+
+
+## Reproduced 2.72-second New Game block: source isolated (2026-11-20)
+
+The Windows 11 owner reports the New Game submenu takes approximately
+three seconds to appear. Unlike earlier duplicate runtime uploads, two
+**new, distinct** GameFrame #521 logs identify the precise blocked phase:
+- `ScorchedPlanetFix(20261120-210459).log`: session
+  `1795208671783303900-8056`, `SCORCHED_GAME_FRAME_GAP frame=171
+  outside_wrapper_ms=2721`
+- `ScorchedPlanetFix(20261120-210531).log`: session
+  `1795208704667705400-24124`, `SCORCHED_GAME_FRAME_GAP frame=153
+  outside_wrapper_ms=2727`
+
+**The game does not call `grBufferSwap` during the 2.72s freeze.**
+There are no matching `SCORCHED_GLIDE_FRAME_DELAY` reports during this
+interval; the only >80ms Glide frame cost in either run is startup
+OpenGL setup (258–259ms at frame 2). The change in `new` menu score
+follows the gap. A 6ms variation across two runs suggests a repeatable
+in-game timed transition; there is no evidence that reducing GameFrame
+`FPSLimit=60` or repeating the existing FadeLow patch would help.
+The same logs also show the startup focus fix succeeded on Windows:
+`SCORCHED_WINDOW: initial foreground request accepted=true` in both.
+This confirms the Win32 API accepted the request, while human visual
+foreground/Alt-Tab behavior still requires explicit confirmation.
+
+The next optional diagnostic adds `game_thread_cpu_ms=Some(N)` to the
+existing `SCORCHED_GAME_FRAME_GAP` line, using the Win32
+`GetThreadTimes(GetCurrentThread())` API for the *same game thread*
+between consecutive `grBufferSwap` calls. This is passive and enabled
+only with `[Debug] Log=1`. Approximately 2.7 seconds of thread CPU
+would implicate a busy-loop or CPU-bound game function; near-zero CPU
+would suggest `Sleep`, a blocking object wait, I/O, or another thread.
+Do **not** conclude which exact instruction is at fault without further
+binary-level evidence. `GetThreadTimes` does not stop game threads
+or modify any executable instructions.
