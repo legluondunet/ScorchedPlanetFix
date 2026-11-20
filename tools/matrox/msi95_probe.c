@@ -441,6 +441,33 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
       putstr(regs,&k," esp=");puthex(regs,&k,ctx->Esp);
       putstr(regs,&k," elapsed_ms=");putunsigned(regs,&k,GetTickCount()-g_boot_tick);
       regs[k]=0;WriteFile(g_log,regs,k,&wr,NULL);WriteFile(g_log,"\r\n",2,&wr,NULL);
+      /* Read-only snapshot of the original game's scene-object manager.
+       * In both observed faults it announces live elements in [+0x1C]
+       * while its element-table pointer at [+0x0C] is NULL. The parent
+       * is EBP at 0x00482DEC, EBX at 0x0048302D; never modify context. */
+      if(ctx->Eip==0x00482DECu || ctx->Eip==0x0048302Du){
+        DWORD parent=ctx->Eip==0x00482DECu ? ctx->Ebp : ctx->Ebx;
+        char info[360];k=0;
+        putstr(info,&k,"AV_SCENE_LIST manager=");puthex(info,&k,parent);
+        putstr(info,&k," index=");putunsigned(info,&k,ctx->Edx);
+        if(parent && readable_span((void*)parent,0x24u)){
+          const DWORD *p=(const DWORD*)parent;
+          putstr(info,&k," data=");puthex(info,&k,p[3]);
+          putstr(info,&k," head=");puthex(info,&k,p[6]);
+          putstr(info,&k," count=");putunsigned(info,&k,p[7]);
+          putstr(info,&k," capacity=");putunsigned(info,&k,p[8]);
+          putstr(info,&k," flags=");puthex(info,&k,p[0]);
+        }else putstr(info,&k," inaccessible");
+        info[k]=0;WriteFile(g_log,info,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+      }
+      { char heap[240];k=0;
+        putstr(heap,&k,"AV_HEAP_TRACKER live=");putunsigned(heap,&k,g_heap_count);
+        putstr(heap,&k," capacity=");putunsigned(heap,&k,g_heap_capacity);
+        putstr(heap,&k," peak_live=");putunsigned(heap,&k,g_heap_peak);
+        heap[k]=0;WriteFile(g_log,heap,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+      }
       if(readable_span((void*)ctx->Esp,24u)){
         char stack[300];k=0;putstr(stack,&k,"AV_STACK first6=");
         DWORD* sp=(DWORD*)ctx->Esp;
@@ -453,7 +480,7 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
       /* Capture the caller's stack and code around its return address.
        * This is read-only and does not patch/skip the crash. In the known
        * 0x00494965 case, [esp+8] is the invalid first function argument. */
-      if(readable_span((void*)ctx->Esp,12u)){
+      if(ctx->Eip==0x00494965u && readable_span((void*)ctx->Esp,12u)){
         const DWORD *sp=(const DWORD*)ctx->Esp;
         DWORD ret=sp[1];
         char caller[200];k=0;
@@ -1200,7 +1227,9 @@ BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i]==pTextureHeap){
       BOOL ok=VirtualFree(pTextureHeap,0,MEM_RELEASE);
       g_heaps[i]=g_heaps[--g_heap_count];g_heaps[g_heap_count]=NULL;
-      logtext("msiFreeTextureHeap recognized allocation");return ok;
+      lognum("msiFreeTextureHeap recognized: live=",g_heap_count,
+             "peak=",g_heap_peak);
+      return ok;
     }
     logtext("msiFreeTextureHeap UNKNOWN pointer: ignored");return FALSE;
 }

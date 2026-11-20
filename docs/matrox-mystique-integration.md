@@ -444,3 +444,35 @@ game EXE guards remain under evaluation; the source of the previous
 null-object/invalid-entry crashes is not conclusively proven. Need
 repeated-briefing-click Wine test and read the next log to confirm no
 `msiAllocTextureHeap REJECT`/real OOM and stable mission entry.
+
+## Scene-list teardown fault despite successful texture-heap growth (2026-11-20)
+
+The updated MSI95 heap tracker passed a 600-allocation Win32 smoke
+test and survived the user's rapid briefing clicks. The new runtime
+log records 548 texture heap allocations with no refusal or OOM,
+and successful 256→512 tracker growth. After ~4152 frames
+(85.8 seconds), the user quit through the main menu and the game
+crashed at `0x0048302D`: `cmp [ebp+edx*4],edi` with `EBP=0`,
+`EDX=3`, reading `0x0C`. The log shows many successful
+`msiFreeTextureHeap` calls immediately before the AV, and no
+`msiExit` yet. The previously seen `0x00482DEC` is another
+object-list removal instruction whose base table pointer is NULL
+despite a positive list count.
+
+The unmodified original EXE shows `[manager+0x0C]` is the
+item-array pointer; `[manager+0x1C]` is the element count;
+`[manager+0x20]` is involved in resizing. There is no evidence
+that the MSI95 texture allocations failed in this session.
+More EXE patches could conceal the actual lifecycle issue.
+
+New read-only `AV_SCENE_LIST` telemetry collects these specific
+fields and the manager flags/head for both fault addresses,
+plus `AV_HEAP_TRACKER` and the live count after successful MSI95
+frees. Previous generic `AV_CALLER` output was misleading on
+non-prologue instructions and is limited to its originally
+validated null-argument function.
+
+The exit crash remains OPEN. The prior briefing guard remains
+experimental; it may mask rather than fix underlying structure
+inconsistency. PR #36 must stay draft/unmerged until reliable
+gameplay + menu shutdown tests pass.

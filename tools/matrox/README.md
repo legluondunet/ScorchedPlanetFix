@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`63b57936b797b1973ac2fd7b31b7cca8d47a661a55c97fd8bf134844a7757535`
+`024ea842dc1d984c7387074629b941773277988a5a40e3ff365a2626e402d122`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -137,3 +137,43 @@ CI now loads the actual rebuilt x86 MSI95.dll under Windows and allocates
 and releases **600** 4-page texture heaps in one process to prove that
 capacity growth works beyond the previous hard ceiling. The user still
 needs to reproduce the repeated-click briefing scenario under Wine.
+
+## Scene-list teardown crash probe (2026-11-20)
+
+Latest Wine 11.19 user log `ScorchedPlanetFix(20261120-150608).log` reaches
+mission gameplay after repeated briefing clicks, records **4152 frames**
+(~85.8 seconds), and then faults while exiting through the main menu:
+`splanetw.exe` EIP `0x0048302D` (`cmp [ebp+edx*4],edi`);
+`EBP=0`, `EDX=3`, invalid read `0x0000000C`.
+
+Crucially the new dynamic MSI95 texture-heap tracker grows from 256
+to **512** (no 256 ceiling), logs **548 successful allocations** and
+**144 recognized frees**, and has **zero** rejected allocations,
+invalid size requests, true OOMs, or unknown frees. `msiExit` was
+never reached before the game fault; nonzero live heaps at the time
+are not proof of a memory leak.
+
+Original OEM EXE disassembly at `0x00483017..0x00483043` shows that
+the *game-owned* list manager is attempting to search its table
+at offset `+0x0C` even though the base pointer is NULL, while
+its entry count at `+0x1C` is 4. This matches a previous fault
+at `0x00482DEC` in a closely related scene-list removal routine.
+The likely invariant violation is **nonzero element count with a
+NULL element-table pointer**; the origin of that inconsistency is
+not yet established.
+
+To investigate without another game EXE trampoline/guard, the MSI95
+read-only vectored exception diagnostic now records `AV_SCENE_LIST`:
+manager address, element-table pointer, list head, count, capacity,
+flags and index for these exact two EXE instructions. `AV_HEAP_TRACKER`
+reports live/capacity/peak heap tracking. Each recognized MSI95
+free now also records the remaining live count. The old
+`AV_CALLER` decoding is restricted to the one function whose
+calling convention was disassembled (`0x00494965`), avoiding false
+caller inference from scene-list stack data. These probes only
+run when `[Debug] Log=1` and never alter exception handling.
+
+**No additional executable patch or exception suppression.**
+Repeat normal menu exit under Wine; inspect the scene-list snapshot
+to distinguish a stale count, a failed resize, and a teardown order
+problem. Do not consider this crash fixed without live verification.

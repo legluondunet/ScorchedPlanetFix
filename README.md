@@ -256,3 +256,19 @@ unrecognized driver limitation. The DLL now tracks allocated texture heaps
 in a dynamically growing table, rather than returning NULL once 256 are
 live. The previous Matrox EXE guards remain experimental; game and
 renderer behavior under Wine is **not yet validated** after this change.
+
+### Matrox mission exit crash: scene-list diagnostics (2026-11-20)
+
+The dynamic MSI95 heap limit fix allowed the game to progress beyond
+repeated briefing clicks and into gameplay. However, quitting via
+the main menu still produced `0xC0000005` at `splanetw.exe:0x0048302D`
+after frame 4152. The game's own list manager has a NULL
+item-table pointer while its element count is nonzero; a previous
+crash at `0x00482DEC` involved the same type of routine.
+No MSI95 heap allocation rejects or OOMs occurred in this run.
+
+This experimental build adds diagnostic-only `AV_SCENE_LIST`
+and `AV_HEAP_TRACKER` snapshots when `[Debug] Log=1`.
+It intentionally makes **no third speculative game EXE patch**;
+shutdown stability remains unverified. Please test quitting from
+the main menu and send the new `ScorchedPlanetFix.log` if it crashes.
