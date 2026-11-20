@@ -36,6 +36,7 @@ $apiAliases = @(
     "CreateFileA@28", "GetTickCount@0", "QueryPerformanceCounter@4",
     "QueryPerformanceFrequency@4", "Sleep@4", "GetEnvironmentVariableA@12",
     "WriteFile@20", "CloseHandle@4", "GetModuleFileNameA@12",
+    "GetFileAttributesA@4",
     "VirtualAlloc@16", "VirtualFree@12", "AddVectoredExceptionHandler@8",
     "VirtualQuery@12", "RegisterClassA@4", "CreateWindowExA@48",
     "ShowWindow@8", "UpdateWindow@4", "PeekMessageA@20",

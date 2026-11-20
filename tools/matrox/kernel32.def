@@ -9,6 +9,7 @@ EXPORTS
  WriteFile
  CloseHandle
  GetModuleFileNameA
+ GetFileAttributesA
  VirtualAlloc
  VirtualFree
  AddVectoredExceptionHandler
