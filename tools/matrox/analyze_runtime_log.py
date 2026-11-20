@@ -29,6 +29,8 @@ def parse_log(path: Path) -> dict:
         "last_av_context": None, "last_av_registers": None,
         "nested_deferred_last_sample": None, "nested_deferred_sample_frame": None,
         "input_messages_last_sample": None, "game_global_samples": 0,
+        "space_char_evaluations": 0, "space_char_suppressed": 0,
+        "last_space_char_evaluation": None,
         "game_global_pointer_changes_observed": 0,
         "game_global_null_changes_observed": 0,
         "game_global_nonnull_changes_observed": 0, "last_game_global": None,
@@ -66,6 +68,13 @@ def parse_log(path: Path) -> dict:
                     result["nested_deferred_sample_frame"] = f.get("frame")
                 elif line.startswith("GAME_WINDOW_EVENTS"):
                     result["input_messages_last_sample"] = fields(line).get("input_msgs")
+                elif line.startswith("TRANSITION_SPACE_CHAR_EVAL"):
+                    result["space_char_evaluations"] += 1
+                    result["last_space_char_evaluation"] = fields(line)
+                elif line.startswith("TRANSITION_SPACE_CHAR_IGNORED"):
+                    # The existing count is cumulative for this runtime session.
+                    result["space_char_suppressed"] = max(
+                        result["space_char_suppressed"], fields(line).get("count", 0))
                 elif line.startswith("GAME_GLOBAL_50DCD0"):
                     m = GLOBAL_RE.match(line)
                     if m:
@@ -120,7 +129,9 @@ def main(argv=None) -> int:
                   f"heap_exit_live={r['heap_exit_live']} AV={r['first_chance_av_count']} "
                   f"sites={r['av_sites']} "
                   f"nested_deferred(last_sample)={r['nested_deferred_last_sample']} "
-                  f"global_null_changes(observed)={r['game_global_null_changes_observed']}")
+                  f"global_null_changes(observed)={r['game_global_null_changes_observed']} "
+                f"space_evaluations={r['space_char_evaluations']} "
+                f"space_suppressed={r['space_char_suppressed']}")
             for error in r["errors"]:
                 print(f"  ERROR: {error}", file=sys.stderr)
     if args.assert_clean and any(r["status"] != "clean_exit" for r in reports):
