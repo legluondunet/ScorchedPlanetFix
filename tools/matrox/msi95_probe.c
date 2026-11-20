@@ -83,6 +83,8 @@ __declspec(dllimport) BOOL __stdcall QueryPerformanceCounter(MSI_LARGE_INTEGER*)
 __declspec(dllimport) BOOL __stdcall QueryPerformanceFrequency(MSI_LARGE_INTEGER*);
 __declspec(dllimport) void __stdcall Sleep(DWORD);
 __declspec(dllimport) DWORD __stdcall GetEnvironmentVariableA(const char*,char*,DWORD);
+__declspec(dllimport) HANDLE __stdcall GetModuleHandleA(const char*);
+__declspec(dllimport) void* __stdcall GetProcAddress(HANDLE,const char*);
 __declspec(dllimport) void * __stdcall VirtualAlloc(void*,DWORD,DWORD,DWORD);
 __declspec(dllimport) BOOL __stdcall VirtualFree(void*,DWORD,DWORD);
 __declspec(dllimport) void* __stdcall AddVectoredExceptionHandler(unsigned long, void*);
@@ -424,6 +426,67 @@ static void ensure_log(void){
     }
 }
 static void logtext(const char*msg){ensure_log();if(!g_log)return;DWORD n=slen(msg),w;WriteFile(g_log,msg,n,&w,NULL);WriteFile(g_log,"\r\n",2,&w,NULL);}
+
+/* Self-contained, read-only host identification for stand-alone MSI95 logs.
+ * The launcher's SYS-* inventory lives in a separate installer log, so
+ * runtime crash reports otherwise cannot prove whether Wine/Proton was used.
+ * Never record Wine prefixes, Steam paths, usernames, or other env contents.
+ * No additional work is performed when [Debug] Log=0. */
+static void log_runtime_host(void){
+    static int reported=0;
+    if(reported || !g_log)return;
+    reported=1;
+    HANDLE ntdll=GetModuleHandleA("ntdll.dll");
+    void* wine_version=ntdll?GetProcAddress(ntdll,"wine_get_version"):NULL;
+    if(!wine_version){
+        logtext("SYS-OS: runtime=Windows native");
+        logtext("SYS-WINE: not detected");
+        logtext("SYS-HOST: OS=Windows");
+        logtext("SYS-PROTON: not detected (native Windows)");
+        return;
+    }
+    logtext("SYS-OS: runtime=Wine (Win32 compatibility layer)");
+    {typedef const char* (__cdecl *wine_version_fn)(void);
+     const char*raw=((wine_version_fn)wine_version)();
+     char buf[160];DWORD p=0;
+     putstr(buf,&p,"SYS-WINE: version=");
+     if(raw){unsigned i=0;while(raw[i]&&i<80u&&p<150u){
+         unsigned char ch=(unsigned char)raw[i++];
+         if((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||
+            ch=='.'||ch=='-'||ch=='_'||ch=='+'||ch==' '||ch=='('||ch==')')buf[p++]=(char)ch;
+         else buf[p++]='?';
+       }}
+     if(p==18u)putstr(buf,&p,"Unavailable");
+     buf[p]=0;logtext(buf);
+    }
+    {typedef void (__cdecl *wine_host_fn)(const char**,const char**);
+     void* host_fn=GetProcAddress(ntdll,"wine_get_host_version");
+     if(host_fn){
+         const char* host_os=NULL;const char* host_release=NULL;
+         ((wine_host_fn)host_fn)(&host_os,&host_release);
+         char buf[140];DWORD p=0;putstr(buf,&p,"SYS-HOST: OS=");
+         if(host_os){unsigned i=0;while(host_os[i]&&i<50u&&p<125u){
+             unsigned char ch=(unsigned char)host_os[i++];
+             buf[p++]=((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||
+                       (ch>='0'&&ch<='9')||ch=='-')?(char)ch:'?';
+           }}
+         if(p==13u)putstr(buf,&p,"Unavailable");
+         buf[p]=0;logtext(buf);
+     }else logtext("SYS-HOST: OS=Unavailable (Wine host API not exported)");
+    }
+    {char tmp[2]={0};
+     const char* steam_vars[]={"STEAM_COMPAT_DATA_PATH","STEAM_COMPAT_CLIENT_INSTALL_PATH",
+                               "STEAM_COMPAT_TOOL_PATHS","PROTON_VERSION"};
+     int steam_hint=0;
+     for(unsigned i=0;i<4u;i++)if(GetEnvironmentVariableA(steam_vars[i],tmp,sizeof(tmp))>0u){
+         steam_hint=1;break;
+     }
+     logtext(steam_hint?
+        "SYS-PROTON: Steam compatibility environment=yes (environment hint, unverified)":
+        "SYS-PROTON: environment hint=not detected (cannot exclude Proton)");
+    }
+}
+
 /* Observe first-chance access violations only; never alter exception handling.
  * A first-chance AV can be handled and is not automatically the fatal crash.
  * Cap output to prevent excessive noise or recursive exceptions during logging. */
@@ -1171,7 +1234,7 @@ static void capture_ownership(const char *filename){
 
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
-    ensure_log();loginit(Width,Height,Planes,ZBuffer,Debug);
+    ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
