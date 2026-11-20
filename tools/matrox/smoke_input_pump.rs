@@ -68,7 +68,11 @@ unsafe extern "system" fn guest_wndproc(
 }
 
 fn main() {
-    std::env::set_var("MATROX_MSI_LOG", "0");
+    // CI may explicitly enable MSI95 logging to assert runtime host identity.
+    // Keep the normal input pump smoke silent when no override is requested.
+    if std::env::var_os("MATROX_MSI_LOG").is_none() {
+        std::env::set_var("MATROX_MSI_LOG", "0");
+    }
     std::env::set_var("MATROX_MSI_FPS_LIMIT", "0");
     std::env::set_var("MATROX_MSI_BORDERLESS", "0");
     unsafe {
