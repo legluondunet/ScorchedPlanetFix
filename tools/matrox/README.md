@@ -239,3 +239,57 @@ Wine fault. Compare pointer snapshots to learn if it becomes NULL earlier
 during a scene change or was already NULL before the fault. Avoid adding
 a speculative binary guard or categorizing this as the old scene-manager
 `0x0048302D` crash until game control flow is established.
+
+
+## Offline MSI95 runtime log triage and regression checks
+
+Use `tools/matrox/analyze_runtime_log.py` to review **existing** user-created
+`ScorchedPlanetFix.log` files without running the game, reading proprietary
+assets or changing gameplay. Python 3 with only the standard library is
+required. Run from the repository root:
+
+```text
+python tools/matrox/analyze_runtime_log.py /path/to/ScorchedPlanetFix.log
+python tools/matrox/analyze_runtime_log.py --json /path/to/first.log /path/to/second.log
+python tools/matrox/analyze_runtime_log.py --assert-clean /path/to/ScorchedPlanetFix.log
+python tools/matrox/test_analyze_runtime_log.py
+```
+
+The `--assert-clean` variant returns nonzero unless all supplied sessions show
+both `msiExit` and `SHUTDOWN_COMPLETE`, zero live tracked heaps and **no**
+`FIRST_CHANCE_AV` entries. A missing/unreadable log, incomplete session,
+post-exception shutdown or uncertain/missing heap count is **not** silently
+labelled clean. The output deliberately distinguishes the last *reported*
+nested-input counter from an exact final count. It reports observed global
+pointer transitions, but does not treat `[0x0050DCD0] == 0` as a failure:
+several clean Wine sessions contained normal zero/nonzero transitions.
+
+The test suite uses synthetic log lines only; none of the tester's original
+logs or copyrighted game assets are committed. CI runs it automatically on
+Windows before the game binary and the two renderers are built. This tool is
+a log **classification** aid, **not a fault-reproduction test** or proof that
+the earlier intermittent AVs have been eliminated.
+
+### Pre-merge compatibility checklist (Matrox 2.1 draft)
+
+1. Matrox OEM under Wine: verified ISO, normal briefing, several minutes of
+   gameplay, return to menu, normal quit. Attach log with `[Debug] Log=1`.
+   Also check rapid briefing clicks and verify text is stable visually.
+2. Verify that Alt-Tab and return, focus changes, F12 capture and standard
+   mouse/keyboard input work without stealing the session or forcing an
+   unexpected OEM quit; collect log if they do not.
+3. Matrox OEM under native Windows: repeat the same mission/menu/quit flow
+   and check the proper preview aspect ratio, text, shadows, textures, audio,
+   and responsiveness. The CI input pump smoke can be run interactively on
+   Windows to actually test ordered callbacks. A headless GitHub Actions
+   `MSI95_INPUT_PUMP_SMOKE_SKIP` **is not** an interactive pass.
+4. Retail CD/3dfx GameFrame: install and launch separately, confirm borderless
+   fullscreen and HUD, input, mission/menu transitions, cinematics, audio,
+   Alt-Tab, normal exit and single-session log policy. These tests are
+   essential because the launcher and runtime install/selection code changed.
+5. Re-run Windows CI after the last changes. Keep PR #36 as a draft until
+   target crashes `0x0046D76D` and `0x0048302D` are understood or a
+   deliberately scoped, regression-tested workaround is agreed.
+
+Mark every manual test `PASS`, `FAIL`, or `NOT RUN`; never infer a
+particular gameplay navigation path from a renderer log alone.
