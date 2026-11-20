@@ -493,7 +493,7 @@ mod tests{
         let original=b"external Glide DLL used only for rollback";
         fs::write(&file,original).unwrap();
         let error=replace_with_rollback(&root,&digest(original),
-            validate_embedded().unwrap().unwrap(),
+            &validate_embedded().unwrap().unwrap(),
             |_|Err("intentional post-install rejection".into())).unwrap_err();
         assert!(error.contains("intentional post-install rejection"));
         assert_eq!(fs::read(&file).unwrap(),original);
