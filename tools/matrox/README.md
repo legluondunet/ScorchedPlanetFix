@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`a6cbffdf48359d4a2da8c94647844db1ed8c25eb47080a918055895872dfaa47`
+`0839aa304757c4259f4b9c0c294ad835793d30fdeeb493e5e3db0903e92e5ed1`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -360,3 +360,53 @@ skipping, menu selection and clean exit. Separately verify Wine and the
 retail 3dfx/GameFrame edition: the earlier Wine `0046D76D` crash without
 a preceding `WM_CHAR` is not addressed by this guard. No OEM game
 instructions or global pointers are modified by this change.
+
+
+## Native Windows Space-character transition diagnostics (2026-11-20)
+
+The user's previously attached **Windows minidump from 20:18** confirms
+`splanetw.exe` faulting at `0x0046D76D`: it loads EDX from the
+original game global `0x0050DCD0`, obtains `NULL` and immediately
+executes `cmp [edx+0x0C],eax`. The dump itself contains
+`[0x0050DCD0]=0`, `EAX=0x11`, `EDX=0`, and an access violation reading
+`0xC`. The corresponding runtime log shows the second `WM_KEYDOWN Space`,
+a frame-55 texture-heap reload with `GAME_GLOBAL_50DCD0 ptr=0`, then
+`WM_CHAR Space` at frame 58 and the crash **15 ms later**.
+The OEM game code reaches that dereference through a sequence of MSI
+presentation/formatting callbacks. These observations strongly implicate
+out-of-phase Space character delivery, but do not prove the underlying
+lifecycle flaw or the exact role of the clean-room renderer.
+
+The already-present and edition-signature-locked
+`TRANSITION_SPACE_CHAR_IGNORED` compatibility guard suppresses only
+`WM_CHAR Space` while the game global is `NULL` and a valid MSI texture
+allocation occurred within the preceding 250 ms. It **never** intercepts
+`WM_KEYDOWN`, `WM_KEYUP`, other characters, or unrelated scene states.
+Its effectiveness has not yet been demonstrated by a matching user-run
+suppression trace; a later clean Windows session does not prove it fired.
+
+With **`[Debug] Log=1` only**, the DLL now records the first 12
+`WM_CHAR Space` decision points as:
+
+```
+TRANSITION_SPACE_CHAR_EVAL frame=... heap_live=... heap_age_ms=...
+  scene_global=0x... signature_ok=... callback_depth=... suppress=0|1
+```
+
+The existing `TRANSITION_SPACE_CHAR_IGNORED count=... frame=...` line
+remains the confirmation that a character was actually suppressed.
+A `suppress=0` is a **delivered character**, not evidence of an error
+unless it correlates with an AV or unexpected user-visible transition.
+The evaluation is capped at 12 messages; successful logging is not a
+promise that all gameplay paths were exercised. No runtime game EXE
+bytes, media/texture data, FPS pacing, or other input behavior are
+modified by this telemetry.
+
+**Next manual Matrox test:** from Windows with `Log=1`, enter the mission
+briefing, press Space rapidly twice during the transition as in the prior
+crash, then enter gameplay and leave through the menu. Note whether
+`TRANSITION_SPACE_CHAR_IGNORED` occurs. Repeating the same transition
+without a crash but *without* a suppressed character is useful evidence
+of a stable run, not a proof that the guard handles the failing sequence.
+Check for both `FIRST_CHANCE_AV` and `SHUTDOWN_COMPLETE`; keep PR #36
+in draft until this and the earlier menu-exit scene-list fault are covered.
