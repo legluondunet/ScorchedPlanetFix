@@ -306,6 +306,13 @@ static unsigned g_focus_filtered_events = 0;
  * that nested msiEndFrame; messages stay in the Win32 queue for the next
  * outermost frame. This prevents a proven triple WndProc reentry path. */
 static unsigned g_inner_input_pumps_deferred = 0;
+/* Passive instrumentation for the observed game AV at 0046D76D:
+ * original OEM code loads EDX from [0050DCD0], then reads [EDX+0C].
+ * Never assume the global holds a particular game-object type.
+ * Sampling is enabled only with Debug Log=1 and a matching OEM code signature. */
+static DWORD g_game_50dcd0_last = 0xFFFFFFFFu;
+static DWORD g_game_50dcc0_last = 0xFFFFFFFFu;
+static unsigned g_game_50dcd0_reports = 0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -489,6 +496,30 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         events[k]=0;WriteFile(g_log,events,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
       }
+      if(ctx->Eip==0x0046D76Du){
+        char game[410];k=0;
+        putstr(game,&k,"AV_GAME_GLOBAL_50DCD0 ");
+        if(readable_span((const void*)0x0050DCC0u,0x18u)){
+          const volatile DWORD *p=(const volatile DWORD*)0x0050DCC0u;
+          putstr(game,&k,"counter_50DCC0=");puthex(game,&k,p[0]);
+          putstr(game,&k," raw_50DCC4=");puthex(game,&k,p[1]);
+          putstr(game,&k," raw_50DCC8=");puthex(game,&k,p[2]);
+          putstr(game,&k," ptr_50DCD0=");puthex(game,&k,p[4]);
+          putstr(game,&k," raw_50DCD4=");puthex(game,&k,p[5]);
+          putstr(game,&k," last_sampled_ptr=");puthex(game,&k,g_game_50dcd0_last);
+          putstr(game,&k," last_sampled_counter=");puthex(game,&k,g_game_50dcc0_last);
+        }else putstr(game,&k,"unreadable");
+        game[k]=0;WriteFile(g_log,game,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+        if(readable_span((const void*)ctx->Esp,48u)){
+          char stack2[360];k=0;
+          putstr(stack2,&k,"AV_GAME_STACK first12=");
+          const DWORD *sp=(const DWORD*)ctx->Esp;
+          for(unsigned i=0;i<12u;i++){putstr(stack2,&k," ");puthex(stack2,&k,sp[i]);}
+          stack2[k]=0;WriteFile(g_log,stack2,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
+      }
       { char heap[240];k=0;
         putstr(heap,&k,"AV_HEAP_TRACKER live=");putunsigned(heap,&k,g_heap_count);
         putstr(heap,&k," capacity=");putunsigned(heap,&k,g_heap_capacity);
@@ -555,6 +586,39 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
 static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
   char buf[940];DWORD p=0;putstr(buf,&p,name);putstr(buf,&p," ");putunsigned(buf,&p,a);
   if(label2){putstr(buf,&p," ");putstr(buf,&p,label2);putstr(buf,&p," ");putunsigned(buf,&p,b);}buf[p]=0;logtext(buf);
+}
+/* Strictly diagnostic, signature-locked to the OEM Matrox instruction
+ * sequence seen in the Wine AV. Do not use this probe to repair or skip any
+ * game dereference, and never read arbitrary player data. */
+static BOOL game_global_probe_supported(void){
+    const BYTE *load=(const BYTE*)0x0046D761u;
+    const BYTE *cmp=(const BYTE*)0x0046D76Du;
+    return readable_span(load,6u) && readable_span(cmp,3u) &&
+        load[0]==0x8Bu && load[1]==0x15u &&
+        load[2]==0xD0u && load[3]==0xDCu &&
+        load[4]==0x50u && load[5]==0x00u &&
+        cmp[0]==0x39u && cmp[1]==0x42u && cmp[2]==0x0Cu;
+}
+static void sample_game_global_50dcd0(const char *phase){
+    if(!g_log || g_game_50dcd0_reports>=96u ||
+       !game_global_probe_supported() ||
+       !readable_span((const void*)0x0050DCC0u,0x14u))return;
+    const volatile DWORD *globals=(const volatile DWORD*)0x0050DCC0u;
+    DWORD counter=globals[0],ptr=globals[4];
+    BOOL changed=ptr!=g_game_50dcd0_last;
+    if(!changed && (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
+    char info[320];DWORD k=0;
+    putstr(info,&k,"GAME_GLOBAL_50DCD0 phase=");
+    putstr(info,&k,phase);
+    putstr(info,&k," frame=");putunsigned(info,&k,g_frames);
+    putstr(info,&k," ptr=");puthex(info,&k,ptr);
+    putstr(info,&k," prior_ptr=");puthex(info,&k,g_game_50dcd0_last);
+    putstr(info,&k," counter_50DCC0=");puthex(info,&k,counter);
+    putstr(info,&k," callback_depth=");putunsigned(info,&k,g_guest_callback_depth);
+    info[k]=0;logtext(info);
+    g_game_50dcd0_last=ptr;
+    g_game_50dcc0_last=counter;
+    g_game_50dcd0_reports++;
 }
 static void loginit(LONG w,LONG h,LONG planes,BOOL z,BOOL dbg){
   char buf[940];DWORD p=0;putstr(buf,&p,"msiInit width=");putunsigned(buf,&p,(unsigned)w);
@@ -726,12 +790,14 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
     }
     if(g_guest_window_proc){
         LRESULT result;
+        sample_game_global_50dcd0("pre_callback");
         g_guest_messages++;
         g_last_forwarded_msg=msg;
         g_last_forwarded_frame=g_frames;
         g_last_forwarded_tick=GetTickCount();
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
+        sample_game_global_50dcd0("post_callback");
         g_guest_callback_depth--;
         return result;
     }
@@ -1056,6 +1122,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_last_triangle_frame=0;g_no_geometry_logged=0;
     g_shutdown_started=0;
     g_last_left_click_ms=0;
+    g_game_50dcd0_last=g_game_50dcc0_last=0xFFFFFFFFu;
+    g_game_50dcd0_reports=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
     g_swallowed_left_down=g_swallowed_right_down=0;
     g_zplane_draw_context=0;
@@ -1273,6 +1341,7 @@ LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     }else{
         lognum("msiAllocTextureHeap REAL_OOM pages=",(unsigned)Pages,"live=",g_heap_count);
     }
+    sample_game_global_50dcd0("texture_alloc");
     return (LPBYTE)ptr;
 }
 BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
@@ -1281,6 +1350,7 @@ BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i]==pTextureHeap){
       BOOL ok=VirtualFree(pTextureHeap,0,MEM_RELEASE);
       g_heaps[i]=g_heaps[--g_heap_count];g_heaps[g_heap_count]=NULL;
+      sample_game_global_50dcd0("texture_free");
       lognum("msiFreeTextureHeap recognized: live=",g_heap_count,
              "peak=",g_heap_peak);
       return ok;
@@ -1384,7 +1454,9 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         g_manual_capture_active=0;
     }
     g_capture_ownership=0;
+    sample_game_global_50dcd0("pre_frame_present");
     preview_present();
+    sample_game_global_50dcd0("post_frame_present");
     frame_limit(); /* user-configured maximum FPS from [Graphics] */
     if(g_frames%120==0 && g_frames>360 && g_frames-g_last_triangle_frame>=120 && !g_no_geometry_logged){
         g_no_geometry_logged=1;
