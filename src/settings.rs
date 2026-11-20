@@ -7,6 +7,15 @@ use std::io::Write;
 use std::path::Path;
 
 const MAX_INI_SIZE:usize=256*1024;
+const OPTION_HELP_MARKER: &[u8] = b"; ScorchedPlanetFix option descriptions";
+const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
+; [Graphics] FPSLimit: 0=unlimited, 1..240=maximum FPS for both renderers\r\n\
+; [Matrox] Dither: 0=off, 1=experimental RGB565 dithering (Matrox only)\r\n\
+; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
+; [Cheats] ALIAH: invulnerability code, manual in-game only; default=0\r\n\
+; [Cheats] FATAL: all weapons and ammunition, manual in-game only; default=0\r\n\
+; [Debug] Log: 0=disable runtime logs, 1=noncumulative runtime log beside EXE\r\n\
+; Installer log stays enabled regardless of [Debug] Log\r\n\r\n";
 pub const DEFAULT_FPS:u32=60;
 pub const MAX_FPS:u32=240;
 
@@ -147,9 +156,12 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_aliah=!seen.aliah;
     let add_fatal=!seen.fatal;
     let add_log=!seen.log;
-    if existing.is_some()&&!add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
+        .any(|slice|slice==OPTION_HELP_MARKER);
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
-    let mut out=Vec::with_capacity(original.len()+160);
+    let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
+    if add_descriptions {out.extend_from_slice(OPTION_HELP);}
     let mut current=0u8;
     let mut did_fps=false;
     let mut did_dither=false;
@@ -304,7 +316,7 @@ mod tests{
         assert!(s.contains("FATAL=0"));
         assert!(s.contains("[Debug]\r\n"));
         assert!(s.contains("Log=0"));
-        assert!(s.contains("; "));
+        assert!(s.contains("; ScorchedPlanetFix option descriptions"));
         assert!(!s.contains("[scorch]"));
         fs::write(&ini,b"[Graphics]\nFPSLimit=30\n[Cheats]\nUnlimitedFuel=1\n").unwrap();
         assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("not yet supported"));
@@ -342,7 +354,11 @@ mod tests{
         fs::write(&ini,b"[Graphics]\r\nFPSLimit=60\r\n").unwrap();
         ensure_defaults(&ini,false).unwrap();
         assert!(!read_settings(&ini).unwrap().log);
-        assert!(fs::read_to_string(&ini).unwrap().contains("[Debug]\r\n"));
+        let description=fs::read_to_string(&ini).unwrap();
+        assert!(description.contains("[Debug]\r\n"));
+        assert!(description.contains("; ScorchedPlanetFix option descriptions"));
+        ensure_defaults(&ini,false).unwrap();
+        assert_eq!(fs::read_to_string(&ini).unwrap(),description);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

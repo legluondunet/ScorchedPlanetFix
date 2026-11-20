@@ -11,6 +11,7 @@ pub const CONFIG: &str = "ScorchedPlanetFix.ini";
 /// Shared default written to a new root INI and mirrored under docs/.
 /// All user-facing settings have comments in both copies.
 pub const INI_EXAMPLE: &str = "\
+; ScorchedPlanetFix option descriptions\r\n\
 ; ScorchedPlanetFix options — Windows / Wine, retail 3dfx and Matrox OEM\r\n\
 ; Native game settings are stored separately in game/splanet.ini\r\n\
 \r\n\
