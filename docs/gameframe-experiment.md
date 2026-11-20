@@ -38,3 +38,45 @@ and confirm it stays in the background until explicitly selected. Check
 keyboard/mouse inputs, menu/cinematics, restart, and clean exit.
 A successful compilation does not establish that Windows accepted the
 activation request, so inspect the new log and visually verify it.
+
+
+## New Game menu lag: collect phase-specific frame gaps (2026-11-20)
+
+The owner reports that opening the menu to start a new game can take
+several seconds, reminiscent of the original fast-CPU fade bug. Two newly
+uploaded logs, named `ScorchedPlanetFix(20261120-205441).log` and
+`ScorchedPlanetFix(20261120-205522).log`, have **identical SHA-256**
+`f3785d742d29ae4defc080abe0d1a9b950102e08a8bc046bf9516ed4dbf19243`;
+both actually contain the **earlier #518-era session**
+`1795207287255940900-18632`, version `2.0.2-ca502847`.
+They cannot be treated as two independent post-#519 runs.
+
+That baseline log contains a menu-probe interval of `9212ms` for
+`114` frames just as the main-menu `new` visual score changes,
+followed by normal ~59 FPS. This is **consistent with** a delayed menu
+transition, but log sampling does not yet reveal whether the stall is
+inside the game or in GameFrame. The installed retail FR/DE 1.06 patch
+already has the owner-validated **FadeLow four-byte threshold change
+(0.0001 → 0.00001)** plus its separate two-byte No-CD gate fix.
+Do not blindly patch the same threshold again or loosen the FPS cap
+without evidence.
+
+The Scorched-specific GameFrame patch now logs, only with `[Debug] Log=1`,
+up to 32 frame delays of >=80 ms, separating:
+- `SCORCHED_GAME_FRAME_GAP frame=... outside_wrapper_ms=...`: time since
+  the previous `grBufferSwap` returned until the game next called it;
+  can include original-game CPU work, movie state, scheduling and waits
+- `SCORCHED_GLIDE_FRAME_DELAY frame=... inside_wrapper_ms=...`: time
+  spent inside GameFrame `grBufferSwap`, including OpenGL flush,
+  configured frame cap, and movie pump
+
+No pacing, timing thresholds, resource loading, original game executable,
+FadeLow/no-CD bytes, or Matrox behavior are modified by this telemetry.
+
+**Manual two-run comparison:** with the newest CI build and `Log=1`,
+reproduce main menu → New Game at `FPSLimit=60`, capture the real new
+session ID and log; next optionally repeat with `FPSLimit=30`, keeping
+all other settings identical. Compare actual visual delay, both timing
+markers and `SCORCHED_MENU_PROBE` intervals. If the 30 FPS cap changes
+the delay, this implicates frame-rate-sensitive sequencing but does not
+alone prove the old fade loop is the cause.
