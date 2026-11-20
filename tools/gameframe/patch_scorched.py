@@ -180,6 +180,37 @@ fn limit_scorched_fps() {
     flush();
     limit_scorched_fps();
     super::movie::frame();""")
+    # Passive Windows-only game-thread CPU accounting. It distinguishes a
+    # busy 2.7s legacy fade loop from a 2.7s Sleep/OS wait without freezing,
+    # poking game state, hooking APIs, or modifying original EXE bytes.
+    replace("win32.rs", "pub struct RECT {",
+            """#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SCORCHED_FILETIME { pub low: u32, pub high: u32 }
+
+pub struct RECT {""")
+    replace("win32.rs", '    pub fn GetCurrentProcessId() -> u32;',
+            '''    pub fn GetCurrentProcessId() -> u32;
+    pub fn GetCurrentThread() -> HMODULE;
+    pub fn GetThreadTimes(h: HMODULE, created: *mut SCORCHED_FILETIME,
+        exited: *mut SCORCHED_FILETIME, kernel: *mut SCORCHED_FILETIME,
+        user: *mut SCORCHED_FILETIME) -> BOOL;''')
+    replace("api/sst.rs", "fn scorched_clock() ->",
+            """fn scorched_thread_cpu_100ns() -> Option<u64> {
+    let mut created=crate::win32::SCORCHED_FILETIME::default();
+    let mut exited=crate::win32::SCORCHED_FILETIME::default();
+    let mut kernel=crate::win32::SCORCHED_FILETIME::default();
+    let mut user=crate::win32::SCORCHED_FILETIME::default();
+    let ok=unsafe { crate::win32::GetThreadTimes(
+        crate::win32::GetCurrentThread(), &mut created, &mut exited,
+        &mut kernel, &mut user) };
+    if ok==0 { return None; }
+    let ticks=|v:crate::win32::SCORCHED_FILETIME|
+        ((v.high as u64)<<32) | v.low as u64;
+    Some(ticks(kernel).saturating_add(ticks(user)))
+}
+
+fn scorched_clock() ->""")
     # Diagnostic only: measure the wall-clock time OUTSIDE vs INSIDE
     # grBufferSwap. Existing logs showed a 9.212s / 114-frame menu interval
     # when New Game was selected, but could not tell whether the game waited
@@ -188,6 +219,7 @@ fn limit_scorched_fps() {
     replace("api/sst.rs", "fn limit_scorched_fps() {",
             """struct ScorchedFrameClock {
     last_end: Option<Instant>,
+    last_end_cpu: Option<u64>,
     frame: u32,
     reports: u32,
 }
@@ -196,6 +228,7 @@ static SCORCHED_FRAME_CLOCK: OnceLock<Mutex<ScorchedFrameClock>> = OnceLock::new
 fn scorched_clock() -> &'static Mutex<ScorchedFrameClock> {
     SCORCHED_FRAME_CLOCK.get_or_init(|| Mutex::new(ScorchedFrameClock {
         last_end: None,
+        last_end_cpu: None,
         frame: 0,
         reports: 0,
     }))
@@ -210,10 +243,13 @@ fn scorched_frame_enter() -> Option<Instant> {
         return None;
     }
     let now=Instant::now();
+    let cpu_now=scorched_thread_cpu_100ns();
     let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
     state.frame=state.frame.saturating_add(1);
     let frame=state.frame;
     let gap=state.last_end.map(|end| now.duration_since(end).as_millis());
+    let cpu_gap_ms=state.last_end_cpu.zip(cpu_now)
+        .map(|(before,after)|after.saturating_sub(before)/10_000);
     let report=if let Some(gap_ms)=gap {
         if gap_ms >= 80 && state.reports < 32 {
             state.reports+=1;
@@ -222,7 +258,7 @@ fn scorched_frame_enter() -> Option<Instant> {
     } else { None };
     drop(state);
     if let Some(gap_ms)=report {
-        log!("SCORCHED_GAME_FRAME_GAP frame={frame} outside_wrapper_ms={gap_ms}");
+        log!("SCORCHED_GAME_FRAME_GAP frame={frame} outside_wrapper_ms={gap_ms} game_thread_cpu_ms={cpu_gap_ms:?}");
     }
     Some(now)
 }
@@ -233,6 +269,7 @@ fn scorched_frame_leave(start: Option<Instant>) {
         let inside_ms=now.duration_since(start).as_millis();
         let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
         state.last_end=Some(now);
+        state.last_end_cpu=scorched_thread_cpu_100ns();
         let frame=state.frame;
         let report=inside_ms >= 80 && state.reports < 32;
         if report { state.reports+=1; }
