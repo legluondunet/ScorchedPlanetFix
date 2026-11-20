@@ -27,6 +27,15 @@ jobs:
           path: third_party/game-frame
           persist-credentials: false
 
+      - name: Test offline MSI95 log triage (synthetic fixtures, no game data)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_runtime_log.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage tests failed' }
+          python -m py_compile tools/matrox/analyze_runtime_log.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage syntax check failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -76,6 +85,80 @@ jobs:
           python tools/gameframe/audit_exports.py $dll 'third_party/game-frame/wrappers/glide/glide2x.def'
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame Glide ABI audit failed' }
 
+      - name: Compile clean-room MSI95 x86 from pinned source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/matrox/build-msi95.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Clean-room MSI95 build failed' }
+          $msi = 'target/matrox-msi95-x86/msi95.dll'
+          python tools/matrox/audit_exports.py $msi
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
+          Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Smoke test MSI95 x86 dynamic texture-heap growth past 256 live allocations
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-heap-smoke'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' (Join-Path $folder 'msi95.dll')
+          $exe = Join-Path $folder 'MatroxHeapSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_heap.rs -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile x86 MSI95 heap smoke test' }
+          Push-Location $folder
+          try {
+            $env:MATROX_MSI_LOG = '0'
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw 'MSI95 heap dynamic growth smoke test failed' }
+          } finally {
+            Pop-Location
+            Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
+          }
+
+      - name: Smoke MSI95 x86 nested callback input ordering
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-input-smoke'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' (Join-Path $folder 'msi95.dll')
+          $exe = Join-Path $folder 'MatroxInputPumpSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_input_pump.rs -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile MSI95 x86 input reentrancy test' }
+          Push-Location $folder
+          try {
+            $env:MATROX_MSI_LOG = '1'
+            $env:MATROX_MSI_FPS_LIMIT = '0'
+            $env:MATROX_MSI_BORDERLESS = '0'
+            # Hosted Windows CI cannot provide a desktop HWND. Runtime GUI
+            # assertions remain strict when the smoke is run locally.
+            $env:SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE = '1'
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw 'MSI95 x86 recursive callback regression failed' }
+            # The runtime log must identify Windows/Wine without a matching launcher log.
+            $runtimeLog = Join-Path $env:RUNNER_TEMP 'ScorchedPlanetFix.log'
+            if (-not (Test-Path -LiteralPath $runtimeLog)) { throw 'MSI95 host log was not generated' }
+            $diagnostics = Get-Content -LiteralPath $runtimeLog -Raw
+            if (-not $diagnostics.Contains('SYS-OS: runtime=Windows native')) {
+              throw 'MSI95 runtime host detection did not identify native Windows'
+            }
+            if (-not $diagnostics.Contains('SYS-WINE: not detected')) {
+              throw 'MSI95 runtime Wine marker missing on native Windows'
+            }
+            if (-not $diagnostics.Contains('SYS-PROTON: not detected (native Windows)')) {
+              throw 'MSI95 runtime Proton marker missing on native Windows'
+            }
+            Write-Host 'MSI95_HOST_LOG_SMOKE_PASS native Windows labels in standalone ScorchedPlanetFix.log'
+            Remove-Item -LiteralPath $runtimeLog -Force
+          } finally {
+            Pop-Location
+            Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
+            Remove-Item Env:MATROX_MSI_FPS_LIMIT -ErrorAction SilentlyContinue
+            Remove-Item Env:MATROX_MSI_BORDERLESS -ErrorAction SilentlyContinue
+            Remove-Item Env:SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE -ErrorAction SilentlyContinue
+          }
+
       - name: Build and test Windows x64 launcher with embedded GameFrame
         shell: pwsh
         run: |
@@ -83,6 +166,9 @@ jobs:
           $dll = 'third_party/game-frame/wrappers/target/i686-pc-windows-msvc/release/glide2x.dll'
           $env:SCORCHED_GAMEFRAME_DLL_PATH = (Resolve-Path $dll).Path
           $env:SCORCHED_GAMEFRAME_SHA256 = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          $msi = 'target/matrox-msi95-x86/msi95.dll'
+          $env:SCORCHED_MSI95_DLL_PATH = (Resolve-Path $msi).Path
+          $env:SCORCHED_MSI95_SHA256 = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant()
           cargo test --locked --target x86_64-pc-windows-msvc --all-targets
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame-embedded CLI tests failed' }
           cargo build --locked --release --target x86_64-pc-windows-msvc --bin scorched-planet-fix
@@ -93,7 +179,7 @@ jobs:
             throw "Unexpected version: $version"
           }
           Write-Host "Embedded GameFrame SHA256=$env:SCORCHED_GAMEFRAME_SHA256"
-          Write-Host "GameFrame-only v2 stable launcher: $version"
+          Write-Host "Dual-backend GameFrame + Matrox experimental launcher: $version"
           $help = (& $exe --help | Out-String)
           if ($LASTEXITCODE -ne 0 -or $help -notmatch 'GameFrame' -or $help -match 'ScorchedPlanetFix.exe --3dfx-logo') {
             throw 'Stable help missing GameFrame or advertising removed nGlide option'
@@ -133,6 +219,7 @@ jobs:
           # Exercise the *DLL's* log path and session correlation, not just loading.
           $dllLog = Join-Path $testFolder 'ScorchedPlanetFix.log'
           $env:GLIDE_LOG = $dllLog
+          $env:SCORCHED_FIX_LOG = '1'
           $env:SCORCHED_FIX_SESSION_ID = 'ci-gameframe-smoke-1'
           $env:SCORCHED_FIX_SIGNATURE = 'ScorchedPlanetFix 2.0.2-ci'
           Push-Location $testFolder
@@ -147,9 +234,20 @@ jobs:
             if (Test-Path (Join-Path $testFolder 'ScorchedPlanetFix_installer.log')) {
               throw 'DLL LoadLibrary unexpectedly created the installer log'
             }
+            # Default Log=0 must not create a file even when GLIDE_LOG
+            # is inherited. Also prevent diagnostic fallback to stderr.
+            Remove-Item $dllLog
+            $env:SCORCHED_FIX_LOG = '0'
+            $silentOutput = (& '.\GameFrameGlideSmoke.exe' 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw 'Silent Glide LoadLibrary smoke failed' }
+            if (Test-Path $dllLog) { throw 'Log=0 unexpectedly created GameFrame runtime log' }
+            if ($silentOutput -match 'glide:|SCORCHED_SESSION') {
+              throw "Log=0 unexpectedly wrote GameFrame diagnostics: $silentOutput"
+            }
           } finally {
             Pop-Location
             Remove-Item Env:GLIDE_LOG -ErrorAction SilentlyContinue
+            Remove-Item Env:SCORCHED_FIX_LOG -ErrorAction SilentlyContinue
             Remove-Item Env:SCORCHED_FIX_SESSION_ID -ErrorAction SilentlyContinue
             Remove-Item Env:SCORCHED_FIX_SIGNATURE -ErrorAction SilentlyContinue
           }
@@ -162,18 +260,26 @@ jobs:
           $root = Split-Path -Parent $exe
           $logFile = Join-Path $root 'ScorchedPlanetFix_installer.log'
           $dllLog = Join-Path $root 'ScorchedPlanetFix.log'
-          $beforeErrors = if (Test-Path $logFile) { @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count } else { 0 }
-          if (Test-Path (Join-Path $root 'splanet')) { throw 'Unexpected game directory before smoke' }
+          # Preload a stale log to prove the next launch starts a NEW session.
+          Set-Content -Path $logFile -Value 'STALE_INSTALLER_LOG_SHOULD_BE_TRUNCATED'
+          if (Test-Path (Join-Path $root 'game')) { throw 'Unexpected game directory before smoke' }
           $out = (& $exe 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0 -or $out -notmatch 'No ISO/CUE disc image') {
             throw "No-CD safe refusal failed: $out"
           }
-          if (Test-Path (Join-Path $root 'splanet')) { throw 'An invalid game directory was created' }
+          if (Test-Path (Join-Path $root 'game')) { throw 'An invalid game directory was created' }
           if (!(Test-Path $logFile)) { throw 'Installer log was not created' }
           if (Test-Path $dllLog) { throw 'GameFrame DLL log must not be created without launching game' }
-          $afterErrors = @(Get-Content $logFile | Where-Object { $_ -match '^ERROR:' }).Count
-          if ($afterErrors -ne ($beforeErrors + 1)) {
-            throw "Expected exactly one error line for one failed launch; before=$beforeErrors after=$afterErrors"
+          $contents = Get-Content $logFile -Raw
+          $afterErrors = @($contents -split "\r?\n" | Where-Object { $_ -match '^ERROR:' }).Count
+          if ($afterErrors -ne 1) {
+            throw "Expected exactly one error in the new installer session; got=$afterErrors"
+          }
+          if ($contents -match 'STALE_INSTALLER_LOG_SHOULD_BE_TRUNCATED') {
+            throw 'Installer log still contains lines from the previous session'
+          }
+          if (@($contents -split "\r?\n" | Where-Object { $_ -match 'session start UTC' }).Count -ne 1) {
+            throw 'Installer log must contain exactly one startup session header'
           }
           $global:LASTEXITCODE = 0
           Write-Host 'No-media refusal and exactly one installer log error; no DLL log: PASS'
@@ -184,7 +290,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = (Resolve-Path 'target/x86_64-pc-windows-msvc/release/scorched-planet-fix.exe').Path
           $root = Split-Path -Parent $exe
-          if (Test-Path (Join-Path $root 'splanet')) { throw 'Game directory must be absent before unchecked smoke' }
+          if (Test-Path (Join-Path $root 'game')) { throw 'Game directory must be absent before unchecked smoke' }
           $output = (& $exe --launch-no-verify 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Unable to launch unchecked game') {
             throw "Unchecked direct launch did not report the expected OS spawn error: $output"
@@ -192,7 +298,7 @@ jobs:
           if ($output -match 'No ISO/CUE disc image|Verifying all immutable game files') {
             throw "Unchecked launch unexpectedly accessed installer or verification path: $output"
           }
-          if (Test-Path (Join-Path $root 'splanet')) { throw 'Unchecked launch created or modified game directory' }
+          if (Test-Path (Join-Path $root 'game')) { throw 'Unchecked launch created or modified game directory' }
           $global:LASTEXITCODE = 0
           Write-Host 'Direct unchecked launch bypassed media discovery and file verification: PASS'
 

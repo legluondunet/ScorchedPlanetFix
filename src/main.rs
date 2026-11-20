@@ -11,6 +11,11 @@ compile_error!("ScorchedPlanetFix is a Windows x64 console program; run via Wine
 #[cfg(windows)] mod gameframe;
 #[cfg(windows)] mod verify;
 #[cfg(windows)] mod verify_manifest;
+#[cfg(windows)] mod matrox;
+#[cfg(windows)] mod matrox_runtime;
+#[cfg(windows)] mod matrox_iso;
+#[cfg(windows)] mod settings;
+#[cfg(windows)] mod layout;
 
 #[cfg(windows)]
 fn main(){

@@ -20,6 +20,21 @@ fn main() {
         println!("cargo:rerun-if-changed={path}");
         println!("cargo:rustc-cfg=gameframe_embedded");
     }
+    // Experimental Matrox backend is optional on old 3dfx-only builds.
+    // The v2.1 Windows CI explicitly supplies the audited clean-room x86 DLL.
+    println!("cargo:rustc-check-cfg=cfg(matrox_embedded)");
+    println!("cargo:rerun-if-env-changed=SCORCHED_MSI95_DLL_PATH");
+    println!("cargo:rerun-if-env-changed=SCORCHED_MSI95_SHA256");
+    if let Ok(path) = std::env::var("SCORCHED_MSI95_DLL_PATH") {
+        let expected = std::env::var("SCORCHED_MSI95_SHA256")
+            .expect("Embedded MSI95 DLL requires its SHA-256 fingerprint");
+        assert!(std::path::Path::new(&path).is_file(), "MSI95 DLL file not found");
+        assert!(expected.len() == 64 && expected.chars().all(|c| c.is_ascii_hexdigit()),
+            "Invalid embedded MSI95 SHA-256");
+        println!("cargo:rerun-if-changed={path}");
+        println!("cargo:rustc-cfg=matrox_embedded");
+    }
+
     let sha = std::env::var("GITHUB_SHA").ok().filter(|s| !s.is_empty()).or_else(|| {
         let output=Command::new("git").args(["rev-parse", "--short=8", "HEAD"]).output().ok()?;
         output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())

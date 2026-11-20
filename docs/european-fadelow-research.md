@@ -156,3 +156,67 @@ to the Rust edition-specific profile with exact SHA-256 checks, backup
 and restore. The CLI installer remains awaiting independent testing
 with a real FR/DE ISO. There is **no unverified general-purpose NoCD patch**
 for US, EN/ES/IT, or unknown versions.
+
+
+## Windows retail FR/DE: New Game lag traced to original CD enumeration (2026-11-20)
+
+The owner reports a variable **2.7–7.3 second delay** when opening the
+New Game submenu in the verified FR/DE 1.06 retail 3dfx edition.
+Our opt-in GameFrame instrumentation showed the original game's thread
+spending **2726 ms without any CPU use** between two Glide buffer swaps.
+An independently sampled native Windows x86 stack during this wait
+contained candidate original-game return address **0x00435855**. The same
+original CD-derived FR/DE EXE SHA-256
+`eff38cedf2408566060b3c7cf39be59c54d23e67b0a4c7cb0725051aa87e1b72`
+was read-only disassembled and independently confirmed:
+
+- At **0x00435800** the game's media check enters its 26-letter drive loop.
+- At **0x00435853**, the code does `call esi`. The import address initially
+  loaded into `esi` is **0x0057F368**, explicitly named
+  **GetDiskFreeSpaceA** in the executable's import directory.
+- **0x00435855** is the instruction directly following this Windows API call
+  (`test eax,eax`): the stack snapshot's matching candidate.
+- The previous six-byte FadeLow+NoCD patch only made the final *failed*
+  drive-search path return true at **0x004358BB**. The slow and variable
+  drive search was still performed **before** that modified return value.
+  This explains why an installed CD-free game can still pause before
+  New Game. This is strongly supported by the return address, import table,
+  zero-CPU wait and actual observed behavior, although the full unwind
+  did not independently symbolicate the kernel EIP.
+
+### Edition-locked short-circuit candidate
+
+For this **one authenticated FR/DE profile only**, replace the six bytes
+at its function entry VA **0x00435800**, raw **0x00034C00**:
+
+| Function entry | Machine code | x86 meaning |
+| --- | --- | --- |
+| Original | `81 EC 18 01 00 00` | `sub esp, 0x118`, start full media search |
+| New | `B8 01 00 00 00 C3` | `mov eax,1; ret`, immediate success |
+
+Its original exits at VA `0x4358C6` and `0x4358D5` both use a
+**plain `ret`** (no callee-popped arguments), and three call sites were
+previously identified at `0x42E70C`, `0x42E75A`, `0x42E7E4`.
+Thus returning the same Boolean `1` from the entry point avoids
+enumerating Windows drives, without changing caller stack alignment.
+Keep FadeLow's original four-byte threshold patch and the existing
+two-byte gate return patch; the new change is the six-byte *entry* edit.
+
+Locally generated and independently SHA-256 verified, using the owner's
+authenticated original EXE **only for research** (not added to the
+repository), the final patch is 836,608 bytes and has SHA-256:
+`2a6051d3d48707ccda5368b7eda579fa6b4a118f9ede26831934c08c232c525e`.
+The installer applies this only after original-file hash checks, PE section
+and opcode checks, with a verified original `.bak`. It recognizes the
+previous six-byte build hash
+`426882f108348f3e1112597fcbb37af16ef425de5346ecc85425c22c24dc781c`
+for safe migration using **`ScorchedPlanetFix.exe --install-only`**.
+An absent/altered original backup is a hard failure. No commercial
+EXE is bundled, hosted or committed; only the replacement *instructions*
+and verified hashes reside in GPL source code.
+
+**Status:** compiled patch still needs maintainer's real Windows gameplay
+test, especially **instant New Game menu opening**, transition to play,
+videos, sound, input, return from Alt-Tab and clean exit. A build/CI
+success does not imply gameplay is validated. Other editions retain
+their existing patch paths until independent evidence warrants changing them.

@@ -1,5 +1,13 @@
 # ScorchedPlanetFix
 
+> **Development branch (PR #36):** ScorchedPlanetFix 2.1 is migrating
+> to the CrimsonSkiesFix-style layout with ONE `game/` directory,
+> `ScorchedPlanetFix.ini` and logs beside the launcher, fix-owned
+> `state/` and `docs/`, and renderer DLLs alongside the game's EXE.
+> [Read the proposed v2.1 layout](docs/unified-layout.md). This is
+> experimental and **not yet the published v2.0.2 release**.
+>
+
 **Play *Scorched Planet* (1996) on Windows and Linux (Wine / Proton) using an integrated open-source Glide renderer.**
 
 [![Windows CI](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml/badge.svg)](https://github.com/legluondunet/ScorchedPlanetFix/actions/workflows/rust-fadelow-patcher.yml)
@@ -19,7 +27,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Two append-only logs beside the launcher: `ScorchedPlanetFix_installer.log` for installation, verification and launching, and `ScorchedPlanetFix.log` for the GameFrame DLL. Each session has a shared `session_id`.
 - v2.0.1 adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu. It persists when hovering buttons or opening the Language, Quit and New Game panels; it disappears in videos and gameplay.
-- Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the original file is renamed to `glide.dll.bak` (replacing an existing regular `.bak`) and the verified bundled GameFrame DLL is installed automatically. Only one managed backup is kept; the replacement and hashes are logged. Symlinks/non-files are rejected.
+- Older, unknown or modified regular `glide.dll` files are **not loaded**. On normal launch, after validating immutable game files, they are replaced with the verified bundled GameFrame DLL using a short-lived rollback file that is deleted after success. **No new permanent `glide.dll.bak` is created**; any existing legacy `.bak` remains untouched. Identical DLLs are left as-is. Symlinks and non-regular paths are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
@@ -74,7 +82,7 @@ Additional commands:
 
 ### Moving from v1.1.0 / external Glide
 
-If an existing `splanet/glide.dll` comes from nGlide, another external wrapper, or an older GameFrame build, **no manual DLL migration is necessary**. After validating the immutable game data, a normal launch renames that regular file to the fixed `glide.dll.bak`, **replacing any existing regular backup**, installs the verified bundled GameFrame and starts the game. It never creates new numbered/hash-suffixed backups. The previous backup's contents are intentionally discarded during replacement; the latest original DLL and both SHA-256 hashes are recorded in `ScorchedPlanetFix.log`. `--verify` stays strictly read-only; symlinks and non-regular DLL/backup paths remain unsupported.
+An older `game/glide.dll` from another wrapper or GameFrame build is replaced automatically after the game audit, with no permanent backup. The earlier DLL is held in `.glide-gameframe-rollback.tmp` solely until the new DLL is verified, then that temporary file is deleted. Any `glide.dll.bak` already present from an older installation is preserved without alteration (not silently deleted). `--verify` stays strictly read-only; symlinks and non-regular active DLL paths are not replaced.
 
 ### Platforms
 
@@ -93,3 +101,174 @@ Windows DPI scaling may make logical desktop dimensions different from physical 
 ScorchedPlanetFix: **GPL-3.0-or-later** ([LICENSE](LICENSE)). Bundled GameFrame: **Apache-2.0** (license included in the Windows distribution). No original game files or third-party proprietary drivers are shipped. Independent community compatibility project maintained by **legluondunet assisted by ChatGPT (OpenAI)**.
 
 [v2.0.2 release notes](docs/release-notes-v2.0.2.md) · [v2.0.1 historical notes](docs/release-notes-v2.0.1.md) · [Pre-release audit checklist](docs/pre-release-audit-post24.md) · [Menu signature implementation](docs/main-menu-version-probe.md) · [v2.0.0 release notes (historical)](docs/release-notes-v2.0.0.md) · [Windows installer and migration](docs/windows-cli-installer.md) · [GameFrame implementation](docs/gameframe-experiment.md) · [v1.1.0 historical notes](docs/release-notes-v1.1.0.md)
+
+### Development branch — native Matrox configuration (19 November 2026)
+
+The experimental PR #36 now uses the player's tested English/maximum-quality
+Matrox native `splanet.ini` defaults. Automatic MSI95 BMP screenshots are
+disabled; manual F12 remains available. Root `ScorchedPlanetFix.ini`
+now places `FPSLimit=60` in `[Graphics]` and adds a disabled
+`[Cheats] UnlimitedFuel=0` placeholder. The native fuel cheat is **not yet
+implemented** and an enabled option is rejected, rather than silently
+pretending to work.
+
+### Native in-game cheats (PR #36, experimental)
+
+`[Cheats]` now lists `ALIAH=0` (invulnerability) and
+`FATAL=0` (all weapons and ammunition), alongside `UnlimitedFuel=0`.
+The native codes are typed during gameplay. Automated activation via INI
+is not yet proven and enabling either option returns an explicit
+unsupported-feature error. Some third-party lists use `ALLAH`
+instead of `ALIAH` for invulnerability; the project preserves the
+user-requested `ALIAH` spelling until game testing resolves the ambiguity.
+
+### Debug logs and preserved OEM reference binaries (2026-11-20)
+
+A fresh root `ScorchedPlanetFix.ini` now includes human-readable comments
+for every option and `[Debug] Log=0`. Use `Log=1` to enable a new
+noncumulative runtime log for GameFrame or Matrox. The installer's own
+noncumulative `ScorchedPlanetFix_installer.log` remains available in either
+mode. Matrox's original executable remains authenticated at
+`game/splanetw.exe.bak`, but proprietary DLL backups are no longer
+created or required; the original MSI95 is verified against the user's
+CD during extraction and discarded.
+
+### First-run diagnostic collection (2026-11-20)
+
+On a clean installation the first verified game launch produces BOTH
+`ScorchedPlanetFix_installer.log` and `ScorchedPlanetFix.log`, even with
+the default `[Debug] Log=0`. After the first normal game exit the
+launcher records the completion in `state/`. Normal subsequent
+`Log=0` play keeps the original runtime diagnostic file without
+updating it. `Log=1` allows a fresh log per game session.
+The root INI never changes its `Log=0` default automatically.
+
+### Multiple Matrox screenshots without overwriting (2026-11-20)
+
+Every separate **F12** keypress on the Matrox edition generates a unique
+numbered pair in `game/`: `matrox_capture_0001_frame.bmp` and
+`matrox_capture_0001_coverage.bmp`, then `0002`, `0003`, etc.
+Existing screenshots are preserved across launches and the files are
+opened with the Windows no-overwrite `CREATE_NEW` flag. Release F12
+between captures. Attach both files with matching numbers when reporting
+the menu transparency and world rendering issues.
+
+### Automatic update of the installer-owned Matrox MSI95 DLL (2026-11-20)
+
+A prior clean-room MSI95.dll may come from any experimental PR #36 build,
+and its SHA-256 necessarily differs when the source or compilation changes.
+The launcher authenticates **all 66 OEM reference files on the source CD**
+before installation. For an existing installation, it authenticates the
+**65 preserved original files** (including `game/splanetw.exe.bak`) and
+the hash-locked patched executable, *before* automatically replacing a
+different/missing `game/msi95.dll` with the DLL
+embedded in the new ScorchedPlanetFix.exe. A temporary staging/rollback
+transaction protects against errors; no new persistent `.bak` is made for
+the launcher-owned DLL. All assets, saves and native INI values are preserved.
+
+A normal launch or `--install-only` updates the driver as needed. The
+read-only `--verify` mode still checks without modifying anything, and
+`--launch-no-verify` retains its existing unchecked semantics. Runtime
+messages explicitly record the old/new DLL hashes when an upgrade occurs.
+
+### Matrox msi95.dll ownership rule (2026-11-20)
+
+`game/msi95.dll` is exclusively an installer-managed rendering DLL.
+On every verified Matrox prepare/launch (or `--install-only`), after
+authenticating the original OEM game files and the patched EXE, the launcher
+compares its SHA-256 with the DLL embedded in the running installer:
+
+- **Identical:** keep the existing file byte-for-byte without rewriting it.
+- **Different, whether recognized or not:** replace it automatically with
+  the verified embedded DLL. No legacy SHA-256 allowlist and no user action.
+- **Missing:** restore the embedded DLL.
+- A temporary rollback protects against failed updates; it is removed after
+  successful verification. No persistent backup for launcher-supplied DLLs.
+- No proprietary DLL backup is created. The original Matrox MSI95 is
+  verified from the user-owned CD and omitted from the installed tree.
+  An old authenticated `msi95.dll.bak` is cleaned up automatically.
+- A symlink or non-regular file is rejected rather than followed for safety.
+
+The explicit read-only `--verify` mode never performs replacements.
+
+### Experimental Matrox crash investigation (2026-11-20)
+
+The OEM Matrox driver replacement is verified, but a user Wine 11.19
+session crashed in `splanetw.exe` after a scene transition at frame 498.
+Access violation: `0xC0000005`, game EIP `0x00494965`, read address
+`0x00000024`. The source of the null pointer is not yet established.
+The experimental MSI95 now records instruction bytes near the fault in
+`ScorchedPlanetFix.log` when `[Debug] Log=1`; this addition does not
+modify the game or intercept fault handling. The launcher accurately
+identifies status `0xC0000005` as a crash. Native gameplay testing and
+review of the instruction trace are required before merging PR #36.
+
+### Matrox OEM scene-transition NULL guard (2026-11-20)
+
+Two Wine 11.19 sessions demonstrate a deterministic **game-owned** access
+violation at `splanetw.exe+0x94965` (read of `0x00000024` when `ESI=0`).
+Analysis of the exact original OEM game EXE from the user's CD identifies
+the call path `0x0042DB41 → 0x004186A0 → 0x00494960`: a resource cleanup
+path checks an unrelated state value, then attempts to dispose of a NULL
+resource handle. The game function contains an *existing* NULL-argument
+handler at `0x004949E9`, but dereferences the handle **before** reaching
+that check.
+
+The installer now applies a targeted, signature-verified 16-byte NULL
+guard to this function (no other game binary edits). It inserts a guard
+in the verified unused 13-byte INT3 code cave immediately preceding
+the function, branches to the *existing* NULL handler on NULL input,
+and resumes the original code unchanged for non-NULL input.
+No proprietary code or full game EXE is bundled. The executable must
+match the exact authenticated OEM original SHA-256.
+
+For existing installations, the exact previous installer-patched
+`game/splanetw.exe` (SHA-256 `333de76b...`) is automatically upgraded
+in place to the guarded SHA-256 `52b5f604...` using a verified temporary
+rollback transaction. No new `.bak` is created; the authentic original
+`game/splanetw.exe.bak` is preserved. Unknown/custom executables are
+rejected, and the strict read-only `--verify` option performs no migration.
+
+**The patch is experimentally justified by disassembly and crash logs,
+but its gameplay impact is not yet verified under Wine/Windows.
+PR #36 remains draft and unmerged pending real-world validation.**
+
+### Repeated-click crash in Matrox briefing (experimental guard, 2026-11-20)
+
+Repeated clicking on the mission briefing can lead to an object-list entry
+with value `0x00000002` being dereferenced as a pointer at `0x004858CE`.
+The exact OEM PE32 disassembly shows a loop that fails to validate entry
+alignment. A **16-byte** signature-verified guard now skips DWORD-misaligned
+entries, preserving the original iteration and behavior for aligned pointers.
+This is defensive: it does not yet explain how the invalid entry enters
+the list, and requires gameplay testing. The installer upgrades exact known
+prior patched EXEs automatically, preserving `splanetw.exe.bak` and never
+creating a DLL backup. A fresh ISO install produces the guarded executable
+directly, without bundling game code.
+
+### Matrox briefing crash: removed 256-allocation MSI95 limit (2026-11-20)
+
+In a reproducible rapid-briefing-click Wine 11.19 crash, the experimental
+MSI95 DLL exhausted its own arbitrary **256-live-heap tracking table**:
+the log shows **41 rejected 4-page texture allocations**, then the game
+dereferenced a NULL table at `0x00482DEC`. This is a serious and previously
+unrecognized driver limitation. The DLL now tracks allocated texture heaps
+in a dynamically growing table, rather than returning NULL once 256 are
+live. The previous Matrox EXE guards remain experimental; game and
+renderer behavior under Wine is **not yet validated** after this change.
+
+### Matrox mission exit crash: scene-list diagnostics (2026-11-20)
+
+The dynamic MSI95 heap limit fix allowed the game to progress beyond
+repeated briefing clicks and into gameplay. However, quitting via
+the main menu still produced `0xC0000005` at `splanetw.exe:0x0048302D`
+after frame 4152. The game's own list manager has a NULL
+item-table pointer while its element count is nonzero; a previous
+crash at `0x00482DEC` involved the same type of routine.
+No MSI95 heap allocation rejects or OOMs occurred in this run.
+
+This experimental build adds diagnostic-only `AV_SCENE_LIST`
+and `AV_HEAP_TRACKER` snapshots when `[Debug] Log=1`.
+It intentionally makes **no third speculative game EXE patch**;
+shutdown stability remains unverified. Please test quitting from
+the main menu and send the new `ScorchedPlanetFix.log` if it crashes.

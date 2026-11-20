@@ -476,7 +476,7 @@ pub fn install_image(
     mut log:impl FnMut(&str),
 ) -> Result<InstallReport,String> {
     if destination.exists() || destination.is_symlink(){
-        return Err("Existing splanet installation: refusing to overwrite".into());
+        return Err("Existing game installation: refusing to overwrite".into());
     }
     // CUE/BIN is normalized to a temporary data-only ISO. The guard deletes
     // it on any success/error path; source .cue and .bin stay read-only.
@@ -520,13 +520,13 @@ pub fn install_image(
     // directory. Temp contains only the required source trees, not the CD's
     // obsolete installers/DirectX/Mystique/Verite directories.
     let temp=parent.join(format!(".scorchedplanetfix-extract-{}",std::process::id()));
-    let staging=parent.join(format!(".splanet-setup-{}",std::process::id()));
+    let staging=parent.join(format!(".scorchedplanetfix-game-setup-{}",std::process::id()));
     if temp.exists() || staging.exists() || temp.is_symlink() || staging.is_symlink(){
         return Err("Temporary directory already exists: manual cleanup required (no files overwritten)".into());
     }
     fs::create_dir(&temp).map_err(|e|format!("Could not create temporary extraction directory: {e}"))?;
     let install_result=(||{
-        fs::create_dir(&staging).map_err(|e|format!("Could not create temporary installation directory: {e}"))?;
+        fs::create_dir(&staging).map_err(|e|format!("Could not create temporary game/ installation directory: {e}"))?;
         let total: u64=inventory.files.values().map(|a|a.size).sum();
         let mut done=0u64;
         // Phase 1: extract exact original SPLANET and VOODOO trees under temp.
@@ -641,7 +641,7 @@ pub fn install_image(
         // complete immutable-file audit has succeeded. Failed staging is
         // cleaned up, leaving the destination absent.
         if destination.exists() || destination.is_symlink() {
-            return Err("splanet directory created during installation: operation cancelled".into());
+            return Err("game/ directory created during installation: operation cancelled".into());
         }
         fs::rename(&staging,destination)
             .map_err(|e|format!("Unable to finalize installation: {e}"))?;

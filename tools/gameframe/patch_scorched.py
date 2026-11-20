@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scorched Planet-specific, pinned GameFrame fix: native desktop 4:3, one game window, 60 FPS.
+"""Scorched Planet-specific, pinned GameFrame fix: native desktop 4:3, one game window, configurable FPS.
 
 Applied only to an ephemeral checkout of tanepiper/game-frame at its exact pinned
 commit in GitHub Actions, never to the upstream source or CyberGladiatorsFix.
@@ -32,10 +32,21 @@ def main() -> None:
             std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_else(|_| "unknown".into()),
         ));''')
 
+    # An explicit launcher-controlled debug switch is required: without it,
+    # upstream shim::log::write falls back to stderr even when GLIDE_LOG is
+    # absent. Patch the Scorched-only, ephemeral checkout (NOT upstream).
+    replace("../../shim/src/log.rs",
+            'pub fn write(msg: std::fmt::Arguments) {',
+            '''pub fn write(msg: std::fmt::Arguments) {
+    if std::env::var("SCORCHED_FIX_LOG").ok().as_deref() != Some("1") {
+        return;
+    }''')
+
     # No ChangeDisplaySettings/ChangeDisplaySettingsEx hooks are needed:
     # GameFrame is a borderless OpenGL wrapper and never switches screen modes.
     replace("win32.rs", "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;",
             "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;\n"
+            "    pub fn SetForegroundWindow(w: HWND) -> BOOL;\n"
             "    pub fn IsWindow(w: HWND) -> BOOL;\n"
             "    pub fn GetWindowTextA(w: HWND, name: *mut u8, max: i32) -> i32;\n"
             "    pub fn GetSystemMetrics(index: i32) -> i32;")
@@ -91,6 +102,13 @@ pub fn adopt_scorched(w: u32, h: u32) -> Option<HWND> {
     if !fallback.is_null() && fallback!=sized {
         unsafe { ShowWindow(fallback,0); }
     }
+    // The early fallback can cause the console/desktop to stay in front when
+    // the actual game's HWND is adopted. Ask Windows for foreground ONCE,
+    // immediately after hiding fallback, while the user-initiated launch is
+    // still starting. Win32 may deny the request due to foreground lock;
+    // never force focus in the frame loop or steal it after Alt-Tab.
+    let activated=unsafe { SetForegroundWindow(sized) }!=0;
+    log!("SCORCHED_WINDOW: initial foreground request accepted={activated}");
     log!("SCORCHED_WINDOW: adopted original game HWND {sized:?}; fallback hidden; input and OpenGL on one HWND");
     Some(sized)
 }
@@ -124,7 +142,14 @@ use std::time::{Duration, Instant};
 fn limit_scorched_fps() {
     // Limit the game's calls themselves (and thus game time), not only the
     // OpenGL presenter. A 120 Hz VSync would otherwise run the game at 120.
-    if std::env::var_os("SCORCHED_GLIDE_FPS_60").is_none() { return; }
+    static LIMIT: OnceLock<u32> = OnceLock::new();
+    let fps=*LIMIT.get_or_init(|| {
+        std::env::var("SCORCHED_GLIDE_FPS_LIMIT").ok()
+            .and_then(|value|value.parse::<u32>().ok())
+            .filter(|fps|*fps<=240)
+            .unwrap_or(60)
+    });
+    if fps==0 { return; } // FPSLimit=0 disables frame pacing
     static NEXT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
     let clock=NEXT.get_or_init(||Mutex::new(None));
     let mut next=clock.lock().unwrap_or_else(|e|e.into_inner());
@@ -133,7 +158,8 @@ fn limit_scorched_fps() {
         if deadline>now { std::thread::sleep(deadline.duration_since(now)); }
     }
     // Do not try to catch up missed frames; cap independent of monitor Hz.
-    *next=Some(Instant::now()+Duration::from_nanos(16_666_667));
+    let interval_ns=(1_000_000_000u64+fps as u64-1)/fps as u64;
+    *next=Some(Instant::now()+Duration::from_nanos(interval_ns));
 }
 """)
     replace("api/sst.rs",
@@ -154,6 +180,118 @@ fn limit_scorched_fps() {
     flush();
     limit_scorched_fps();
     super::movie::frame();""")
+    # Passive Windows-only game-thread CPU accounting. It distinguishes a
+    # busy 2.7s legacy fade loop from a 2.7s Sleep/OS wait without freezing,
+    # poking game state, hooking APIs, or modifying original EXE bytes.
+    replace("win32.rs", "#[repr(C)]\n#[derive(Clone, Copy, Default)]\npub struct RECT {",
+            """#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SCORCHED_FILETIME { pub low: u32, pub high: u32 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct RECT {""")
+    replace("win32.rs", '    pub fn GetCurrentProcessId() -> u32;',
+            '''    pub fn GetCurrentProcessId() -> u32;
+    pub fn GetCurrentThread() -> HMODULE;
+    pub fn GetThreadTimes(h: HMODULE, created: *mut SCORCHED_FILETIME,
+        exited: *mut SCORCHED_FILETIME, kernel: *mut SCORCHED_FILETIME,
+        user: *mut SCORCHED_FILETIME) -> BOOL;''')
+
+    # Diagnostic only: measure the wall-clock time OUTSIDE vs INSIDE
+    # grBufferSwap. Existing logs showed a 9.212s / 114-frame menu interval
+    # when New Game was selected, but could not tell whether the game waited
+    # before calling Glide again, or our wrapper/render queue blocked.
+    # Do not change FadeLow, simulated time, frame limiter or game input.
+    replace("api/sst.rs", "fn limit_scorched_fps() {",
+            """struct ScorchedFrameClock {
+    last_end: Option<Instant>,
+    last_end_cpu: Option<u64>,
+    frame: u32,
+    reports: u32,
+}
+static SCORCHED_FRAME_CLOCK: OnceLock<Mutex<ScorchedFrameClock>> = OnceLock::new();
+
+fn scorched_clock() -> &'static Mutex<ScorchedFrameClock> {
+    SCORCHED_FRAME_CLOCK.get_or_init(|| Mutex::new(ScorchedFrameClock {
+        last_end: None,
+        last_end_cpu: None,
+        frame: 0,
+        reports: 0,
+    }))
+}
+
+/// Called only from game grBufferSwap. This gap excludes *all* time inside
+/// the previous Glide presentation, including the FPS cap and movie frame.
+fn scorched_frame_enter() -> Option<Instant> {
+    static LOG_TIMING: OnceLock<bool> = OnceLock::new();
+    if !*LOG_TIMING.get_or_init(|| std::env::var("SCORCHED_FIX_LOG")
+        .ok().as_deref() == Some("1")) {
+        return None;
+    }
+    let now=Instant::now();
+    let cpu_now=scorched_thread_cpu_100ns();
+    let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
+    state.frame=state.frame.saturating_add(1);
+    let frame=state.frame;
+    let gap=state.last_end.map(|end| now.duration_since(end).as_millis());
+    let cpu_gap_ms=state.last_end_cpu.zip(cpu_now)
+        .map(|(before,after)|after.saturating_sub(before)/10_000);
+    let report=if let Some(gap_ms)=gap {
+        if gap_ms >= 80 && state.reports < 32 {
+            state.reports+=1;
+            Some(gap_ms)
+        } else { None }
+    } else { None };
+    drop(state);
+    if let Some(gap_ms)=report {
+        log!("SCORCHED_GAME_FRAME_GAP frame={frame} outside_wrapper_ms={gap_ms} game_thread_cpu_ms={cpu_gap_ms:?}");
+    }
+    Some(now)
+}
+
+fn scorched_frame_leave(start: Option<Instant>) {
+    if let Some(start)=start {
+        let now=Instant::now();
+        let inside_ms=now.duration_since(start).as_millis();
+        let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
+        state.last_end=Some(now);
+        state.last_end_cpu=scorched_thread_cpu_100ns();
+        let frame=state.frame;
+        let report=inside_ms >= 80 && state.reports < 32;
+        if report { state.reports+=1; }
+        drop(state);
+        if report {
+            log!("SCORCHED_GLIDE_FRAME_DELAY frame={frame} inside_wrapper_ms={inside_ms}");
+        }
+    }
+}
+
+fn limit_scorched_fps() {""")
+    replace("api/sst.rs", "fn scorched_clock() ->",
+            """fn scorched_thread_cpu_100ns() -> Option<u64> {
+    let mut created=crate::win32::SCORCHED_FILETIME::default();
+    let mut exited=crate::win32::SCORCHED_FILETIME::default();
+    let mut kernel=crate::win32::SCORCHED_FILETIME::default();
+    let mut user=crate::win32::SCORCHED_FILETIME::default();
+    let ok=unsafe { crate::win32::GetThreadTimes(
+        crate::win32::GetCurrentThread(), &mut created, &mut exited,
+        &mut kernel, &mut user) };
+    if ok==0 { return None; }
+    let ticks=|v:crate::win32::SCORCHED_FILETIME|
+        ((v.high as u64)<<32) | v.low as u64;
+    Some(ticks(kernel).saturating_add(ticks(user)))
+}
+
+fn scorched_clock() ->""")
+    replace("api/sst.rs",
+            '    shim::call!("grBufferSwap", _interval);\n    super::lfb::finish_write();',
+            '    shim::call!("grBufferSwap", _interval);\n    let frame_started=scorched_frame_enter();\n    super::lfb::finish_write();')
+    replace("api/sst.rs",
+            '    limit_scorched_fps();\n    super::movie::frame();',
+            '    limit_scorched_fps();\n    super::movie::frame();\n    scorched_frame_leave(frame_started);')
+
+
     # The existing source has a unitary render thread, limiting game-frame
     # callbacks limits both rendering and original-game simulation speed.
 
@@ -469,7 +607,7 @@ mod tests {
             '            crate::gl::check(gl, "in the frame");',
             '            overlay.draw(gl, lfb, cw, ch, x0, y0, vw, vh);\n            crate::gl::check(gl, "in the frame");')
 
-    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + 60 FPS + menu telemetry + root-menu version overlay")
+    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + one-shot startup foreground + INI-configured FPS + menu telemetry + root-menu version overlay")
     for file in ["window.rs","win32.rs","api/sst.rs"]:
         text=(ROOT/file).read_text()
         if "ChangeDisplaySettings" in text:
