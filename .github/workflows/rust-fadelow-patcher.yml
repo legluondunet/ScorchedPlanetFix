@@ -128,7 +128,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot compile MSI95 x86 input reentrancy test' }
           Push-Location $folder
           try {
-            $env:MATROX_MSI_LOG = '0'
+            $env:MATROX_MSI_LOG = '1'
             $env:MATROX_MSI_FPS_LIMIT = '0'
             $env:MATROX_MSI_BORDERLESS = '0'
             # Hosted Windows CI cannot provide a desktop HWND. Runtime GUI
@@ -136,6 +136,21 @@ jobs:
             $env:SCORCHED_ALLOW_HEADLESS_INPUT_SMOKE = '1'
             & $exe
             if ($LASTEXITCODE -ne 0) { throw 'MSI95 x86 recursive callback regression failed' }
+            # The runtime log must identify Windows/Wine without a matching launcher log.
+            $runtimeLog = Join-Path $env:RUNNER_TEMP 'ScorchedPlanetFix.log'
+            if (-not (Test-Path -LiteralPath $runtimeLog)) { throw 'MSI95 host log was not generated' }
+            $diagnostics = Get-Content -LiteralPath $runtimeLog -Raw
+            if (-not $diagnostics.Contains('SYS-OS: runtime=Windows native')) {
+              throw 'MSI95 runtime host detection did not identify native Windows'
+            }
+            if (-not $diagnostics.Contains('SYS-WINE: not detected')) {
+              throw 'MSI95 runtime Wine marker missing on native Windows'
+            }
+            if (-not $diagnostics.Contains('SYS-PROTON: not detected (native Windows)')) {
+              throw 'MSI95 runtime Proton marker missing on native Windows'
+            }
+            Write-Host 'MSI95_HOST_LOG_SMOKE_PASS native Windows labels in standalone ScorchedPlanetFix.log'
+            Remove-Item -LiteralPath $runtimeLog -Force
           } finally {
             Pop-Location
             Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
