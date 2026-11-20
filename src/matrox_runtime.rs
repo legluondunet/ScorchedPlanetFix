@@ -171,37 +171,52 @@ fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
     Ok(())
 }
 
-/// A working, hash-locked OEM installation may use a prior build of OUR OWN
-/// open-source DLL. The bundled MSI95 is the installer's file: repair/update
-/// it automatically, without needing a whitelist for each CI binary hash.
-/// This is safe only AFTER all 66 original resources + original OEM driver
-/// and EXE backups and the patched EXE are independently authenticated.
-/// Never change a custom game executable, original backup, or user resources.
+/// The active MSI95 is installer-managed: its current hash is used ONLY
+/// to detect equality with the embedded DLL, never as a recognition/allowlist
+/// test. Even an arbitrary, unrecognized DLL is replaced. This helper must
+/// only be called AFTER authenticating the original game and OEM backups.
+fn ensure_owned_driver(
+    game:&Path,expected:&str,
+    load_embedded:impl FnOnce()->Result<Vec<u8>,String>,
+    mut log:impl FnMut(&str),
+    verify_after:impl FnMut()->Result<(),String>,
+)->Result<(),String>{
+    let active=game.join("msi95.dll");
+    let current_hash=match fs::symlink_metadata(&active){
+        Ok(_)=>Some(hash_file(&active)?),
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
+        Err(e)=>return Err(format!("Cannot inspect MSI95 DLL {}: {e}",active.display())),
+    };
+    // Identical content: do not even load or rewrite the DLL. Preserves
+    // timestamps, avoids transient file locks and never opens a rollback.
+    if current_hash.as_deref()==Some(expected){
+        log("MSI95: identical to bundled DLL (SHA-256), leaving file untouched.");
+        return Ok(());
+    }
+    let new_dll=load_embedded()?;
+    if digest(&new_dll)!=expected{
+        return Err("Installer-provided MSI95 DLL does not match expected SHA-256".into());
+    }
+    log(&format!(
+        "MSI95: installing embedded DLL: current={} bundled={} (no old-DLL recognition required).",
+        current_hash.as_deref().unwrap_or("(missing)"),expected));
+    replace_owned_driver(game,&new_dll,expected,verify_after)?;
+    log("MSI95: embedded DLL installed and verified; temporary rollback removed; original OEM msi95.dll.bak unchanged.");
+    Ok(())
+}
+
+/// The launcher owns game/msi95.dll, whether it already contains a former
+/// clean-room build or an unknown DLL. Its current hash is only compared
+/// against the hash of the embedded driver. The OEM game (including the
+/// original proprietary msi95.dll.bak and the patched EXE) is verified
+/// independently before any changes to the active renderer.
 pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
     let game=root.join(GAME_FOLDER);
-    if let Err(current_error)=verify_prepared(root){
-        matrox::verify_installed_game(&game,PATCHED_EXE_SHA)
-            .map_err(|e|format!("Cannot update MSI95: original game authentication failed: {e}"))?;
-        check_ini(&game.join("splanet.ini"))?;
-        let current=game.join("msi95.dll");
-        let driver_current=match fs::symlink_metadata(&current){
-            Ok(_)=>Some(hash_file(&current)?),
-            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
-            Err(e)=>return Err(format!("Cannot inspect MSI95: {e}")),
-        };
-        // If the bundled driver already matches, do not attempt a spurious
-        // repair. The original verification error must then be reported.
-        if driver_current.as_deref()==Some(expected_driver_hash()){
-            return Err(current_error);
-        }
-        let replacement=cleanroom_driver(root)?;
-        log(&format!(
-            "MSI95: original OEM files and patched EXE authenticated; updating installer-owned driver from {} to {}.",
-            driver_current.as_deref().unwrap_or("(missing)"),expected_driver_hash()));
-        replace_owned_driver(&game,&replacement,expected_driver_hash(),
-                             ||verify_prepared(root))?;
-        log("MSI95: automatic update verified; original game/msi95.dll.bak preserved; no new permanent backup.");
-    }
+    matrox::verify_installed_game(&game,PATCHED_EXE_SHA)
+        .map_err(|e|format!("Cannot prepare Matrox MSI95: original game authentication failed: {e}"))?;
+    check_ini(&game.join("splanet.ini"))?;
+    ensure_owned_driver(&game,expected_driver_hash(),||cleanroom_driver(root),
+        |message|log(message),||verify_prepared(root))?;
     matrox_iso::update_generated_ini(&game)?;
     settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
     Ok(game)
@@ -308,6 +323,44 @@ mod tests {
         fs::remove_file(&active).unwrap();
         replace_owned_driver(&root,replacement,&expected,||Ok(())).unwrap();
         assert_eq!(fs::read(&active).unwrap(),replacement);
+        assert!(!root.join("msi95.dll.bak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn installed_driver_is_replaced_even_when_unrecognized_and_identical_is_untouched(){
+        let root=std::env::temp_dir().join(format!("msi95-unconditional-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let active=root.join("msi95.dll");
+        let embedded=b"the exact installer-owned DLL";
+        let expected=digest(embedded);
+        // Absolutely arbitrary bytes. No legacy-driver fingerprint or PE header.
+        fs::write(&active,b"unrecognized third-party MSI95 payload").unwrap();
+        let mut messages=Vec::new();
+        ensure_owned_driver(&root,&expected,||Ok(embedded.to_vec()),
+            |line|messages.push(line.to_string()),
+            ||if hash_file(&active)?==expected{Ok(())}else{Err("bad update".into())}).unwrap();
+        assert_eq!(fs::read(&active).unwrap(),embedded);
+        assert!(messages.iter().any(|line|line.contains("no old-DLL recognition required")));
+        assert!(!root.join(".msi95.dll.replacing").exists());
+        assert!(!root.join("msi95.dll.bak").exists());
+
+        // Exact bundled DLL => no file modification, no loader invocation,
+        // and no touching a pre-existing transaction marker.
+        let blocked=root.join(".msi95.dll.installing");
+        fs::write(&blocked,b"do not modify").unwrap();
+        ensure_owned_driver(&root,&expected,
+            ||Err("identical driver was needlessly loaded".into()),
+            |_|{},||Err("identical driver was needlessly reverified".into())).unwrap();
+        assert_eq!(fs::read(&active).unwrap(),embedded);
+        assert_eq!(fs::read(&blocked).unwrap(),b"do not modify");
+        fs::remove_file(&blocked).unwrap();
+
+        // Also repair a missing active driver, without creating a backup.
+        fs::remove_file(&active).unwrap();
+        ensure_owned_driver(&root,&expected,||Ok(embedded.to_vec()),|_|{},
+            ||if hash_file(&active)?==expected{Ok(())}else{Err("bad repair".into())}).unwrap();
+        assert_eq!(fs::read(&active).unwrap(),embedded);
         assert!(!root.join("msi95.dll.bak").exists());
         fs::remove_dir_all(root).unwrap();
     }

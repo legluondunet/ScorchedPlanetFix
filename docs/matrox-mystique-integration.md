@@ -272,3 +272,19 @@ is a generic safe update for later source revisions, without
 hardcoding every transient CI-produced DLL SHA-256. Original backups,
 saves, and custom `splanet.ini` are kept. The read-only `--verify`
 option remains strictly non-mutating.
+
+## Strict embedded-DLL replacement policy (2026-11-20)
+
+The launcher manages `game/msi95.dll` as its own runtime component,
+independently of the identity of whatever previously occupied the path.
+After validating the 66 OEM reference files, preserved proprietary
+`msi95.dll.bak`, original `splanetw.exe.bak`, the patched EXE, and
+native configuration safety, it uses the active DLL's SHA-256 only
+to determine whether it is *identical* to the embedded version.
+If yes, it **does not rewrite the file**. Otherwise, it installs the
+embedded MSI95 DLL, irrespective of whether the previous DLL hash
+is known to the project. Missing files are restored.
+The replace-and-verify procedure has temporary rollback protection and
+never leaves permanent backups of installer-owned files.
+Non-regular files and symlinks are rejected for filesystem safety.
+`--verify` remains read-only.

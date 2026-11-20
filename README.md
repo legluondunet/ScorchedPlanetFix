@@ -168,3 +168,22 @@ A normal launch or `--install-only` updates the driver as needed. The
 read-only `--verify` mode still checks without modifying anything, and
 `--launch-no-verify` retains its existing unchecked semantics. Runtime
 messages explicitly record the old/new DLL hashes when an upgrade occurs.
+
+### Matrox msi95.dll ownership rule (2026-11-20)
+
+`game/msi95.dll` is exclusively an installer-managed rendering DLL.
+On every verified Matrox prepare/launch (or `--install-only`), after
+authenticating the original OEM game files and the patched EXE, the launcher
+compares its SHA-256 with the DLL embedded in the running installer:
+
+- **Identical:** keep the existing file byte-for-byte without rewriting it.
+- **Different, whether recognized or not:** replace it automatically with
+  the verified embedded DLL. No legacy SHA-256 allowlist and no user action.
+- **Missing:** restore the embedded DLL.
+- A temporary rollback protects against failed updates; it is removed after
+  successful verification. No persistent backup for launcher-supplied DLLs.
+- The *separate* `game/msi95.dll.bak` remains the original proprietary
+  Matrox driver, authenticated and never overwritten.
+- A symlink or non-regular file is rejected rather than followed for safety.
+
+The explicit read-only `--verify` mode never performs replacements.
