@@ -604,7 +604,7 @@ No arguments:
 --install-only:
   Install the automatically recognized edition without launching or safely
   migrate an existing new-layout installation. Matrox OEM originals are kept
-  as .bak inside game/. Retail Glide backup rules remain unchanged.
+  as .bak inside game/. Retail Glide DLL updates create no permanent backups.
 --verify:
   Read-only SHA-256 audit of the automatically selected installed edition,
   including Matrox original backups and current MSI95 DLL; never modifies.
@@ -618,10 +618,10 @@ No arguments:
 
 Retail 3dfx uses bundled GameFrame; Matrox OEM uses bundled open-source MSI95.
   At normal launch, after verifying immutable game files, an older or
-  unknown regular game/glide.dll is moved to glide.dll.bak,
-  replacing any previous regular backup rather than adding more files.
-  The embedded GameFrame DLL is installed and verified before play.
-  This backup replacement and both DLL hashes are logged.
+  unknown regular game/glide.dll is replaced by embedded GameFrame.
+  If identical, it is not rewritten. A temporary rollback protects against
+  errors, then is deleted. No new glide.dll.bak is created. An existing
+  legacy glide.dll.bak is left untouched. Both DLL hashes are logged.
   Non-regular files and symlinks are refused for safety.
   --verify is strictly read-only, including GameFrame validation.
 
@@ -722,10 +722,11 @@ mod tests {
         assert!(!h.contains("--3dfx-logo"));
         assert!(!h.contains("nGlide is proprietary freeware and not bundled"));
         // Regression: CLI help must match the current automatic migration path.
-        assert!(h.contains("glide.dll.bak"));
-        assert!(h.contains("replacing any previous regular backup"));
+        assert!(h.contains("No new glide.dll.bak is created"));
+        assert!(h.contains("legacy glide.dll.bak is left untouched"));
+        assert!(h.contains("temporary rollback"));
+        assert!(!h.contains("replacing any previous regular backup"));
         assert!(!h.contains("unique .bak name"));
-        assert!(!h.contains("Existing backups are never overwritten"));
         assert!(h.contains("--verify is strictly read-only"));
         assert!(!h.contains("move splanet/glide.dll aside"));
     }

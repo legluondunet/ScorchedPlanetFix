@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! GameFrame Glide 2.11 -> OpenGL: the only supported v2 Glide backend.
 //! Builds from pinned Apache-2.0 source, embeds the 32-bit DLL into the
-//! Windows x64 launcher. A different regular glide.dll is backed up before
-//! installation of the embedded GameFrame; unknown files are never discarded.
+//! Windows x64 launcher. A different regular glide.dll is replaced with a
+//! temporary rollback; no permanent backup of installer-supplied DLLs.
 use crate::settings;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -35,14 +35,13 @@ fn desktop()->Result<(u32,u32),String>{
 fn vacant(path:&Path)->Result<(),String>{
     match fs::symlink_metadata(path){
         Err(e) if e.kind()==std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_)=>Err(format!("GameFrame backup/staging path already exists: {}",path.display())),
+        Ok(_)=>Err(format!("GameFrame temporary staging/rollback path already exists: {}",path.display())),
         Err(e)=>Err(format!("Cannot inspect {}: {e}",path.display())),
     }
 }
 
-/// Hash any *regular* file named glide.dll. The launcher backs up even an
-/// unknown or malformed DLL instead of rejecting it; symlinks and directories
-/// remain forbidden, and --verify continues to check the exact bundled bytes.
+/// Hash any regular glide.dll: even an unknown or malformed DLL is replaceable
+/// without permanent backup. Symlinks/directories are not touched.
 fn regular_file_hash(path:&Path)->Result<String,String>{
     let meta=fs::symlink_metadata(path)
         .map_err(|e|format!("Cannot inspect {}: {e}",path.display()))?;
@@ -61,33 +60,23 @@ fn regular_file_hash(path:&Path)->Result<String,String>{
     Ok(format!("{:x}",hasher.finalize()))
 }
 
-/// Single managed backup slot: previous regular backups are replaced by the
-/// current glide.dll during migration. Never follow a symlink or replace dirs.
-fn backup_slot(game:&Path)->Result<(std::path::PathBuf,bool),String>{
-    let path=game.join("glide.dll.bak");
-    match fs::symlink_metadata(&path){
-        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok((path,false)),
-        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink()=>Ok((path,true)),
-        Ok(_)=>Err(format!("Refusing to overwrite a non-regular or symlinked Glide backup: {}",path.display())),
-        Err(e)=>Err(format!("Cannot inspect Glide backup {}: {e}",path.display())),
-    }
-}
-
-/// Stage and verify GameFrame before moving anything. Atomically replace
-/// glide.dll.bak with the old active DLL and activate the staged DLL. On
-/// activation/verification failure, restore the old active DLL from backup.
-fn replace_with_backup(game:&Path,old_hash:&str,new_hash:&str)->Result<(std::path::PathBuf,bool),String>{
+/// A previous glide.dll lives in .glide-gameframe-rollback.tmp only
+/// during replacement, and is restored on failure. A pre-existing
+/// glide.dll.bak is user data: this function never alters it.
+fn replace_with_rollback(game:&Path,old_hash:&str,new_hash:&str,
+                         mut verify_after:impl FnMut(&Path)->Result<(),String>)->Result<(),String>{
     let target=game.join("glide.dll");
-    let (backup,replaced_existing_backup)=backup_slot(game)?;
     let stage=game.join(".glide-gameframe-update.tmp");
+    let rollback=game.join(".glide-gameframe-rollback.tmp");
     vacant(&stage)?;
+    vacant(&rollback)?;
     let staged=(||->Result<(),String>{
         let mut out=OpenOptions::new().write(true).create_new(true).open(&stage)
             .map_err(|e|format!("Cannot stage GameFrame update: {e}"))?;
         out.write_all(GLIDE_DLL).map_err(|e|format!("Cannot write staged GameFrame: {e}"))?;
         out.sync_all().map_err(|e|format!("Cannot sync staged GameFrame: {e}"))?;
         drop(out);
-        if digest(&regular_dll(&stage)?)!=new_hash{
+        if digest(&regular_dll(&stage)?)!=new_hash {
             return Err("Staged GameFrame DLL hash mismatch".into());
         }
         Ok(())
@@ -96,34 +85,27 @@ fn replace_with_backup(game:&Path,old_hash:&str,new_hash:&str)->Result<(std::pat
         let _=fs::remove_file(&stage);
         return Err(e);
     }
-    // Prevent replacing user changes made between initial check and backup.
     if regular_file_hash(&target).as_deref()!=Ok(old_hash){
         let _=fs::remove_file(&stage);
-        return Err("Existing glide.dll changed before backup; refusing replacement".into());
+        return Err("Existing glide.dll changed during update; refusing replacement".into());
     }
-    // Recheck the backup slot after staging to reject a newly placed symlink
-    // or directory. Windows MoveFileExW(REPLACE_EXISTING) and Unix rename(2)
-    // replace a regular destination atomically without delete-then-rename.
-    if backup_slot(game).map(|(_,exists)|exists)!=Ok(replaced_existing_backup){
+    if let Err(e)=fs::rename(&target,&rollback){
         let _=fs::remove_file(&stage);
-        return Err("Glide backup changed before replacement; refusing".into());
-    }
-    if let Err(e)=fs::rename(&target,&backup){
-        let _=fs::remove_file(&stage);
-        return Err(format!("Cannot back up existing glide.dll to {}: {e}",backup.display()));
+        return Err(format!("Cannot stage previous Glide DLL for temporary rollback: {e}"));
     }
     if let Err(e)=fs::rename(&stage,&target){
-        let restored=fs::rename(&backup,&target);
+        let restored=fs::rename(&rollback,&target);
         let _=fs::remove_file(&stage);
         return Err(format!("Cannot activate bundled GameFrame: {e}; restore={restored:?}"));
     }
-    if let Err(e)=verify_local_gameframe(game){
-        let restored=fs::remove_file(&target).and_then(|_|fs::rename(&backup,&target));
+    if let Err(e)=verify_after(game){
+        let restored=fs::remove_file(&target).and_then(|_|fs::rename(&rollback,&target));
         return Err(format!("Bundled GameFrame validation failed after replacement: {e}; restore={restored:?}"));
     }
-    Ok((backup,replaced_existing_backup))
+    fs::remove_file(&rollback)
+        .map_err(|e|format!("GameFrame installed but temporary rollback cleanup failed ({}): {e}",rollback.display()))?;
+    Ok(())
 }
-
 
 #[cfg(gameframe_embedded)]
 pub const GLIDE_DLL: &[u8] = include_bytes!(env!("SCORCHED_GAMEFRAME_DLL_PATH"));
@@ -195,15 +177,15 @@ pub fn verify_local_gameframe(game:&Path)->Result<(),String>{
     let actual=digest(&regular_dll(&path)?);
     if actual!=expected {
         return Err(format!(
-            "Installed glide.dll does not match bundled GameFrame: {} (SHA-256 {actual}). Run the normal launcher to back up and replace it; --verify is read-only.",
+            "Installed glide.dll does not match bundled GameFrame: {} (SHA-256 {actual}). Run the normal launcher to replace it; --verify is read-only.",
             path.display()));
     }
     Ok(())
 }
 
-/// Read-only guard for --install-only. A different *regular* glide.dll is
-/// eligible for automatic backup, but reject symlinks and backup/staging
-/// conflicts before any game executable/INI migration touches game files.
+/// Read-only guard for --install-only. Different regular DLLs may be
+/// replaced without permanent backup; reject occupied transaction paths,
+/// symlinks and directories before changing game files.
 pub fn preflight_glide(game:&Path)->Result<(),String>{
     let expected=validate_embedded()?
         .ok_or("ScorchedPlanetFix v2 requires embedded GameFrame; no external fallback is supported")?;
@@ -214,7 +196,7 @@ pub fn preflight_glide(game:&Path)->Result<(),String>{
             let actual=regular_file_hash(&path)?;
             if actual==expected {return Ok(());}
             vacant(&game.join(".glide-gameframe-update.tmp"))?;
-            let _=backup_slot(game)?;
+            vacant(&game.join(".glide-gameframe-rollback.tmp"))?;
             Ok(())
         }
         Err(e)=>Err(format!("Cannot inspect Glide DLL: {e}")),
@@ -224,8 +206,9 @@ pub fn preflight_glide(game:&Path)->Result<(),String>{
 /// Install the embedded GameFrame. During normal gameplay the caller first
 /// audits all immutable game assets; explicit --install-only and first-time
 /// staged installation use their own validation procedures.
-/// Any different regular glide.dll (older GameFrame or external) replaces
-/// the single glide.dll.bak before installing GameFrame. Non-regular paths
+/// Any different regular glide.dll (older GameFrame or external) is replaced
+/// using an ephemeral rollback, never a permanent .bak. Existing glide.dll.bak
+/// files from earlier installations remain untouched. Non-regular paths
 /// and symlinks are never replaced.
 pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<bool,String>{
     let expected=validate_embedded()?
@@ -241,10 +224,9 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
             }
             // No obsolete fingerprint allowlist: the same safe replacement
             // applies to every different regular DLL. Its identity is the hash.
-            log(&format!("GAMEFRAME: existing glide.dll status=nonmatching old_sha256={actual}; starting protected backup and replacement"));
-            let (backup,replaced_existing_backup)=replace_with_backup(game,&actual,&expected)?;
-            log(&format!("GAMEFRAME: backup saved original={} backup={} replaced_existing_backup={replaced_existing_backup} old_sha256={actual} status=nonmatching",path.display(),backup.display()));
-            log(&format!("GAMEFRAME: installed bundled Glide DLL new_sha256={expected} source={SOURCE_COMMIT}; replacement successful; proceeding to game launch"));
+            log(&format!("GAMEFRAME: replacing old glide.dll sha256={actual} with bundled sha256={expected}; temporary rollback only"));
+            replace_with_rollback(game,&actual,&expected,verify_local_gameframe)?;
+            log(&format!("GAMEFRAME: bundled glide.dll installed sha256={expected} source={SOURCE_COMMIT}; rollback removed, existing glide.dll.bak untouched"));
             return Ok(true);
         }
         Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{}
@@ -427,7 +409,7 @@ mod tests{
 
     #[cfg(gameframe_embedded)]
     #[test]
-    fn unknown_valid_dll_is_backed_up_and_gameframe_installed(){
+    fn unknown_glide_is_replaced_without_permanent_backup(){
         let root=fixture();
         let mut foreign=GLIDE_DLL.to_vec();
         let last=foreign.len()-1;
@@ -438,72 +420,86 @@ mod tests{
         preflight_glide(&root).unwrap();
         let mut logs=Vec::new();
         ensure_glide(&root,&root,|entry|logs.push(entry.to_string())).unwrap();
-        assert_eq!(fs::read(&root.join("glide.dll.bak")).unwrap(),foreign);
         assert_eq!(fs::read(&file).unwrap(),GLIDE_DLL);
-        assert!(logs.iter().any(|s|s.contains("backup saved") && s.contains("old_sha256=")));
-        assert!(logs.iter().any(|s|s.contains("replacement successful")));
+        assert!(!root.join("glide.dll.bak").exists());
+        assert!(!root.join(".glide-gameframe-rollback.tmp").exists());
+        assert!(!root.join(".glide-gameframe-update.tmp").exists());
+        assert!(logs.iter().any(|s|s.contains("temporary rollback only")));
         verify_local_gameframe(&root).unwrap();
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(gameframe_embedded)]
     #[test]
-    fn existing_backup_is_replaced_without_extra_files(){
+    fn old_backup_is_never_changed_by_multiple_gameframe_updates(){
         let root=fixture();
         let target=root.join("glide.dll");
         let backup=root.join("glide.dll.bak");
-        fs::write(&backup,b"previous backup").unwrap();
+        fs::write(&backup,b"user's legacy backup retained").unwrap();
         let mut old1=GLIDE_DLL.to_vec();
         *old1.last_mut().unwrap()^=1;
         fs::write(&target,&old1).unwrap();
-        let mut logs=Vec::new();
-        ensure_glide(&root,&root,|msg|logs.push(msg.to_string())).unwrap();
-        assert_eq!(fs::read(&backup).unwrap(),old1);
+        ensure_glide(&root,&root,|_|{}).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(),b"user's legacy backup retained");
         assert_eq!(fs::read(&target).unwrap(),GLIDE_DLL);
-        assert!(logs.iter().any(|s|s.contains("replaced_existing_backup=true")));
         let mut old2=GLIDE_DLL.to_vec();
         *old2.last_mut().unwrap()^=2;
         fs::write(&target,&old2).unwrap();
         ensure_glide(&root,&root,|_|{}).unwrap();
-        assert_eq!(fs::read(&backup).unwrap(),old2);
-        assert_eq!(fs::read(&target).unwrap(),GLIDE_DLL);
+        assert_eq!(fs::read(&backup).unwrap(),b"user's legacy backup retained");
         ensure_glide(&root,&root,|_|{}).unwrap();
-        assert_eq!(fs::read(&backup).unwrap(),old2);
-        let names=fs::read_dir(&root).unwrap()
-            .map(|entry|entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(names.len(),2,"only active DLL and backup expected: {names:?}");
-        assert!(names.contains(&"glide.dll".to_string()));
-        assert!(names.contains(&"glide.dll.bak".to_string()));
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[cfg(gameframe_embedded)]
-    #[test]
-    fn directory_as_backup_blocks_replacement(){
-        let root=fixture();
-        let target=root.join("glide.dll");
-        let backup=root.join("glide.dll.bak");
-        fs::write(&target,b"foreign DLL").unwrap();
-        fs::create_dir(&backup).unwrap();
-        assert!(preflight_glide(&root).is_err());
-        assert!(ensure_glide(&root,&root,|_|{}).is_err());
-        assert_eq!(fs::read(&target).unwrap(),b"foreign DLL");
-        assert!(backup.is_dir());
+        assert_eq!(fs::read(&backup).unwrap(),b"user's legacy backup retained");
+        assert_eq!(fs::read(&target).unwrap(),GLIDE_DLL);
+        assert!(!root.join(".glide-gameframe-rollback.tmp").exists());
         assert!(!root.join(".glide-gameframe-update.tmp").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(gameframe_embedded)]
     #[test]
-    fn invalid_regular_glide_is_backed_up_without_data_loss(){
+    fn legacy_backup_directory_does_not_block_a_new_driver(){
+        let root=fixture();
+        let target=root.join("glide.dll");
+        let backup=root.join("glide.dll.bak");
+        fs::write(&target,b"foreign DLL").unwrap();
+        fs::create_dir(&backup).unwrap();
+        preflight_glide(&root).unwrap();
+        ensure_glide(&root,&root,|_|{}).unwrap();
+        assert_eq!(fs::read(&target).unwrap(),GLIDE_DLL);
+        assert!(backup.is_dir(),"never modify an old user-created backup path");
+        assert!(!root.join(".glide-gameframe-rollback.tmp").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(gameframe_embedded)]
+    #[test]
+    fn invalid_regular_glide_is_replaced_without_persistent_backup(){
         let root=fixture();
         let file=root.join("glide.dll");
         fs::write(&file,b"not a DLL").unwrap();
         preflight_glide(&root).unwrap();
         ensure_glide(&root,&root,|_|{}).unwrap();
-        assert_eq!(fs::read(&root.join("glide.dll.bak")).unwrap(),b"not a DLL");
+        assert!(!root.join("glide.dll.bak").exists());
+        assert!(!root.join(".glide-gameframe-rollback.tmp").exists());
         verify_local_gameframe(&root).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(gameframe_embedded)]
+    #[test]
+    fn failed_post_install_verification_restores_earlier_dll(){
+        let root=fixture();
+        let file=root.join("glide.dll");
+        let original=b"external Glide DLL used only for rollback";
+        fs::write(&file,original).unwrap();
+        let error=replace_with_rollback(&root,&digest(original),
+            validate_embedded().unwrap().unwrap(),
+            |_|Err("intentional post-install rejection".into())).unwrap_err();
+        assert!(error.contains("intentional post-install rejection"));
+        assert_eq!(fs::read(&file).unwrap(),original);
+        assert!(!root.join(".glide-gameframe-rollback.tmp").exists());
+        assert!(!root.join(".glide-gameframe-update.tmp").exists());
+        assert!(!root.join("glide.dll.bak").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -530,6 +526,21 @@ mod tests{
         assert!(preflight_glide(&root).is_err());
         assert!(ensure_glide(&root,&root,|_|{}).is_err());
         assert_eq!(fs::read(&file).unwrap(),b"old glide");
+        assert!(!root.join("glide.dll.bak").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(gameframe_embedded)]
+    #[test]
+    fn occupied_rollback_path_aborts_without_touching_original(){
+        let root=fixture();
+        let file=root.join("glide.dll");
+        fs::write(&file,b"old glide").unwrap();
+        fs::write(root.join(".glide-gameframe-rollback.tmp"),b"interrupted update").unwrap();
+        assert!(preflight_glide(&root).is_err());
+        assert!(ensure_glide(&root,&root,|_|{}).is_err());
+        assert_eq!(fs::read(&file).unwrap(),b"old glide");
+        assert_eq!(fs::read(root.join(".glide-gameframe-rollback.tmp")).unwrap(),b"interrupted update");
         assert!(!root.join("glide.dll.bak").exists());
         fs::remove_dir_all(&root).unwrap();
     }

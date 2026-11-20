@@ -27,7 +27,7 @@ ScorchedPlanetFix is a Windows x64 console installer, patcher, verifier and laun
 - Your original CD image is never modified or redistributed; the installer patches a verified copy of the game executable and preserves the exact original in `.bak`. Save files remain writable for normal gameplay, and immutable game assets are checked by SHA-256.
 - Two append-only logs beside the launcher: `ScorchedPlanetFix_installer.log` for installation, verification and launching, and `ScorchedPlanetFix.log` for the GameFrame DLL. Each session has a shared `session_id`.
 - v2.0.1 adds a [compact red version-commit signature](docs/main-menu-version-probe.md) at the bottom-right of the game's original root menu. It persists when hovering buttons or opening the Language, Quit and New Game panels; it disappears in videos and gameplay.
-- Older or unknown existing `glide.dll` files are **not loaded**. On normal launch, after the immutable game-file audit, the original file is renamed to `glide.dll.bak` (replacing an existing regular `.bak`) and the verified bundled GameFrame DLL is installed automatically. Only one managed backup is kept; the replacement and hashes are logged. Symlinks/non-files are rejected.
+- Older, unknown or modified regular `glide.dll` files are **not loaded**. On normal launch, after validating immutable game files, they are replaced with the verified bundled GameFrame DLL using a short-lived rollback file that is deleted after success. **No new permanent `glide.dll.bak` is created**; any existing legacy `.bak` remains untouched. Identical DLLs are left as-is. Symlinks and non-regular paths are rejected.
 
 **Breaking changes:** nGlide and arbitrary third-party Glide DLLs are unsupported. The obsolete `--3dfx-logo` (nGlide-specific) and `--launch` switches are rejected.
 
@@ -82,7 +82,7 @@ Additional commands:
 
 ### Moving from v1.1.0 / external Glide
 
-If an existing `splanet/glide.dll` comes from nGlide, another external wrapper, or an older GameFrame build, **no manual DLL migration is necessary**. After validating the immutable game data, a normal launch renames that regular file to the fixed `glide.dll.bak`, **replacing any existing regular backup**, installs the verified bundled GameFrame and starts the game. It never creates new numbered/hash-suffixed backups. The previous backup's contents are intentionally discarded during replacement; the latest original DLL and both SHA-256 hashes are recorded in `ScorchedPlanetFix.log`. `--verify` stays strictly read-only; symlinks and non-regular DLL/backup paths remain unsupported.
+An older `game/glide.dll` from another wrapper or GameFrame build is replaced automatically after the game audit, with no permanent backup. The earlier DLL is held in `.glide-gameframe-rollback.tmp` solely until the new DLL is verified, then that temporary file is deleted. Any `glide.dll.bak` already present from an older installation is preserved without alteration (not silently deleted). `--verify` stays strictly read-only; symlinks and non-regular active DLL paths are not replaced.
 
 ### Platforms
 

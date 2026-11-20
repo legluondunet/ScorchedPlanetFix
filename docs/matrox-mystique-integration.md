@@ -288,3 +288,14 @@ The replace-and-verify procedure has temporary rollback protection and
 never leaves permanent backups of installer-owned files.
 Non-regular files and symlinks are rejected for filesystem safety.
 `--verify` remains read-only.
+
+## GameFrame / MSI95 backup policy alignment (2026-11-20)
+
+The retail GameFrame renderer now follows the installer-owned DLL policy:
+replace any differing regular `game/glide.dll` with embedded GameFrame,
+leave identical content untouched, and restore missing DLLs. No permanent
+backup of the superseded active renderer is created. Its previous contents
+are kept only in a temporary rollback path during verified replacement;
+rollback is deleted on success. Any existing legacy `glide.dll.bak` file
+remains untouched. The Matrox original `msi95.dll.bak` remains protected
+as a distinct OEM-reference file, not a backup of an installer-built DLL.

@@ -264,3 +264,20 @@ must remain untouched.
 The operation also works in `--install-only`, but not in read-only
 `--verify`. Custom savegames and the native `game/splanet.ini` are
 never modified by this DLL update.
+
+## GameFrame Glide update backups (2026-11-20)
+
+A provided `game/glide.dll` is managed just like Matrox's active
+`game/msi95.dll`: a differing regular DLL is automatically replaced with
+the embedded binary; an identical DLL is not rewritten; an absent DLL is
+installed. During a replacement a `.glide-gameframe-rollback.tmp` copy of
+the previous file is held in `game/` until the new DLL is hash-verified,
+then it is removed. It is restored on verification failure. No permanent
+`glide.dll.bak` is created or modified. An existing old-style backup is
+considered user data, so the installer leaves it untouched.
+
+Nonregular DLLs, symlinks and occupied transaction paths are refused.
+`--verify` remains read-only and `--launch-no-verify` never modifies
+renderer components. This policy is common to the retail and Matrox
+installer-managed renderer files, while original proprietary Matrox
+`msi95.dll.bak` remains an authenticated CD reference.
