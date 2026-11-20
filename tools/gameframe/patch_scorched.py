@@ -197,22 +197,7 @@ pub struct RECT {""")
     pub fn GetThreadTimes(h: HMODULE, created: *mut SCORCHED_FILETIME,
         exited: *mut SCORCHED_FILETIME, kernel: *mut SCORCHED_FILETIME,
         user: *mut SCORCHED_FILETIME) -> BOOL;''')
-    replace("api/sst.rs", "fn scorched_clock() ->",
-            """fn scorched_thread_cpu_100ns() -> Option<u64> {
-    let mut created=crate::win32::SCORCHED_FILETIME::default();
-    let mut exited=crate::win32::SCORCHED_FILETIME::default();
-    let mut kernel=crate::win32::SCORCHED_FILETIME::default();
-    let mut user=crate::win32::SCORCHED_FILETIME::default();
-    let ok=unsafe { crate::win32::GetThreadTimes(
-        crate::win32::GetCurrentThread(), &mut created, &mut exited,
-        &mut kernel, &mut user) };
-    if ok==0 { return None; }
-    let ticks=|v:crate::win32::SCORCHED_FILETIME|
-        ((v.high as u64)<<32) | v.low as u64;
-    Some(ticks(kernel).saturating_add(ticks(user)))
-}
 
-fn scorched_clock() ->""")
     # Diagnostic only: measure the wall-clock time OUTSIDE vs INSIDE
     # grBufferSwap. Existing logs showed a 9.212s / 114-frame menu interval
     # when New Game was selected, but could not tell whether the game waited
@@ -283,6 +268,22 @@ fn scorched_frame_leave(start: Option<Instant>) {
 }
 
 fn limit_scorched_fps() {""")
+    replace("api/sst.rs", "fn scorched_clock() ->",
+            """fn scorched_thread_cpu_100ns() -> Option<u64> {
+    let mut created=crate::win32::SCORCHED_FILETIME::default();
+    let mut exited=crate::win32::SCORCHED_FILETIME::default();
+    let mut kernel=crate::win32::SCORCHED_FILETIME::default();
+    let mut user=crate::win32::SCORCHED_FILETIME::default();
+    let ok=unsafe { crate::win32::GetThreadTimes(
+        crate::win32::GetCurrentThread(), &mut created, &mut exited,
+        &mut kernel, &mut user) };
+    if ok==0 { return None; }
+    let ticks=|v:crate::win32::SCORCHED_FILETIME|
+        ((v.high as u64)<<32) | v.low as u64;
+    Some(ticks(kernel).saturating_add(ticks(user)))
+}
+
+fn scorched_clock() ->""")
     replace("api/sst.rs",
             '    shim::call!("grBufferSwap", _interval);\n    super::lfb::finish_write();',
             '    shim::call!("grBufferSwap", _interval);\n    let frame_started=scorched_frame_enter();\n    super::lfb::finish_write();')
