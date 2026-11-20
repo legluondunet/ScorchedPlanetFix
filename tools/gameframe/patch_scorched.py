@@ -209,6 +209,7 @@ pub struct RECT {""")
     last_end_cpu: Option<u64>,
     frame: u32,
     reports: u32,
+    in_glide: bool,
 }
 static SCORCHED_FRAME_CLOCK: OnceLock<Mutex<ScorchedFrameClock>> = OnceLock::new();
 
@@ -218,6 +219,7 @@ fn scorched_clock() -> &'static Mutex<ScorchedFrameClock> {
         last_end_cpu: None,
         frame: 0,
         reports: 0,
+        in_glide: false,
     }))
 }
 
@@ -233,6 +235,7 @@ fn scorched_frame_enter() -> Option<Instant> {
     let cpu_now=scorched_thread_cpu_100ns();
     let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
     state.frame=state.frame.saturating_add(1);
+    state.in_glide=true;
     let frame=state.frame;
     let gap=state.last_end.map(|end| now.duration_since(end).as_millis());
     let cpu_gap_ms=state.last_end_cpu.zip(cpu_now)
@@ -247,6 +250,7 @@ fn scorched_frame_enter() -> Option<Instant> {
     if let Some(gap_ms)=report {
         log!("SCORCHED_GAME_FRAME_GAP frame={frame} outside_wrapper_ms={gap_ms} game_thread_cpu_ms={cpu_gap_ms:?}");
     }
+    scorched_wait_observer_start();
     Some(now)
 }
 
@@ -257,6 +261,7 @@ fn scorched_frame_leave(start: Option<Instant>) {
         let mut state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
         state.last_end=Some(now);
         state.last_end_cpu=scorched_thread_cpu_100ns();
+        state.in_glide=false;
         let frame=state.frame;
         let report=inside_ms >= 80 && state.reports < 32;
         if report { state.reports+=1; }
@@ -290,6 +295,115 @@ fn scorched_clock() ->""")
     replace("api/sst.rs",
             '    limit_scorched_fps();\n    super::movie::frame();',
             '    limit_scorched_fps();\n    super::movie::frame();\n    scorched_frame_leave(frame_started);')
+
+
+    # When Windows reports a several-second in-game wait with effectively
+    # zero CPU, capture ONE best-effort x86 register/stack snapshot at >1s.
+    # Diagnostic sessions ONLY. No game binary modification or DLL API hook.
+    # A worker suspends the observed game thread briefly, copies context and
+    # stack return-address candidates, then resumes before logging.
+    replace("win32.rs", "pub struct SCORCHED_FILETIME { pub low: u32, pub high: u32 }",
+            """pub struct SCORCHED_FILETIME { pub low: u32, pub high: u32 }
+
+#[repr(C, align(16))]
+pub struct SCORCHED_X86_CONTEXT {
+    pub flags: u32,
+    pub debug_regs: [u32; 6],
+    pub float_save: [u8; 112],
+    pub segment_regs: [u32; 4],
+    pub edi: u32, pub esi: u32, pub ebx: u32, pub edx: u32,
+    pub ecx: u32, pub eax: u32, pub ebp: u32, pub eip: u32,
+    pub segcs: u32, pub eflags: u32, pub esp: u32, pub segss: u32,
+    pub extended_regs: [u8; 512],
+}""")
+    replace("win32.rs", "    pub fn GetCurrentThread() -> HMODULE;",
+            """    pub fn GetCurrentThread() -> HMODULE;
+    pub fn GetCurrentThreadId() -> u32;
+    pub fn GetCurrentProcess() -> HMODULE;
+    pub fn OpenThread(access: u32, inherit: BOOL, tid: u32) -> HMODULE;
+    pub fn SuspendThread(h: HMODULE) -> u32;
+    pub fn ResumeThread(h: HMODULE) -> u32;
+    pub fn GetThreadContext(h: HMODULE, ctx: *mut SCORCHED_X86_CONTEXT) -> BOOL;
+    pub fn CloseHandle(h: HMODULE) -> BOOL;
+    pub fn ReadProcessMemory(h: HMODULE, address: *const u8,
+        output: *mut u8, length: usize, read: *mut usize) -> BOOL;""")
+    replace("api/sst.rs", "fn scorched_frame_enter() -> Option<Instant> {",
+            """fn scorched_wait_sample(thread_id: u32, frame: u32, elapsed_ms: u128) {
+    use crate::win32::*;
+    // 0x0002 THREAD_SUSPEND_RESUME, 0x0008 THREAD_GET_CONTEXT,
+    // 0x0040 THREAD_QUERY_INFORMATION. Thread is owned by this process.
+    let h=unsafe { OpenThread(0x004a, 0, thread_id) };
+    if h.is_null() {
+        log!("SCORCHED_WAIT_STACK frame={frame} elapsed_ms={elapsed_ms} open_thread_failed");
+        return;
+    }
+    let previous=unsafe { SuspendThread(h) };
+    if previous==u32::MAX {
+        unsafe { CloseHandle(h); }
+        log!("SCORCHED_WAIT_STACK frame={frame} elapsed_ms={elapsed_ms} suspend_failed");
+        return;
+    }
+    // Guaranteed resume BEFORE formatting/logging anything or taking a mutex.
+    let mut ctx: SCORCHED_X86_CONTEXT=unsafe { std::mem::zeroed() };
+    ctx.flags=0x0001_0001; // x86 CONTEXT_CONTROL: EIP/ESP/EBP
+    let ok=unsafe { GetThreadContext(h, &mut ctx) }!=0;
+    let mut stack=[0u32; 48];
+    let mut got_bytes:usize=0;
+    if ok && ctx.esp!=0 {
+        let _=unsafe { ReadProcessMemory(
+            GetCurrentProcess(), ctx.esp as *const u8,
+            stack.as_mut_ptr() as *mut u8,
+            std::mem::size_of_val(&stack), &mut got_bytes) };
+    }
+    unsafe { ResumeThread(h); CloseHandle(h); }
+    if !ok {
+        log!("SCORCHED_WAIT_STACK frame={frame} elapsed_ms={elapsed_ms} get_context_failed");
+        return;
+    }
+    let base=unsafe { GetModuleHandleA(std::ptr::null()) } as usize;
+    let mut candidates=Vec::new();
+    for (idx, addr) in stack[..(got_bytes/4).min(stack.len())].iter().enumerate() {
+        let addr=*addr as usize;
+        if addr>=base.saturating_add(0x1000) &&
+           addr<base.saturating_add(0x200000) && candidates.len()<12 {
+            candidates.push(format!("{idx}:exe+0x{:x}",addr-base));
+        }
+    }
+    log!("SCORCHED_WAIT_STACK frame={frame} elapsed_ms={elapsed_ms} eip=0x{:08x} esp=0x{:08x} ebp=0x{:08x} exe_base=0x{:08x} stack_bytes={got_bytes} candidates={candidates:?}",
+        ctx.eip, ctx.esp, ctx.ebp, base);
+}
+
+fn scorched_wait_observer_start() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let thread_id=unsafe { crate::win32::GetCurrentThreadId() };
+        let _=std::thread::Builder::new().name("scorched-wait-probe".into())
+            .spawn(move || {
+                let mut sampled_frame=0u32;
+                let mut samples=0u32;
+                while samples<3 {
+                    std::thread::sleep(Duration::from_millis(120));
+                    let target={
+                        let state=scorched_clock().lock().unwrap_or_else(|e|e.into_inner());
+                        let age=state.last_end.map(|end|end.elapsed().as_millis());
+                        match age {
+                            Some(ms) if state.frame>90 && !state.in_glide &&
+                                state.frame!=sampled_frame && ms>=1000 =>
+                                Some((state.frame,ms)),
+                            _ => None,
+                        }
+                    };
+                    if let Some((frame,age))=target {
+                        sampled_frame=frame;
+                        samples+=1;
+                        scorched_wait_sample(thread_id,frame,age);
+                    }
+                }
+            });
+    });
+}
+
+fn scorched_frame_enter() -> Option<Instant> {""")
 
     # The existing source has a unitary render thread, limiting game-frame
     # callbacks limits both rendering and original-game simulation speed.
