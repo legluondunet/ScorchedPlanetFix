@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`0839aa304757c4259f4b9c0c294ad835793d30fdeeb493e5e3db0903e92e5ed1`
+`88f4c1fcf2ddaeb6361b45060737dc0767920d5589d05ab22ff8ef660c8ea222`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -41,6 +41,21 @@ registers the debug-only exception hook, or prints runtime diagnostics.
 `Log=1` enables `ScorchedPlanetFix.log` beside the EXE. The installer
 creates/truncates that log once per game session. Installer logs stay
 available independently.
+
+## Self-contained runtime OS diagnostics (2026-11-21)
+
+When `[Debug] Log=1` (or the first-run diagnostic override) is enabled,
+`ScorchedPlanetFix.log` now records the execution platform at the beginning
+of the MSI95 session: `SYS-OS` identifies native Windows versus Wine,
+`SYS-WINE` identifies Wine's exported runtime version, `SYS-HOST` identifies
+the host OS reported by Wine, and `SYS-PROTON` reports whether known
+Steam compatibility **environment hints** are present. A Proton hint is
+**not proof** of the exact Proton build; absence of the hint does not
+exclude Proton. The standalone C DLL probes Wine directly using
+`ntdll.dll!wine_get_version`, without depending on a separate launcher
+log. No Steam paths, Wine prefixes, usernames or host identifiers are
+written. This is passive Win32 logging only, not a graphics or input change.
+With `Log=0`, the host probe is skipped entirely.
 
 ## Repeatable F12 diagnostics (2026-11-20)
 
