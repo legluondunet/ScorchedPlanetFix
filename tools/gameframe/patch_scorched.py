@@ -183,11 +183,13 @@ fn limit_scorched_fps() {
     # Passive Windows-only game-thread CPU accounting. It distinguishes a
     # busy 2.7s legacy fade loop from a 2.7s Sleep/OS wait without freezing,
     # poking game state, hooking APIs, or modifying original EXE bytes.
-    replace("win32.rs", "pub struct RECT {",
+    replace("win32.rs", "#[repr(C)]\n#[derive(Clone, Copy, Default)]\npub struct RECT {",
             """#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SCORCHED_FILETIME { pub low: u32, pub high: u32 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct RECT {""")
     replace("win32.rs", '    pub fn GetCurrentProcessId() -> u32;',
             '''    pub fn GetCurrentProcessId() -> u32;
