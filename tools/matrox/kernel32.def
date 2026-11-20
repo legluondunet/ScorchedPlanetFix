@@ -6,6 +6,8 @@ EXPORTS
  QueryPerformanceFrequency
  Sleep
  GetEnvironmentVariableA
+ GetModuleHandleA
+ GetProcAddress
  WriteFile
  CloseHandle
  GetModuleFileNameA
