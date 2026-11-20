@@ -107,6 +107,30 @@ jobs:
             Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
           }
 
+      - name: Smoke MSI95 x86 nested callback input ordering
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-input-smoke'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' (Join-Path $folder 'msi95.dll')
+          $exe = Join-Path $folder 'MatroxInputPumpSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_input_pump.rs -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile MSI95 x86 input reentrancy test' }
+          Push-Location $folder
+          try {
+            $env:MATROX_MSI_LOG = '0'
+            $env:MATROX_MSI_FPS_LIMIT = '0'
+            $env:MATROX_MSI_BORDERLESS = '0'
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw 'MSI95 x86 recursive callback regression failed' }
+          } finally {
+            Pop-Location
+            Remove-Item Env:MATROX_MSI_LOG -ErrorAction SilentlyContinue
+            Remove-Item Env:MATROX_MSI_FPS_LIMIT -ErrorAction SilentlyContinue
+            Remove-Item Env:MATROX_MSI_BORDERLESS -ErrorAction SilentlyContinue
+          }
+
       - name: Build and test Windows x64 launcher with embedded GameFrame
         shell: pwsh
         run: |
