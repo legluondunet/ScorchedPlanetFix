@@ -276,8 +276,13 @@ static int g_blue_atlas_valid=0;
 
 static T_msiInfo g_info;
 static void *g_color, *g_depth, *g_texture;
-static void *g_heaps[256];
-static unsigned g_heap_count = 0;
+/* The original game may keep hundreds of texture heaps live across scene
+ * transitions. The previous shim's fixed 256-entry array returned NULL for
+ * valid 4-page allocations, corrupting the game's scene data. Track actual
+ * VirtualAlloc failures instead of imposing an artificial heap-count cap.
+ * A geometrically growing pointer table is independently VirtualAlloc'd. */
+static void **g_heaps=NULL;
+static unsigned g_heap_count=0,g_heap_capacity=0,g_heap_peak=0;
 static int g_initialized = 0;
 static unsigned g_snapshot_mask = 0;
 static int g_log_attempted = 0;
@@ -733,7 +738,9 @@ static void preview_present(void){
 }
 static void clean(void){
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i])VirtualFree(g_heaps[i],0,MEM_RELEASE);
-    g_heap_count=0;
+    if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
+    g_heaps=NULL;
+    g_heap_count=0;g_heap_capacity=0;g_heap_peak=0;
     if(g_color)VirtualFree(g_color,0,MEM_RELEASE);
     if(g_depth)VirtualFree(g_depth,0,MEM_RELEASE);
     if(g_texture)VirtualFree(g_texture,0,MEM_RELEASE);
@@ -1133,19 +1140,58 @@ BOOL __cdecl msiExit(void){
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
+    lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     clean();
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);
     lognum("SESSION_TIMING gdi_ms=",g_preview_ms,"state_ms=",g_state_ms);
     return TRUE;
 }
+/* Reserve space for the next heap handle BEFORE allocating game memory,
+ * so successful game allocations can always be accounted for and freed.
+ * The only capacity ceiling is unsigned-size overflow / actual virtual
+ * memory exhaustion, not a fixed arbitrary 256-allocation threshold. */
+static BOOL grow_heap_tracker(void){
+    if(g_heap_count<g_heap_capacity)return TRUE;
+    unsigned new_capacity=g_heap_capacity?g_heap_capacity*2u:256u;
+    if(new_capacity<=g_heap_capacity ||
+       new_capacity>0x7FFFFFFFu/(unsigned)sizeof(void*)){
+        logtext("MSI_HEAP_TRACKER cannot grow (address-space limit)");
+        return FALSE;
+    }
+    void **next=(void**)alloc(new_capacity*(unsigned)sizeof(void*));
+    if(!next){
+        logtext("MSI_HEAP_TRACKER cannot grow (real allocation failure)");
+        return FALSE;
+    }
+    for(unsigned i=0;i<g_heap_count;i++)next[i]=g_heaps[i];
+    if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
+    g_heaps=next;
+    g_heap_capacity=new_capacity;
+    lognum("MSI_HEAP_TRACKER capacity=",g_heap_capacity,"live=",g_heap_count);
+    return TRUE;
+}
 LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     ensure_log();
-    if(Pages<=0||Pages>131072||g_heap_count>=256){lognum("msiAllocTextureHeap REJECT pages=",(unsigned)Pages,NULL,0);return NULL;}
+    if(Pages<=0||Pages>131072){
+        lognum("msiAllocTextureHeap INVALID pages=",(unsigned)Pages,NULL,0);
+        return NULL;
+    }
+    if(!grow_heap_tracker())return NULL;
     unsigned n=(unsigned)Pages*4096u;
     void *ptr=alloc(n);
-    if(ptr){g_heaps[g_heap_count++]=ptr;lognum("HEAP_ALLOC elapsed_ms=",GetTickCount()-g_boot_tick,"frame=",g_frames);lognum("msiAllocTextureHeap pages=",(unsigned)Pages,"bytes=",n);}
-    else logtext("msiAllocTextureHeap OUT OF MEMORY");
+    if(ptr){
+        g_heaps[g_heap_count++]=ptr;
+        if(g_heap_count>g_heap_peak){
+            g_heap_peak=g_heap_count;
+            if(g_heap_peak==256u||g_heap_peak==512u||g_heap_peak==1024u)
+                lognum("MSI_HEAP_TRACKER peak_live=",g_heap_peak,NULL,0);
+        }
+        lognum("HEAP_ALLOC elapsed_ms=",GetTickCount()-g_boot_tick,"frame=",g_frames);
+        lognum("msiAllocTextureHeap pages=",(unsigned)Pages,"bytes=",n);
+    }else{
+        lognum("msiAllocTextureHeap REAL_OOM pages=",(unsigned)Pages,"live=",g_heap_count);
+    }
     return (LPBYTE)ptr;
 }
 BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){

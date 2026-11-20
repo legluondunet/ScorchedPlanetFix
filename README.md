@@ -245,3 +245,14 @@ the list, and requires gameplay testing. The installer upgrades exact known
 prior patched EXEs automatically, preserving `splanetw.exe.bak` and never
 creating a DLL backup. A fresh ISO install produces the guarded executable
 directly, without bundling game code.
+
+### Matrox briefing crash: removed 256-allocation MSI95 limit (2026-11-20)
+
+In a reproducible rapid-briefing-click Wine 11.19 crash, the experimental
+MSI95 DLL exhausted its own arbitrary **256-live-heap tracking table**:
+the log shows **41 rejected 4-page texture allocations**, then the game
+dereferenced a NULL table at `0x00482DEC`. This is a serious and previously
+unrecognized driver limitation. The DLL now tracks allocated texture heaps
+in a dynamically growing table, rather than returning NULL once 256 are
+live. The previous Matrox EXE guards remain experimental; game and
+renderer behavior under Wine is **not yet validated** after this change.

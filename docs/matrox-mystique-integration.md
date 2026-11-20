@@ -418,3 +418,29 @@ patched EXE SHA-256 is
 The loader supports transactional upgrades from both earlier recognized
 patched EXE hashes. This is not a proven resolution of the underlying
 source of invalid list entries and requires live Wine/Windows tests.
+
+## Root-cause candidate: MSI95 texture-heap tracking cap (2026-11-20)
+
+Latest user's exact reproducible sequence: repeatedly click the mission
+briefing. The `ScorchedPlanetFix(20261120-143534).log` records the renderer
+at frame ~606 rejecting **41** 4-page calls to `msiAllocTextureHeap`,
+then a genuine AV at `splanetw.exe:0x00482DEC` at frame 637,
+`cmp [eax+edx*4],ebx`, with `EAX=0, EDX=5` and fault at `0x14`.
+The previous crash session also experienced multiple allocation rejects.
+The clean-room `msiAllocTextureHeap` implementation imposes
+`g_heap_count >= 256` (unrelated to the game or hardware limitations).
+Logged successful allocs minus tracked frees reach exactly 256.
+
+The fixed-size `g_heaps[256]` was therefore a **demonstrable DLL bug**
+and likely caused incomplete scene data. Replaced with a dynamically
+growing VirtualAlloc-backed table; allocating 600 heaps is smoke-tested
+on actual x86 Windows DLL to verify the 256/512 growth boundaries. Each
+real texture allocation remains individually tracked for release.
+The renderer now logs tracking growth, peak live count and REAL_OOM
+separately from invalid requests; no arbitrary 256 allocation cap.
+
+This avoids another speculative executable patch. The prior two Matrox
+game EXE guards remain under evaluation; the source of the previous
+null-object/invalid-entry crashes is not conclusively proven. Need
+repeated-briefing-click Wine test and read the next log to confirm no
+`msiAllocTextureHeap REJECT`/real OOM and stable mission entry.

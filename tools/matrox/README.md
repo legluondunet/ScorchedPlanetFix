@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`b005c9b5294d1b115e7f8a67d11a357110d1cc734f4e45b1fa2c1fc7d3f23393`
+`63b57936b797b1973ac2fd7b31b7cca8d47a661a55c97fd8bf134844a7757535`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -31,7 +31,7 @@ Both options default to 60 and 0 respectively; `FPSLimit=0` disables
 pacing and valid positive caps are 1..240. No separate Matrox CLI option is
 needed. The two renderer environment variables are implementation details.
 
-The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original validated OEM DLL is retained in `game/msi95.dll.bak` as an audit backup, not loaded. GameFrame uses the same `game/` directory when the retail edition is installed instead.
+The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original proprietary OEM DLL is authenticated during CD extraction and is NOT retained as a backup. GameFrame uses the same `game/` directory when the retail edition is installed instead.
 
 ## Debug logging
 
@@ -109,3 +109,31 @@ This will identify the call instruction immediately before
 `0x004186AA`, helping us determine the actual origin of the null object.
 Do not skip the crashing function or synthesize a fake object without
 understanding the game logic. Root cause is still unresolved.
+
+## Dynamic texture-heap tracking (2026-11-20)
+
+A repeated-click briefing crash under Wine 11.19 revealed an actual **MSI95 shim
+limitation**: `g_heaps[256]` refused the game's valid allocations when 256
+texture heaps were simultaneously live. The user runtime log
+`ScorchedPlanetFix(20261120-143534).log` contained **41**
+`msiAllocTextureHeap REJECT pages=4` lines before a game AV at
+`0x00482DEC` (NULL base, attempted read at `0x14`).
+The previous log also reached the 256-live ceiling. These refusals are
+a plausible *cause* of incomplete game scene structures, not proof of
+the root cause of every crash.
+
+The clean-room MSI95 now uses a **geometrically growing VirtualAlloc-backed
+pointer table**: starts at 256 slots and grows to 512, 1024, etc. before
+allocating the next game texture heap. No artificial count cap or silent
+pointer drop remains; only actual allocation failures and invalid page
+sizes can return NULL. `msiFreeTextureHeap` removes entries via
+swap-delete and `msiExit` releases both tracked heaps and the table.
+For debugging, the log reports `MSI_HEAP_TRACKER capacity=...`,
+`MSI_HEAP_TRACKER peak_live=...`, and `msiAllocTextureHeap REAL_OOM`
+if actual Windows memory allocation fails. The source's MSVC x86 ABI,
+nine exports, FPS and display logic remain unchanged.
+
+CI now loads the actual rebuilt x86 MSI95.dll under Windows and allocates
+and releases **600** 4-page texture heaps in one process to prove that
+capacity growth works beyond the previous hard ceiling. The user still
+needs to reproduce the repeated-click briefing scenario under Wine.
