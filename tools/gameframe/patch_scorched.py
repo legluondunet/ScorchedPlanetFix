@@ -32,6 +32,16 @@ def main() -> None:
             std::env::var("SCORCHED_FIX_SIGNATURE").unwrap_or_else(|_| "unknown".into()),
         ));''')
 
+    # An explicit launcher-controlled debug switch is required: without it,
+    # upstream shim::log::write falls back to stderr even when GLIDE_LOG is
+    # absent. Patch the Scorched-only, ephemeral checkout (NOT upstream).
+    replace("../../shim/src/log.rs",
+            'pub fn write(msg: std::fmt::Arguments) {',
+            '''pub fn write(msg: std::fmt::Arguments) {
+    if std::env::var("SCORCHED_FIX_LOG").ok().as_deref() != Some("1") {
+        return;
+    }''')
+
     # No ChangeDisplaySettings/ChangeDisplaySettingsEx hooks are needed:
     # GameFrame is a borderless OpenGL wrapper and never switches screen modes.
     replace("win32.rs", "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;",

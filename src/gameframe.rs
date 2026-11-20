@@ -301,13 +301,17 @@ fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_
     command.env("SCORCHED_FIX_SIGNATURE",format!(
         "ScorchedPlanetFix {}-{}",env!("CARGO_PKG_VERSION"),env!("SCORCHED_COMMIT")));
     command.env("SCORCHED_FIX_SESSION_ID",session_id);
-    // Temporary diagnostics: distinguish menu, FMV, option screens and 3D scenes
-    // before adding a version overlay that must NOT appear during gameplay.
-    command.env("SCORCHED_MENU_PROBE","1");
-    // Keep the DLL's established runtime log name. Only the installer log
-    // becomes ScorchedPlanetFix_installer.log; both files live beside the EXE.
-    if let Some(root)=game.parent(){
-        command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
+    // The pinned Scorched-only GameFrame shim checks this flag before ANY
+    // file or stderr log write. No renderer log for the normal Log=0 mode.
+    command.env("SCORCHED_FIX_LOG",if configured.log{"1"}else{"0"});
+    if configured.log {
+        command.env("SCORCHED_MENU_PROBE","1");
+        if let Some(root)=game.parent(){
+            command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
+        }
+    }else{
+        command.env_remove("SCORCHED_MENU_PROBE");
+        command.env_remove("GLIDE_LOG");
     }
     let prior=std::env::var("WINEDLLOVERRIDES").unwrap_or_default();
     command.env("WINEDLLOVERRIDES",format!("glide=n;{prior}"));
@@ -335,8 +339,9 @@ mod tests{
         let mut command=Command::new(game.join("spvoodoo.exe"));
         configure_process_unchecked(&mut command,&game,"ci-unchecked-42",|_|{}).unwrap();
         assert!(command.get_envs().any(|(name,value)|name=="GLIDE_SIZE" && value.is_some()));
-        assert!(command.get_envs().any(|(name,value)|name=="GLIDE_LOG"
-            && value==Some(root.join("ScorchedPlanetFix.log").as_os_str())));
+        assert!(!command.get_envs().any(|(name,value)|name=="GLIDE_LOG" && value.is_some()));
+        assert!(command.get_envs().any(|(name,value)|name=="SCORCHED_FIX_LOG"
+            && value==Some(std::ffi::OsStr::new("0"))));
         assert!(command.get_envs().any(|(name,value)|name=="SCORCHED_FIX_SESSION_ID"
             && value==Some(std::ffi::OsStr::new("ci-unchecked-42"))));
         assert!(!game.exists(),"unchecked mode must not create game directory");
@@ -388,17 +393,20 @@ mod tests{
         let mut cmd=Command::new("test.exe");
         configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
         let expected_log=root.parent().unwrap().join("ScorchedPlanetFix.log");
-        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
+        assert!(!cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
             && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("60"))));
-        fs::write(base.join("ScorchedPlanetFix.ini"),b"[Graphics]\nFPSLimit=120\n").unwrap();
+        fs::write(base.join("ScorchedPlanetFix.ini"),b"[Graphics]\nFPSLimit=120\n[Debug]\nLog=1\n").unwrap();
         configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT"
             && val==Some(std::ffi::OsStr::new("120"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_SIZE" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_MENU_PROBE" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_LOG"
+            && val==Some(std::ffi::OsStr::new("1"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SIGNATURE"
             && val.is_some_and(|s|s.to_string_lossy().starts_with(concat!("ScorchedPlanetFix ", env!("CARGO_PKG_VERSION"), "-")))));
         fs::remove_dir_all(&base).unwrap();

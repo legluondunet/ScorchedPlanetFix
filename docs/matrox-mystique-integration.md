@@ -209,3 +209,18 @@ whether invulnerability is spelled ALIAH or ALLAH. No automatic keyboard
 injection is yet implemented; turning either INI option to 1 is refused with
 an explanatory error, rather than silently failing. For now type the
 appropriate code manually **during gameplay**.
+
+## [Debug] Log default and authenticated Matrox backups (2026-11-20)
+
+The root INI now provides `[Debug] Log=0` by default, with descriptive
+comments for **every** available option, including `[Graphics]`,
+`[Matrox]`, `[Cheats]`, and `[Debug]`. With `Log=0`, the Matrox
+MSI95 renderer never creates or writes a runtime log; `Log=1` enables
+noncumulative `ScorchedPlanetFix.log`. The root installer diagnostic log
+remains active independently.
+
+`game/splanetw.exe.bak` is the exact original 840704-byte Matrox OEM EXE
+and is required by the current immutable-manifest SHA-256 audit. The
+patched and unpatched executables are verified separately; there is no
+fallback to the backup for launching. Likewise `msi95.dll.bak` holds
+the original OEM proprietary driver as audit data only, not loaded.

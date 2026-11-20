@@ -297,7 +297,7 @@ fn matrox_play(root: &Path, logger: &Logger,
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     emit(logger, &mut sink, &format!("Verified Matrox game: {}", runtime.display()));
     emit(logger, &mut sink, "Starting Matrox MSI95 backend (shared INI FPSLimit; no diagnostic time limit)...");
-    logger.reset_renderer_log(root)?;
+    configure_renderer_log(root,logger)?;
     let mut child = matrox_runtime::spawn(root)?;
     emit(logger, &mut sink, &format!("Matrox game started, PID {}.", child.id()));
     wait_for_game(&mut child, logger, sink)
@@ -321,7 +321,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
     layout::ensure_support_files(root,"retail")?;
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
-    logger.reset_renderer_log(root)?;
+    configure_renderer_log(root,logger)?;
     let mut child=verify::launch_preverified(report,&game,logger.session_id(),
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
@@ -345,7 +345,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
             "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
         emit(logger, &mut sink,
             &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
-        logger.reset_renderer_log(root)?;
+        configure_renderer_log(root,logger)?;
         let mut child = matrox_runtime::spawn_unchecked(root)?;
         emit(logger, &mut sink,
             &format!("Matrox game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
@@ -360,12 +360,21 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     command.current_dir(&game);
     gameframe::configure_process_unchecked(&mut command, &game, logger.session_id(),
         |message| logger.write(message))?;
-    logger.reset_renderer_log(root)?;
+    configure_renderer_log(root,logger)?;
     let mut child = command.spawn()
         .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
     emit(logger, &mut sink,
         &format!("Game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
     wait_for_game(&mut child, logger, sink)
+}
+
+fn configure_renderer_log(root:&Path,logger:&Logger)->Result<(),String>{
+    if settings::read_settings(&root.join(layout::CONFIG))?.log {
+        logger.reset_renderer_log(root)?;
+    }else{
+        logger.write("LOG: [Debug] Log=0, renderer log disabled");
+    }
+    Ok(())
 }
 
 fn wait_for_game(child: &mut Child, logger: &Logger,
@@ -854,6 +863,25 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn runtime_log_is_opt_in_but_installer_log_is_always_recorded() {
+        let root=std::env::temp_dir().join(format!("scorched-debug-log-test-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let logger=Logger::new(&root,"test").unwrap();
+        settings::ensure_defaults(&root.join(layout::CONFIG),true).unwrap();
+        configure_renderer_log(&root,&logger).unwrap();
+        assert!(!root.join("ScorchedPlanetFix.log").exists());
+        assert!(root.join("ScorchedPlanetFix_installer.log").exists());
+        fs::write(root.join(layout::CONFIG),b"[Debug]\nLog=1\n").unwrap();
+        configure_renderer_log(&root,&logger).unwrap();
+        assert!(root.join("ScorchedPlanetFix.log").exists());
+        fs::write(root.join("ScorchedPlanetFix.log"),b"old runtime session").unwrap();
+        configure_renderer_log(&root,&logger).unwrap();
+        assert_eq!(fs::read(root.join("ScorchedPlanetFix.log")).unwrap(),b"");
+        drop(logger);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn no_media_without_install_fails_without_creating_game_dir() {
         let root = std::env::temp_dir().join(format!("scorched-no-media-test-{}", std::process::id()));

@@ -17,15 +17,16 @@ pub struct GameSettings{
     pub unlimited_fuel:bool,
     pub aliah:bool,
     pub fatal:bool,
+    pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false,aliah:false,fatal:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
     graphics_fps:bool,legacy_fps:bool,dither:bool,unlimited_fuel:bool,
-    aliah:bool,fatal:bool,
+    aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
 fn read_bytes(path:&Path)->Result<Option<Vec<u8>>,String>{
@@ -67,6 +68,7 @@ fn section(line:&[u8])->u8{
     else if line.eq_ignore_ascii_case(b"[scorch]"){2}
     else if line.eq_ignore_ascii_case(b"[matrox]"){3}
     else if line.eq_ignore_ascii_case(b"[cheats]"){4}
+    else if line.eq_ignore_ascii_case(b"[debug]"){5}
     else {0}
 }
 fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
@@ -79,7 +81,7 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
         if line.is_empty()||line.starts_with(b";")||line.starts_with(b"#"){continue;}
         if line.starts_with(b"[")&&line.ends_with(b"]"){
             current=section(line);
-            match current{1=>seen.graphics=true,3=>seen.matrox=true,4=>seen.cheats=true,_=>{}}
+            match current{1=>seen.graphics=true,3=>seen.matrox=true,4=>seen.cheats=true,5=>seen.debug=true,_=>{}}
             continue;
         }
         let Some((name,value))=key(line) else {continue};
@@ -111,6 +113,10 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.fatal{return Err("INI: duplicate [Cheats] FATAL".into());}
                 seen.fatal=true;result.fatal=switch(value,"[Cheats] FATAL")?;
             },
+            5 if name.eq_ignore_ascii_case(b"Log")=>{
+                if seen.log{return Err("INI: duplicate [Debug] Log".into());}
+                seen.log=true;result.log=switch(value,"[Debug] Log")?;
+            },
             _=>{},
         }
     }
@@ -133,14 +139,15 @@ fn append(out:&mut Vec<u8>,line:&[u8]){
 /// normal launch / install. A read-only --verify never calls this function.
 pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let existing=read_bytes(path)?;
-    let original=existing.as_deref().unwrap_or(b"");
+    let original=existing.as_deref().unwrap_or(crate::layout::INI_EXAMPLE.as_bytes());
     let (before,seen)=parse(original)?;
     let add_fps=!seen.graphics_fps;
     let add_dither=matrox&&!seen.dither;
     let add_fuel=!seen.unlimited_fuel;
     let add_aliah=!seen.aliah;
     let add_fatal=!seen.fatal;
-    if !add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!seen.legacy_fps{return Ok(());}
+    let add_log=!seen.log;
+    if existing.is_some()&&!add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+160);
     let mut current=0u8;
@@ -149,12 +156,17 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut did_fuel=false;
     let mut did_aliah=false;
     let mut did_fatal=false;
+    let mut did_log=false;
     let mut finish=|old:u8,out:&mut Vec<u8>|{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
         if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
         if old==4&&add_aliah&&!did_aliah{append(out,b"ALIAH=0");did_aliah=true;}
         if old==4&&add_fatal&&!did_fatal{append(out,b"FATAL=0");did_fatal=true;}
+        if old==5&&add_log&&!did_log{
+            append(out,b"; 0 = no renderer log (default); 1 = per-session renderer log next to EXE");
+            append(out,b"Log=0");did_log=true;
+        }
     };
     for line in original.split_inclusive(|b|*b==b'\n'){
         let trimmed=line.trim_ascii();
@@ -178,6 +190,11 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
     if add_aliah&&!did_aliah{append(&mut out,b"ALIAH=0");}
     if add_fatal&&!did_fatal{append(&mut out,b"FATAL=0");}
+    if !seen.debug{append(&mut out,b"[Debug]");}
+    if add_log&&!did_log{
+        append(&mut out,b"; 0 = no renderer log (default); 1 = per-session renderer log next to EXE");
+        append(&mut out,b"Log=0");
+    }
     if out.len()>MAX_INI_SIZE{return Err("INI migration exceeds 256 KiB".into());}
     if parse(&out)?.0!=before{return Err("INI migration unexpectedly changed a user setting".into());}
     let temporary=path.with_file_name(format!(".scorchedplanetfix-ini-{}-{}.tmp",
@@ -235,7 +252,7 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,unlimited_fuel:true,aliah:true,fatal:true});
+            fps_limit:120,dither:true,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
@@ -246,6 +263,10 @@ mod tests{
         assert!(parse(b"[Cheats]\nFATAL=YES").is_err());
         assert!(parse(b"[Cheats]\naliah=0\nALIAH=1").is_err());
         assert!(parse(b"[Cheats]\nFATAL=0\nfatal=1").is_err());
+        assert_eq!(parse(b"[Debug]\nLog=1").unwrap().0.log,true);
+        assert!(!parse(b"").unwrap().0.log);
+        assert!(parse(b"[Debug]\nLog=2").is_err());
+        assert!(parse(b"[Debug]\nLog=0\nlog=1").is_err());
     }
     #[test]
     fn legacy_fps_migrates_without_losing_player_values(){
@@ -260,8 +281,10 @@ mod tests{
         assert!(out.windows(b"UnlimitedFuel=0".len()).any(|v|v==b"UnlimitedFuel=0"));
         assert!(out.windows(b"ALIAH=0".len()).any(|v|v==b"ALIAH=0"));
         assert!(out.windows(b"FATAL=0".len()).any(|v|v==b"FATAL=0"));
+        assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
+        assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false,aliah:false,fatal:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -271,11 +294,17 @@ mod tests{
         let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
         ensure_defaults(&ini,true).unwrap();
         let s=fs::read_to_string(&ini).unwrap();
-        assert!(s.contains("[Graphics]\r\nFPSLimit=60"));
-        assert!(s.contains("[matrox]\r\nDither=0"));
-        assert!(s.contains("[Cheats]\r\nUnlimitedFuel=0"));
+        assert!(s.contains("[Graphics]\r\n"));
+        assert!(s.contains("FPSLimit=60"));
+        assert!(s.contains("[Matrox]\r\n"));
+        assert!(s.contains("Dither=0"));
+        assert!(s.contains("[Cheats]\r\n"));
+        assert!(s.contains("UnlimitedFuel=0"));
         assert!(s.contains("ALIAH=0"));
         assert!(s.contains("FATAL=0"));
+        assert!(s.contains("[Debug]\r\n"));
+        assert!(s.contains("Log=0"));
+        assert!(s.contains("; "));
         assert!(!s.contains("[scorch]"));
         fs::write(&ini,b"[Graphics]\nFPSLimit=30\n[Cheats]\nUnlimitedFuel=1\n").unwrap();
         assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("not yet supported"));
@@ -299,6 +328,22 @@ mod tests{
         fs::write(&ini,b"[Cheats]\nFATAL=1\n").unwrap();
         assert!(reject_unimplemented_cheats(&ini).unwrap_err().contains("FATAL"));
         fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn user_debug_log_is_preserved_and_missing_debug_defaults_off(){
+        let dir=fixture();let ini=dir.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Debug]\r\nLog=1\r\n[Graphics]\r\nFPSLimit=30\r\n").unwrap();
+        ensure_defaults(&ini,true).unwrap();
+        assert!(read_settings(&ini).unwrap().log);
+        assert_eq!(fs::read_to_string(&ini).unwrap().matches("Log=").count(),1);
+        let before=fs::read(&ini).unwrap();
+        ensure_defaults(&ini,true).unwrap();
+        assert_eq!(fs::read(&ini).unwrap(),before);
+        fs::write(&ini,b"[Graphics]\r\nFPSLimit=60\r\n").unwrap();
+        ensure_defaults(&ini,false).unwrap();
+        assert!(!read_settings(&ini).unwrap().log);
+        assert!(fs::read_to_string(&ini).unwrap().contains("[Debug]\r\n"));
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn modern_graphics_overrides_and_removes_legacy_value(){

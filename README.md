@@ -121,3 +121,13 @@ is not yet proven and enabling either option returns an explicit
 unsupported-feature error. Some third-party lists use `ALLAH`
 instead of `ALIAH` for invulnerability; the project preserves the
 user-requested `ALIAH` spelling until game testing resolves the ambiguity.
+
+### Debug logs and preserved OEM reference binaries (2026-11-20)
+
+A fresh root `ScorchedPlanetFix.ini` now includes human-readable comments
+for every option and `[Debug] Log=0`. Use `Log=1` to enable a new
+noncumulative runtime log for GameFrame or Matrox. The installer's own
+noncumulative `ScorchedPlanetFix_installer.log` remains available in either
+mode. Matrox's `splanetw.exe.bak` and `msi95.dll.bak` are exact, audited
+OEM originals retained for safe original-content verification; they are never
+used to launch or render. Deleting them invalidates the current verifier.

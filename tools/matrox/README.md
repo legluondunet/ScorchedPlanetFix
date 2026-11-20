@@ -32,3 +32,12 @@ pacing and valid positive caps are 1..240. No separate Matrox CLI option is
 needed. The two renderer environment variables are implementation details.
 
 The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original validated OEM DLL is retained in `game/msi95.dll.bak` as an audit backup, not loaded. GameFrame uses the same `game/` directory when the retail edition is installed instead.
+
+## Debug logging
+
+`[Debug] Log=0` is the new launcher-root default. The launcher passes
+`MATROX_MSI_LOG=0`; in this mode `ensure_log` never opens a runtime log,
+registers the debug-only exception hook, or prints runtime diagnostics.
+`Log=1` enables `ScorchedPlanetFix.log` beside the EXE. The installer
+creates/truncates that log once per game session. Installer logs stay
+available independently.

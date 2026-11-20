@@ -361,6 +361,12 @@ static void putunsigned(char*dest,DWORD*p,unsigned num){char tmp[16];int n=0;do{
 static void puthex(char*dest,DWORD*p,unsigned num){const char*digits="0123456789ABCDEF";putstr(dest,p,"0x");for(int i=7;i>=0;i--)if(*p<900)dest[(*p)++]=digits[(num>>(i*4))&15];}
 static void ensure_log(void){
     if(g_log_attempted)return;g_log_attempted=1;
+    /* Log=0 in root ScorchedPlanetFix.ini is passed by the launcher.
+     * Do not open a file, register a debug-only VEH, or write to stderr. */
+    {char setting[8]={0};
+     DWORD n=GetEnvironmentVariableA("MATROX_MSI_LOG",setting,sizeof(setting));
+     if(n!=1u || setting[0]!='1')return;
+    }
     char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
     if(n==0||n>=1023)return;
     DWORD i=n; while(i>0 && path[i-1]!='\\' && path[i-1]!='/')i--;

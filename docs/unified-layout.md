@@ -58,6 +58,9 @@ Dither=0
 UnlimitedFuel=0
 ALIAH=0
 FATAL=0
+
+[Debug]
+Log=0
 ```
 
 - FPSLimit under `[Graphics]` is shared by retail and Matrox: 0 means no frame pacing,
@@ -176,3 +179,33 @@ launcher rejects an enabled unimplemented code, explaining that users may
 existing player values are preserved by the INI migrator. The settings
 parser accepts only 0 and 1, rejects duplicate assignments and preserves
 read-only verification.
+
+## [Debug] runtime log control (2026-11-20)
+
+The generated `ScorchedPlanetFix.ini` is now the SAME fully commented,
+user-facing sample as `docs/ScorchedPlanetFix.ini.example`. Every option
+has a description, including unavailable automatic cheat switches.
+
+- `[Debug] Log=0` is the default: the bundled MSI95 and the Scorched-specific
+  GameFrame shim do not write their runtime diagnostics to a file or stderr.
+  The historical GameFrame shim fallback to stderr is explicitly disabled in
+  the project's pinned, temporary build patch.
+- `Log=1` enables `ScorchedPlanetFix.log` beside the launcher; this log
+  is truncated before every new game session, never cumulative.
+- The separate `ScorchedPlanetFix_installer.log` is retained and remains
+  noncumulative regardless of `Log`, so installation/verification failures
+  can always be diagnosed. `--verify` does not generate a runtime log.
+- Existing root INI values, comments, and unknown sections are preserved;
+  a missing `[Debug] Log=0` option is inserted with its description, without
+  overriding a user's `Log=1` choice.
+
+### Why the Matrox executable .bak exists
+
+The original `game/splanetw.exe.bak` is the exact 840704-byte Matrox OEM
+binary preserved from the user's disc before the two checked compatibility
+patches are applied to `game/splanetw.exe`. It is NOT a launcher fallback.
+The currently implemented 66-file OEM verification authenticates this exact
+original backup by SHA-256, and separately verifies the patched active EXE;
+removing it without redesigning that audit would make `--verify` fail.
+The original proprietary `game/msi95.dll.bak` is preserved for the same
+manifest audit and is never loaded at runtime. No automatic deletion.

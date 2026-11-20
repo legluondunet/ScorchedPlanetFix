@@ -8,23 +8,37 @@ use std::path::Path;
 pub const GAME: &str = "game";
 pub const CONFIG: &str = "ScorchedPlanetFix.ini";
 
-const INI_EXAMPLE: &str = "\
-; ScorchedPlanetFix launcher settings (both supported game editions)\r\n\
+/// Shared default written to a new root INI and mirrored under docs/.
+/// All user-facing settings have comments in both copies.
+pub const INI_EXAMPLE: &str = "\
+; ScorchedPlanetFix options — Windows / Wine, retail 3dfx and Matrox OEM\r\n\
+; Native game settings are stored separately in game/splanet.ini\r\n\
+\r\n\
 [Graphics]\r\n\
-; Maximum FPS on every edition; 0 = unlimited, valid 0..240\r\n\
+; Frame-rate limit for both renderers, 0=unlimited, 1..240=maximum FPS\r\n\
 FPSLimit=60\r\n\
 \r\n\
 [Matrox]\r\n\
-; Experimental RGB565 ordered dithering, 0=off, 1=on\r\n\
+; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
+; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
 \r\n\
 [Cheats]\r\n\
-; Reserved: unlimited flight fuel (not implemented)\r\n\
+; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\
+; 1 currently causes an explicit unsupported-feature error.\r\n\
+; UnlimitedFuel: reserve for a future version-specific fuel consumption patch\r\n\
 UnlimitedFuel=0\r\n\
-; ALIAH = invulnerability; code is entered manually in-game for now\r\n\
+; ALIAH: invulnerability; type the native code during gameplay for now\r\n\
+; Some third-party code lists instead spell invulnerability ALLAH\r\n\
 ALIAH=0\r\n\
-; FATAL = all weapons and ammunition; entered manually in-game for now\r\n\
-FATAL=0\r\n";
+; FATAL: grant all weapons and ammunition; type the native code in-game\r\n\
+FATAL=0\r\n\
+\r\n\
+[Debug]\r\n\
+; 0=disable renderer log (default), 1=write a new noncumulative runtime log\r\n\
+; ScorchedPlanetFix.log is created beside EXE only when Log=1\r\n\
+; Installer diagnostics remain in ScorchedPlanetFix_installer.log\r\n\
+Log=0\r\n";
 
 fn regular_directory(path:&Path)->Result<(),String>{
     let metadata=fs::symlink_metadata(path).map_err(|e|format!("Cannot inspect {}: {e}",path.display()))?;
