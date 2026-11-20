@@ -442,6 +442,24 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         for(unsigned i=0;i<6;i++){putstr(stack,&k," ");puthex(stack,&k,sp[i]);}
         stack[k]=0;WriteFile(g_log,stack,k,&wr,NULL);WriteFile(g_log,"\r\n",2,&wr,NULL);
       }
+      /* Read only the faulting instruction window on a first-chance AV.
+       * Never change executable bytes or exception-handling semantics.
+       * Keep this trace guarded by the normal Debug Log=1 condition. */
+      if(ctx->Eip>=16u && readable_span((void*)(ctx->Eip-16u),32u)){
+        static const char hex_digits[]="0123456789ABCDEF";
+        const BYTE* code=(const BYTE*)(ctx->Eip-16u);
+        char instruction[180];k=0;
+        putstr(instruction,&k,"AV_CODE before16_and_after16=");
+        for(unsigned i=0;i<32u;i++){
+            if(i==16u)putstr(instruction,&k," |");
+            instruction[k++]=' ';
+            instruction[k++]=hex_digits[(code[i]>>4)&15u];
+            instruction[k++]=hex_digits[code[i]&15u];
+        }
+        instruction[k]=0;
+        WriteFile(g_log,instruction,k,&wr,NULL);
+        WriteFile(g_log,"\r\n",2,&wr,NULL);
+      }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }

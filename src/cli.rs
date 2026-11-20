@@ -411,7 +411,10 @@ fn wait_for_game(child: &mut Child, logger: &Logger,
                 "Game exited with legacy code 1 (not necessarily a crash; check gameplay if unexpected).");
             return Ok(());
         }
-        return Err(format!("The game exited with code {} (nonzero status; not proof of a crash)",
+        if status.code()==Some(0xC0000005u32 as i32) {
+            return Err("Game crashed with Windows access violation 0xC0000005 (-1073741819). Check the most recent ScorchedPlanetFix.log for FIRST_CHANCE_AV, AV_REGISTERS and AV_CODE; enable [Debug] Log=1 if necessary.".into());
+        }
+        return Err(format!("The game exited with code {} (nonzero status; investigate the renderer and game logs)",
             status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())));
     }
     emit(logger, &mut sink, "The game exited with code 0.");

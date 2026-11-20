@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`e3634804b18dcc6a61702a9ec57a33bbf7da5750e919c0d3f78be32810801dee`
+`b005c9b5294d1b115e7f8a67d11a357110d1cc734f4e45b1fa2c1fc7d3f23393`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -59,3 +59,24 @@ release and press again.
 
 Automatic BMP capture remains disabled. This does not change
 `[Debug] Log=0` or the first-run log policy.
+
+## Crash telemetry from user Wine 11.19 test (2026-11-20)
+
+A verified installed Matrox OEM game using embedded MSI95 DLL hash
+`be3ef0d0f016022941188e4dffd0f15bb4c45e83dffc36796fbe720051cdc0ac`
+entered a no-geometry scene transition around frame 480 and failed at
+frame 498 with `0xC0000005` (read of `0x00000024`) in the game
+`splanetw.exe` at `0x00494965`. The crash was not due to an installer
+verification failure; it occurred after DLL installation and game launch.
+
+The C wrapper already records the full exception address, register state,
+stack, and buffer state when `[Debug] Log=1`. It now additionally records
+`AV_CODE before16_and_after16=`, the 16 code bytes preceding and
+following the faulting EIP, separated by `|`. This is a strictly read-only
+exception probe; it does not intercept/repair/continue the fault, does not
+modify the game EXE, and is disabled with normal `Log=0`.
+
+The crash remains **unresolved pending instruction decoding and reproduction
+of the exact menu transition**. Changes to F12 capture handling are a possible
+regression window, but no `MANUAL_CAPTURE` requests occurred in the crash
+log, so no causal attribution has been established.

@@ -187,3 +187,15 @@ compares its SHA-256 with the DLL embedded in the running installer:
 - A symlink or non-regular file is rejected rather than followed for safety.
 
 The explicit read-only `--verify` mode never performs replacements.
+
+### Experimental Matrox crash investigation (2026-11-20)
+
+The OEM Matrox driver replacement is verified, but a user Wine 11.19
+session crashed in `splanetw.exe` after a scene transition at frame 498.
+Access violation: `0xC0000005`, game EIP `0x00494965`, read address
+`0x00000024`. The source of the null pointer is not yet established.
+The experimental MSI95 now records instruction bytes near the fault in
+`ScorchedPlanetFix.log` when `[Debug] Log=1`; this addition does not
+modify the game or intercept fault handling. The launcher accurately
+identifies status `0xC0000005` as a crash. Native gameplay testing and
+review of the instruction trace are required before merging PR #36.

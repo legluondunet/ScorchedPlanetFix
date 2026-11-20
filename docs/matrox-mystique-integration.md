@@ -299,3 +299,23 @@ are kept only in a temporary rollback path during verified replacement;
 rollback is deleted on success. Any existing legacy `glide.dll.bak` file
 remains untouched. The Matrox original `msi95.dll.bak` remains protected
 as a distinct OEM-reference file, not a backup of an installer-built DLL.
+
+## 2026-11-20: Matrox scene-transition null-pointer crash — diagnostic only
+
+The user's most recent Wine 11.19 run successfully updated the launcher-owned
+MSI95 DLL `6fd8e712…` to `be3ef0d0…`, authenticated the 66 original
+files, and began game execution. The MSI95 runtime log records
+`NO_GEOMETRY_BEGIN` at frame 480 followed by multiple texture-heap
+allocations (43 close together at frame 481), and a first-chance access
+violation at game code `0x00494965` reading `0x00000024` around frame
+498 (10.1 seconds). The identical exception repeats, and Wine exits with
+NTSTATUS `0xC0000005` (`-1073741819`). This is a genuine memory fault,
+not an ordinary legacy non-zero quit code. No F12 was pressed according to
+the log. Previously successful runs did not show this same no-geometry
+transition; therefore different driver builds may not be the only variable.
+
+A new **read-only exception diagnostic** collects the 32 bytes centered on
+the faulting EIP as `AV_CODE before16_and_after16=` to permit x86 opcode
+analysis. The launcher now reports the actual crash status accurately.
+No speculative memory patches or silent AV swallowing are implemented.
+**Root cause not yet established and PR #36 must not be merged.**
