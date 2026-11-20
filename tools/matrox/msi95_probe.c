@@ -325,6 +325,7 @@ static int g_swallowed_left_down = 0;
 static int g_swallowed_right_down = 0;
 
 static int g_preview_created = 0;
+static int g_viewport_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
 static int g_preview_class_registered = 0;
@@ -642,15 +643,26 @@ static void preview_blit(HDC dc){
     if(!GetClientRect(g_preview,&rc))return;
     int cw=rc.right-rc.left, ch=rc.bottom-rc.top;
     if(cw<=0||ch<=0)return;
-    /* Maintain original 8:5 aspect ratio during window resizing. */
-    int dstw=cw,dsth=(int)((cw*(int)h)/(int)w);
-    if(dsth>ch){dsth=ch;dstw=(int)((ch*(int)w)/(int)h);}
+    /* The original 640x400 Matrox framebuffer uses non-square source pixels.
+     * Present at the CRT-correct 4:3 display aspect, not raw 8:5 sample ratio.
+     * Only the GDI presentation rectangle changes: original game framebuffer,
+     * vertices and OEM Win32 input/callbacks are untouched. */
+    int dstw=cw,dsth=(cw*3)/4;
+    if(dsth>ch){dsth=ch;dstw=(ch*4)/3;}
+    if(dstw<1 || dsth<1)return;
     int dx=(cw-dstw)/2,dy=(ch-dsth)/2;
-    /* In opt-in borderless mode, explicitly blacken letterbox bars on every
-     * presentation.  Do not paint the active image area, preserving overlays. */
-    if(g_borderless_active){
-        if(dx>0){PatBlt(dc,0,0,dx,ch,BLACKNESS);PatBlt(dc,dx+dstw,0,cw-dx-dstw,ch,BLACKNESS);}
-        if(dy>0){PatBlt(dc,dx,0,dstw,dy,BLACKNESS);PatBlt(dc,dx,dy+dsth,dstw,ch-dy-dsth,BLACKNESS);}
+    /* Clear pillar/letterbox bars in windowed and borderless preview. */
+    if(dx>0){PatBlt(dc,0,0,dx,ch,BLACKNESS);PatBlt(dc,dx+dstw,0,cw-dx-dstw,ch,BLACKNESS);}
+    if(dy>0){PatBlt(dc,dx,0,dstw,dy,BLACKNESS);PatBlt(dc,dx,dy+dsth,dstw,ch-dy-dsth,BLACKNESS);}
+    if(!g_viewport_reported){
+        char buf[256];DWORD n=0;
+        putstr(buf,&n,"PREVIEW_VIEWPORT display_aspect=4:3 source=");
+        putunsigned(buf,&n,w);putstr(buf,&n,"x");putunsigned(buf,&n,h);
+        putstr(buf,&n," viewport=");putunsigned(buf,&n,(unsigned)dstw);
+        putstr(buf,&n,"x");putunsigned(buf,&n,(unsigned)dsth);
+        putstr(buf,&n," offset=");putunsigned(buf,&n,(unsigned)dx);
+        putstr(buf,&n,",");putunsigned(buf,&n,(unsigned)dy);
+        buf[n]=0;logtext(buf);g_viewport_reported=1;
     }
     BITMAPINFO565 bi;
     zero(&bi,sizeof(bi));
@@ -842,7 +854,7 @@ static void preview_open(void){
       putstr(buf,&n,g_borderless_active?"borderless-desktop":"windowed");
       putstr(buf,&n," window_width=");putunsigned(buf,&n,(unsigned)winw);
       putstr(buf,&n," window_height=");putunsigned(buf,&n,(unsigned)winh);
-      putstr(buf,&n," source=640x400 aspect=8:5 letterbox=black; GDI RGB565, input forwarded");
+      putstr(buf,&n," source=640x400 display_aspect=4:3 pixel_aspect=5:6 pillarbox=black; GDI RGB565, input forwarded");
       buf[n]=0;logtext(buf);
     }
 }
@@ -900,7 +912,7 @@ static void clean(void){
     zero(&g_state,sizeof(g_state));
     zero(g_texture_uploaded,sizeof(g_texture_uploaded));
     if(g_preview){DestroyWindow(g_preview);g_preview=NULL;}
-    g_preview_created=0;g_borderless_active=0;
+    g_preview_created=0;g_borderless_active=0;g_viewport_reported=0;
 }
 
 /* Numbered manual captures live beside the DLL under game/. The two
