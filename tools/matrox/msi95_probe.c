@@ -306,6 +306,15 @@ static unsigned g_focus_filtered_events = 0;
  * that nested msiEndFrame; messages stay in the Win32 queue for the next
  * outermost frame. This prevents a proven triple WndProc reentry path. */
 static unsigned g_inner_input_pumps_deferred = 0;
+/* On the Windows 4:3 trial, two rapid Space presses preceded a buffered
+ * WM_CHAR=Space inside a scene reload, then the OEM game dereferenced its
+ * transiently NULL global [0050DCD0] at 0046D76D. Suppress ONLY this
+ * late character during a short heap-allocation transition window; do
+ * not drop KeyDown/KeyUp, other characters, or unrelated game states.
+ * This narrow input-compatibility experiment remains unproven until
+ * the same sequence is replayed on Windows with the rebuilt DLL. */
+static DWORD g_last_heap_alloc_tick = 0;
+static unsigned g_transition_space_char_ignored = 0;
 /* Passive instrumentation for the observed game AV at 0046D76D:
  * original OEM code loads EDX from [0050DCD0], then reads [EDX+0C].
  * Never assume the global holds a particular game-object type.
@@ -725,6 +734,25 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         }
         return DefWindowProcA(hwnd,msg,wparam,lparam);
     }
+    /* A translated Space character can be delivered after its original
+     * KeyDown has already triggered a new scene. The OEM's scene-global
+     * pointer is legitimately NULL during the texture-heap reload. A second
+     * character in that brief window was immediately followed by the real
+     * game AV 0046D76D in the 2026-11-20 native Windows session.
+     * Do not swallow any other message and require the exact known OEM
+     * instruction signature. This guard does not change the guest EXE.
+     */
+    if(msg==WM_CHAR && (unsigned)wparam==0x20u && g_initialized &&
+       g_heap_count>0u && g_last_heap_alloc_tick!=0u &&
+       (DWORD)(GetTickCount()-g_last_heap_alloc_tick)<=250u &&
+       game_global_probe_supported() &&
+       readable_span((const void*)0x0050DCD0u,sizeof(DWORD)) &&
+       *(const volatile DWORD*)0x0050DCD0u==0u){
+        g_transition_space_char_ignored++;
+        lognum("TRANSITION_SPACE_CHAR_IGNORED count=",
+               g_transition_space_char_ignored,"frame=",g_frames);
+        return 0;
+    }
     /* Capture the exact scene the tester is inspecting, not an arbitrary
      * numbered frame. F12 is a probe-only key and never forwarded to guest. */
     if((msg==WM_KEYDOWN || msg==WM_KEYUP) && (unsigned)wparam==0x7Bu){
@@ -1134,6 +1162,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_last_triangle_frame=0;g_no_geometry_logged=0;
     g_shutdown_started=0;
     g_last_left_click_ms=0;
+    g_last_heap_alloc_tick=0;g_transition_space_char_ignored=0;
     g_game_50dcd0_last=g_game_50dcc0_last=0xFFFFFFFFu;
     g_game_50dcd0_reports=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
@@ -1342,6 +1371,7 @@ LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     unsigned n=(unsigned)Pages*4096u;
     void *ptr=alloc(n);
     if(ptr){
+        g_last_heap_alloc_tick=GetTickCount();
         g_heaps[g_heap_count++]=ptr;
         if(g_heap_count>g_heap_peak){
             g_heap_peak=g_heap_count;
