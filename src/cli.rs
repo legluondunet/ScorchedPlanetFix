@@ -297,10 +297,12 @@ fn matrox_play(root: &Path, logger: &Logger,
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     emit(logger, &mut sink, &format!("Verified Matrox game: {}", runtime.display()));
     emit(logger, &mut sink, "Starting Matrox MSI95 backend (shared INI FPSLimit; no diagnostic time limit)...");
-    configure_renderer_log(root,logger)?;
-    let mut child = matrox_runtime::spawn(root)?;
+    let first=layout::first_launch_pending(root)?;
+    configure_renderer_log(root,logger,first)?;
+    let mut child = matrox_runtime::spawn(root,first)?;
     emit(logger, &mut sink, &format!("Matrox game started, PID {}.", child.id()));
-    wait_for_game(&mut child, logger, sink)
+    let result=wait_for_game(&mut child, logger, sink);
+    finish_first_launch(root,logger,first,result)
 }
 
 /// Performs exactly ONE full read-only integrity audit, and starts the game
@@ -321,12 +323,14 @@ fn verify_and_play(root: &Path, logger: &Logger,
     layout::ensure_support_files(root,"retail")?;
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
     gameframe::ensure_glide(root,&game,|message|logger.write(message))?;
-    configure_renderer_log(root,logger)?;
-    let mut child=verify::launch_preverified(report,&game,logger.session_id(),
+    let first=layout::first_launch_pending(root)?;
+    configure_renderer_log(root,logger,first)?;
+    let mut child=verify::launch_preverified(report,&game,logger.session_id(),first,
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
-    wait_for_game(&mut child, logger, sink)
+    let result=wait_for_game(&mut child, logger, sink);
+    finish_first_launch(root,logger,first,result)
 }
 
 /// Explicit opt-out for debugging or custom game installations. No file
@@ -345,7 +349,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
             "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
         emit(logger, &mut sink,
             &format!("UNVERIFIED LAUNCH: executing {} with no file inspection.", executable.display()));
-        configure_renderer_log(root,logger)?;
+        configure_renderer_log(root,logger,false)?;
         let mut child = matrox_runtime::spawn_unchecked(root)?;
         emit(logger, &mut sink,
             &format!("Matrox game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
@@ -360,7 +364,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     command.current_dir(&game);
     gameframe::configure_process_unchecked(&mut command, &game, logger.session_id(),
         |message| logger.write(message))?;
-    configure_renderer_log(root,logger)?;
+    configure_renderer_log(root,logger,false)?;
     let mut child = command.spawn()
         .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
     emit(logger, &mut sink,
@@ -368,11 +372,28 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     wait_for_game(&mut child, logger, sink)
 }
 
-fn configure_renderer_log(root:&Path,logger:&Logger)->Result<(),String>{
-    if settings::read_settings(&root.join(layout::CONFIG))?.log {
+fn configure_renderer_log(root:&Path,logger:&Logger,force_first_log:bool)->Result<(),String>{
+    let configured=settings::read_settings(&root.join(layout::CONFIG))?;
+    if configured.log || force_first_log {
         logger.reset_renderer_log(root)?;
+        if force_first_log && !configured.log {
+            logger.write("LOG: first verified game launch: runtime diagnostics enabled once despite [Debug] Log=0");
+        }
     }else{
-        logger.write("LOG: [Debug] Log=0, renderer log disabled");
+        logger.write("LOG: [Debug] Log=0, renderer log disabled (previous first-run log preserved)");
+    }
+    Ok(())
+}
+
+/// A new installation receives two logs on first normal game execution.
+/// Do not consume this one-time opportunity after --install-only, a spawn
+/// error, or a failed/abnormal game session. The INI always stays Log=0.
+fn finish_first_launch(root:&Path,logger:&Logger,first:bool,result:Result<(),String>)
+    ->Result<(),String>{
+    result?;
+    if first {
+        layout::mark_first_launch_logged(root,logger.session_id())?;
+        logger.write("LOG: first successful game session recorded in state/; subsequent Log=0 launches are silent");
     }
     Ok(())
 }
@@ -870,14 +891,25 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let logger=Logger::new(&root,"test").unwrap();
         settings::ensure_defaults(&root.join(layout::CONFIG),true).unwrap();
-        configure_renderer_log(&root,&logger).unwrap();
-        assert!(!root.join("ScorchedPlanetFix.log").exists());
-        assert!(root.join("ScorchedPlanetFix_installer.log").exists());
-        fs::write(root.join(layout::CONFIG),b"[Debug]\nLog=1\n").unwrap();
-        configure_renderer_log(&root,&logger).unwrap();
+        fs::create_dir(root.join("game")).unwrap();
+        layout::ensure_support_files(&root,"matrox").unwrap();
+        assert!(layout::first_launch_pending(&root).unwrap());
+        assert_eq!(settings::read_settings(&root.join(layout::CONFIG)).unwrap().log,false);
+        configure_renderer_log(&root,&logger,true).unwrap();
         assert!(root.join("ScorchedPlanetFix.log").exists());
-        fs::write(root.join("ScorchedPlanetFix.log"),b"old runtime session").unwrap();
-        configure_renderer_log(&root,&logger).unwrap();
+        assert!(root.join("ScorchedPlanetFix_installer.log").exists());
+        fs::write(root.join("ScorchedPlanetFix.log"),b"first game runtime diagnostics").unwrap();
+        // An unsuccessful launch does not mark the state and must retry.
+        assert!(finish_first_launch(&root,&logger,true,Err("game exited unexpectedly".into())).is_err());
+        assert!(layout::first_launch_pending(&root).unwrap());
+        finish_first_launch(&root,&logger,true,Ok(())).unwrap();
+        assert!(!layout::first_launch_pending(&root).unwrap());
+        assert!(!settings::read_settings(&root.join(layout::CONFIG)).unwrap().log);
+        configure_renderer_log(&root,&logger,false).unwrap();
+        assert_eq!(fs::read(root.join("ScorchedPlanetFix.log")).unwrap(),
+            b"first game runtime diagnostics", "Log=0 preserves the first-run evidence");
+        fs::write(root.join(layout::CONFIG),b"[Debug]\nLog=1\n").unwrap();
+        configure_renderer_log(&root,&logger,false).unwrap();
         assert_eq!(fs::read(root.join("ScorchedPlanetFix.log")).unwrap(),b"");
         drop(logger);
         fs::remove_dir_all(root).unwrap();

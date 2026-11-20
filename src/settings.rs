@@ -14,7 +14,8 @@ const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
 ; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
 ; [Cheats] ALIAH: invulnerability code, manual in-game only; default=0\r\n\
 ; [Cheats] FATAL: all weapons and ammunition, manual in-game only; default=0\r\n\
-; [Debug] Log: 0=disable runtime logs, 1=noncumulative runtime log beside EXE\r\n\
+; [Debug] Log: 0=stop runtime logs after first successful play, 1=log all sessions\r\n\
+; The first verified game launch always logs once, even with Log=0\r\n\
 ; Installer log stays enabled regardless of [Debug] Log\r\n\r\n";
 pub const DEFAULT_FPS:u32=60;
 pub const MAX_FPS:u32=240;

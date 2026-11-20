@@ -167,7 +167,7 @@ pub fn prepare(root: &Path)->Result<PathBuf,String>{
     Ok(game)
 }
 
-fn configure(command: &mut Command,root:&Path)->Result<(),String> {
+fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),String> {
     let configured=settings::read_settings(&root.join("ScorchedPlanetFix.ini"))?;
     let controlled=[
         "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
@@ -184,18 +184,21 @@ fn configure(command: &mut Command,root:&Path)->Result<(),String> {
     }
     command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
     command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
-    command.env("MATROX_MSI_LOG",if configured.log{"1"}else{"0"});
+    command.env("MATROX_MSI_LOG",if configured.log || force_first_log{"1"}else{"0"});
     Ok(())
 }
-pub fn spawn(root: &Path)->Result<Child,String> {
+pub fn spawn(root: &Path,force_first_log:bool)->Result<Child,String> {
     verify_prepared(root)?;
-    spawn_unchecked(root)
+    spawn_impl(root,force_first_log)
 }
 pub fn spawn_unchecked(root: &Path)->Result<Child,String> {
+    spawn_impl(root,false)
+}
+fn spawn_impl(root: &Path,force_first_log:bool)->Result<Child,String> {
     let game=root.join(GAME_FOLDER);
     let mut command=Command::new(game.join("splanetw.exe"));
     command.current_dir(&game);
-    configure(&mut command,root)?;
+    configure(&mut command,root,force_first_log)?;
     command.spawn().map_err(|e|format!("Cannot launch Matrox Mystique OEM: {e}"))
 }
 
@@ -217,7 +220,7 @@ mod tests {
         fs::write(root.join("ScorchedPlanetFix.ini"),
             b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
         let mut c=Command::new("unused");
-        configure(&mut c,&root).unwrap();
+        configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_FPS_LIMIT" &&
             v==Some(std::ffi::OsStr::new("120"))));
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_DITHER" &&
@@ -225,9 +228,16 @@ mod tests {
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
             v==Some(std::ffi::OsStr::new("0"))));
         fs::write(root.join("ScorchedPlanetFix.ini"),b"[Debug]\nLog=1\n").unwrap();
-        configure(&mut c,&root).unwrap();
+        configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
             v==Some(std::ffi::OsStr::new("1"))));
+        fs::write(root.join("ScorchedPlanetFix.ini"),b"[Debug]\nLog=0\n").unwrap();
+        configure(&mut c,&root,true).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        configure(&mut c,&root,false).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
+            v==Some(std::ffi::OsStr::new("0"))));
         fs::remove_dir_all(&root).unwrap();
     }
     #[test]

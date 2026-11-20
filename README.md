@@ -131,3 +131,13 @@ noncumulative `ScorchedPlanetFix_installer.log` remains available in either
 mode. Matrox's `splanetw.exe.bak` and `msi95.dll.bak` are exact, audited
 OEM originals retained for safe original-content verification; they are never
 used to launch or render. Deleting them invalidates the current verifier.
+
+### First-run diagnostic collection (2026-11-20)
+
+On a clean installation the first verified game launch produces BOTH
+`ScorchedPlanetFix_installer.log` and `ScorchedPlanetFix.log`, even with
+the default `[Debug] Log=0`. After the first normal game exit the
+launcher records the completion in `state/`. Normal subsequent
+`Log=0` play keeps the original runtime diagnostic file without
+updating it. `Log=1` allows a fresh log per game session.
+The root INI never changes its `Log=0` default automatically.

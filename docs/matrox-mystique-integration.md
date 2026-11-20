@@ -224,3 +224,14 @@ and is required by the current immutable-manifest SHA-256 audit. The
 patched and unpatched executables are verified separately; there is no
 fallback to the backup for launching. Likewise `msi95.dll.bak` holds
 the original OEM proprietary driver as audit data only, not loaded.
+
+## Automatic logging on first actual game play (2026-11-20)
+
+The Matrox edition now creates both the normal installer log and the
+MSI95 runtime log on the first **verified** game session even though
+`[Debug] Log=0` is the default in `ScorchedPlanetFix.ini`.
+A first-launch receipt is created under `state/` only after the game
+has exited successfully. Subsequently `Log=0` suppresses new runtime
+logging but retains the first diagnostic file; `Log=1` opts back in.
+`--install-only` and failed starts never consume the first-run receipt.
+The shared retail GameFrame backend follows exactly the same policy.

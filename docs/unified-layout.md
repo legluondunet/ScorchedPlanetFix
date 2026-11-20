@@ -209,3 +209,31 @@ original backup by SHA-256, and separately verifies the patched active EXE;
 removing it without redesigning that audit would make `--verify` fail.
 The original proprietary `game/msi95.dll.bak` is preserved for the same
 manifest audit and is never loaded at runtime. No automatic deletion.
+
+## One-time first-play logs (2026-11-20)
+
+On a **fresh first installation**, the installer writes
+`ScorchedPlanetFix_installer.log` alongside the launcher. The INI **always
+starts with `[Debug] Log=0`**, but the first verified game execution
+automatically forces one complete `ScorchedPlanetFix.log` from either the
+GameFrame or MSI95 renderer, without changing `Log=0` on disk.
+
+- Successful first game exit (including the original game's known exit code
+  1): write `state/ScorchedPlanetFix.first-launch-logged.txt` as the
+  one-time completion marker. This marker is separate from the informational
+  installation receipt. The game resources and player's saves remain
+  untouched.
+- Subsequent verified launches with `Log=0`: leave the first game's runtime
+  log **untouched** (retain diagnostics) and do not generate additional
+  runtime output; the launcher still creates a new noncumulative installer
+  log on each invocation for diagnostics.
+- Subsequent `Log=1` launches: force runtime logging and truncate the
+  runtime log for that session, regardless of the marker.
+- `--install-only` never consumes the first-play opportunity. Spawn failure,
+  interruption or abnormal game exit also leave the marker absent so
+  diagnostics are collected again next time.
+- `--verify` and `--launch-no-verify` keep their established semantics:
+  no first-play marker creation or forced first-play diagnostics.
+- No one-time `Log=1` rewrite of the INI is needed. The launcher passes
+  an **effective temporary log flag to the child renderer**, and only the
+  state receipt records completion.

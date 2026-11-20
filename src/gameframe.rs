@@ -269,19 +269,19 @@ pub fn ensure_glide(_root:&Path,game:&Path,mut log:impl FnMut(&str))->Result<boo
 
 /// Native desktop 4:3 presentation and shared INI FPS limit. Never configure nGlide.
 /// Strict launch path: require the installed renderer to match bundled GameFrame.
-pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
+pub fn configure_process(command:&mut Command,game:&Path,session_id:&str,force_first_log:bool,log:impl FnMut(&str))
     ->Result<(),String>{
-    configure_process_impl(command,game,session_id,true,log)
+    configure_process_impl(command,game,session_id,true,force_first_log,log)
 }
 
 /// Direct-launch opt-out: configure environment without reading/verifying DLL files.
 /// Never install, back up, repair, patch or replace a game/DLL file.
 pub fn configure_process_unchecked(command:&mut Command,game:&Path,session_id:&str,log:impl FnMut(&str))
     ->Result<(),String>{
-    configure_process_impl(command,game,session_id,false,log)
+    configure_process_impl(command,game,session_id,false,false,log)
 }
 
-fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_renderer:bool,mut log:impl FnMut(&str))
+fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_renderer:bool,force_first_log:bool,mut log:impl FnMut(&str))
     ->Result<(),String>{
     if check_renderer { verify_local_gameframe(game)?; }
     let (dw,dh)=desktop()?;
@@ -303,8 +303,11 @@ fn configure_process_impl(command:&mut Command,game:&Path,session_id:&str,check_
     command.env("SCORCHED_FIX_SESSION_ID",session_id);
     // The pinned Scorched-only GameFrame shim checks this flag before ANY
     // file or stderr log write. No renderer log for the normal Log=0 mode.
-    command.env("SCORCHED_FIX_LOG",if configured.log{"1"}else{"0"});
-    if configured.log {
+    // First successful post-install game session is recorded regardless of
+    // the user's default Log=0. The root INI is never rewritten.
+    let write_log=configured.log || force_first_log;
+    command.env("SCORCHED_FIX_LOG",if write_log{"1"}else{"0"});
+    if write_log {
         command.env("SCORCHED_MENU_PROBE","1");
         if let Some(root)=game.parent(){
             command.env("GLIDE_LOG",root.join("ScorchedPlanetFix.log"));
@@ -391,14 +394,14 @@ mod tests{
         assert!(ensure_glide(&root,&root,|_|{}).unwrap());
         assert_eq!(digest(&fs::read(&dll).unwrap()),expected);
         let mut cmd=Command::new("test.exe");
-        configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
+        configure_process(&mut cmd,&root,"123456-42",false,|_|{}).unwrap();
         let expected_log=root.parent().unwrap().join("ScorchedPlanetFix.log");
         assert!(!cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SESSION_ID"
             && val==Some(std::ffi::OsStr::new("123456-42"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT" && val==Some(std::ffi::OsStr::new("60"))));
         fs::write(base.join("ScorchedPlanetFix.ini"),b"[Graphics]\nFPSLimit=120\n[Debug]\nLog=1\n").unwrap();
-        configure_process(&mut cmd,&root,"123456-42",|_|{}).unwrap();
+        configure_process(&mut cmd,&root,"123456-42",false,|_|{}).unwrap();
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_FPS_LIMIT"
             && val==Some(std::ffi::OsStr::new("120"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_GLIDE_ADOPT_WINDOW" && val.is_some()));
@@ -409,6 +412,16 @@ mod tests{
             && val==Some(std::ffi::OsStr::new("1"))));
         assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_SIGNATURE"
             && val.is_some_and(|s|s.to_string_lossy().starts_with(concat!("ScorchedPlanetFix ", env!("CARGO_PKG_VERSION"), "-")))));
+        // First verified launch overrides default Log=0 without changing it.
+        fs::write(base.join("ScorchedPlanetFix.ini"),b"[Debug]\nLog=0\n").unwrap();
+        configure_process(&mut cmd,&root,"first-play",true,|_|{}).unwrap();
+        assert!(cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val==Some(expected_log.as_os_str())));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_LOG"
+            && val==Some(std::ffi::OsStr::new("1"))));
+        configure_process(&mut cmd,&root,"later-play",false,|_|{}).unwrap();
+        assert!(!cmd.get_envs().any(|(key,val)|key=="GLIDE_LOG" && val.is_some()));
+        assert!(cmd.get_envs().any(|(key,val)|key=="SCORCHED_FIX_LOG"
+            && val==Some(std::ffi::OsStr::new("0"))));
         fs::remove_dir_all(&base).unwrap();
     }
 
