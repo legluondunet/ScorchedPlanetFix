@@ -13,3 +13,28 @@ The x64 launcher embeds a Windows x86 GameFrame Glide-to-OpenGL DLL compiled fro
 **Logging (v2.0.2 and later):** the launcher appends installation, file-validation, hardware and process diagnostics to `ScorchedPlanetFix_installer.log`. The GameFrame DLL appends Glide/OpenGL diagnostics, menu telemetry and initialization errors to `ScorchedPlanetFix.log`. Both files are beside the launcher. A unique `session_id` is written into both logs for each game launch, even if the DLL fails before rendering. Existing unified `ScorchedPlanetFix.log` contents are not discarded; newer DLL sessions are marked with `SCORCHED_SESSION`. The historical v2.0.1 binary used the earlier unified logging scheme.
 
 **Licenses:** ScorchedPlanetFix GPL-3.0-or-later, bundled GameFrame Apache-2.0. Original commercial game files and proprietary drivers are never included.
+
+
+## Native Windows 3dfx startup foreground (2026-11-20)
+
+During a successful full FR/DE retail 3dfx GameFrame Windows 11 run, the
+maintainer confirmed graphics, sound, controls, Alt-Tab and game behavior
+but observed that the game window **initially appeared behind other windows**.
+This is not intentional. The shim builds a temporary fallback OpenGL window
+before the original `Scorched Planet` HWND exists, then hides that fallback
+and adopts the game's HWND on its first available frame.
+
+The Scorched-only pinned GameFrame patch now requests
+`SetForegroundWindow(game_hwnd)` **once immediately after fallback hiding**
+and emits `SCORCHED_WINDOW: initial foreground request accepted=true|false`
+when runtime logging is enabled. The Win32 API can refuse activation under
+foreground-lock rules; it is **not forced** and is never retried every frame.
+This retains manual focus changes and Alt-Tab behavior, and does not touch
+Matrox MSI95 or the game's executable.
+
+Manual regression: launch from a foreground PowerShell/Explorer window and
+check that the 3dfx game automatically appears above it; then Alt-Tab away
+and confirm it stays in the background until explicitly selected. Check
+keyboard/mouse inputs, menu/cinematics, restart, and clean exit.
+A successful compilation does not establish that Windows accepted the
+activation request, so inspect the new log and visually verify it.
