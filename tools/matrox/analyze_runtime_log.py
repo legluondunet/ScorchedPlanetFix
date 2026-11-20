@@ -22,6 +22,8 @@ def fields(line: str) -> dict[str, int]:
 def parse_log(path: Path) -> dict:
     result = {
         "file": str(path), "status": "incomplete", "errors": [],
+        "runtime_platform": None, "runtime_wine_version": None,
+        "runtime_host_os": None, "runtime_proton_hint": None,
         "init_seen": False, "msi_exit_seen": False, "shutdown_complete": False,
         "session_ms": None, "frames": None, "heap_exit_live": None,
         "heap_peak_live": None, "heap_av_live": None,
@@ -39,7 +41,15 @@ def parse_log(path: Path) -> dict:
         with path.open("r", encoding="utf-8", errors="replace") as log:
             for raw in log:
                 line = raw.strip()
-                if line.startswith("msiInit width="):
+                if line.startswith("SYS-OS: runtime="):
+                    result["runtime_platform"] = line.partition("runtime=")[2]
+                elif line.startswith("SYS-WINE: version="):
+                    result["runtime_wine_version"] = line.partition("version=")[2]
+                elif line.startswith("SYS-HOST: OS="):
+                    result["runtime_host_os"] = line.partition("OS=")[2]
+                elif line.startswith("SYS-PROTON: "):
+                    result["runtime_proton_hint"] = line.partition(": ")[2]
+                elif line.startswith("msiInit width="):
                     result["init_seen"] = True
                 elif line.startswith("msiExit total_frames="):
                     result["msi_exit_seen"] = True
@@ -124,7 +134,8 @@ def main(argv=None) -> int:
         print(json.dumps(reports, ensure_ascii=False, indent=2))
     else:
         for r in reports:
-            print(f"{r['file']}: {r['status']} | frames={r['frames']} "
+            print(f"{r['file']}: {r['status']} | platform={r['runtime_platform'] or 'unreported'} "
+                  f"wine={r['runtime_wine_version'] or 'unreported'} | frames={r['frames']} "
                   f"session_ms={r['session_ms']} heap_peak={r['heap_peak_live']} "
                   f"heap_exit_live={r['heap_exit_live']} AV={r['first_chance_av_count']} "
                   f"sites={r['av_sites']} "
