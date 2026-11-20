@@ -315,6 +315,7 @@ static unsigned g_inner_input_pumps_deferred = 0;
  * the same sequence is replayed on Windows with the rebuilt DLL. */
 static DWORD g_last_heap_alloc_tick = 0;
 static unsigned g_transition_space_char_ignored = 0;
+static unsigned g_transition_space_char_evaluations = 0;
 /* Passive instrumentation for the observed game AV at 0046D76D:
  * original OEM code loads EDX from [0050DCD0], then reads [EDX+0C].
  * Never assume the global holds a particular game-object type.
@@ -742,16 +743,38 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
      * Do not swallow any other message and require the exact known OEM
      * instruction signature. This guard does not change the guest EXE.
      */
-    if(msg==WM_CHAR && (unsigned)wparam==0x20u && g_initialized &&
-       g_heap_count>0u && g_last_heap_alloc_tick!=0u &&
-       (DWORD)(GetTickCount()-g_last_heap_alloc_tick)<=250u &&
-       game_global_probe_supported() &&
-       readable_span((const void*)0x0050DCD0u,sizeof(DWORD)) &&
-       *(const volatile DWORD*)0x0050DCD0u==0u){
-        g_transition_space_char_ignored++;
-        lognum("TRANSITION_SPACE_CHAR_IGNORED count=",
-               g_transition_space_char_ignored,"frame=",g_frames);
-        return 0;
+    if(msg==WM_CHAR && (unsigned)wparam==0x20u && g_initialized){
+        /* Evaluate the same narrow guard, but report why the delivered
+         * character was passed or suppressed in an explicit Log=1 session.
+         * Do not suppress KeyDown, KeyUp, mouse, non-Space or other states. */
+        DWORD age=g_last_heap_alloc_tick!=0u?
+            (DWORD)(GetTickCount()-g_last_heap_alloc_tick):0xFFFFFFFFu;
+        int signature_ok=game_global_probe_supported();
+        int readable=signature_ok &&
+            readable_span((const void*)0x0050DCD0u,sizeof(DWORD));
+        DWORD game_global=readable?
+            *(const volatile DWORD*)0x0050DCD0u:0xFFFFFFFFu;
+        int suppress=g_heap_count>0u && g_last_heap_alloc_tick!=0u &&
+            age<=250u && readable && game_global==0u;
+        if(g_log && g_transition_space_char_evaluations<12u){
+            char info[380];DWORD n=0;
+            g_transition_space_char_evaluations++;
+            putstr(info,&n,"TRANSITION_SPACE_CHAR_EVAL frame=");
+            putunsigned(info,&n,g_frames);
+            putstr(info,&n," heap_live=");putunsigned(info,&n,g_heap_count);
+            putstr(info,&n," heap_age_ms=");putunsigned(info,&n,age);
+            putstr(info,&n," scene_global=");puthex(info,&n,game_global);
+            putstr(info,&n," signature_ok=");putunsigned(info,&n,(unsigned)signature_ok);
+            putstr(info,&n," callback_depth=");putunsigned(info,&n,g_guest_callback_depth);
+            putstr(info,&n," suppress=");putunsigned(info,&n,(unsigned)suppress);
+            info[n]=0;logtext(info);
+        }
+        if(suppress){
+            g_transition_space_char_ignored++;
+            lognum("TRANSITION_SPACE_CHAR_IGNORED count=",
+                   g_transition_space_char_ignored,"frame=",g_frames);
+            return 0;
+        }
     }
     /* Capture the exact scene the tester is inspecting, not an arbitrary
      * numbered frame. F12 is a probe-only key and never forwarded to guest. */
@@ -1163,6 +1186,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_shutdown_started=0;
     g_last_left_click_ms=0;
     g_last_heap_alloc_tick=0;g_transition_space_char_ignored=0;
+    g_transition_space_char_evaluations=0;
     g_game_50dcd0_last=g_game_50dcc0_last=0xFFFFFFFFu;
     g_game_50dcd0_reports=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
