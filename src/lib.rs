@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(result,wanted);
         let changes:Vec<_>=raw.iter().zip(&result).enumerate()
             .filter(|(_, (before,after))|before!=after).map(|(i,_)|i).collect();
-        assert_eq!(changes,vec![0x34C00,0x34C01,0x34C02,0x34C05,
+        assert_eq!(changes,vec![0x34C00,0x34C01,0x34C02,0x34C03,0x34C05,
             0x34CBB,0x34CBC,0x48A6D,0x48A6E,0x48A6F,0x48A70]);
         raw[0x34CBB]=0x90;
         assert!(patch_with_hashes_for(&raw,&sha256_hex(&raw),&sha256_hex(&wanted),FR_DE_PROFILE).is_err());
