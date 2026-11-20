@@ -23,6 +23,8 @@ typedef unsigned long SIZE_T;
 #define FILE_SHARE_WRITE 2U
 #define GENERIC_WRITE 0x40000000U
 #define CREATE_ALWAYS 2U
+#define CREATE_NEW 1U
+#define INVALID_FILE_ATTRIBUTES 0xFFFFFFFFu
 #define FILE_ATTRIBUTE_NORMAL 0x80U
 #define MEM_COMMIT 0x1000U
 #define MEM_RESERVE 0x2000U
@@ -70,6 +72,7 @@ __declspec(dllimport) HANDLE __stdcall CreateFileA(const char*,DWORD,DWORD,void*
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
 __declspec(dllimport) BOOL __stdcall WriteFile(HANDLE,const void*,DWORD,DWORD*,void*);
 __declspec(dllimport) DWORD __stdcall GetModuleFileNameA(void*,char*,DWORD);
+__declspec(dllimport) DWORD __stdcall GetFileAttributesA(const char*);
 __declspec(dllimport) DWORD __stdcall GetTickCount(void);
 /* Monotonic Windows performance counter is available on Windows XP+ and Wine.
  * Keep timing at MSI end-of-frame so the original OEM EXE and resources stay
@@ -246,9 +249,11 @@ static unsigned g_shadow_once_repeated=0;
 static unsigned g_shadow_once_no_base=0;
 static unsigned g_shadow_once_nonshadow_resets=0;
 
-/* A one-frame manual diagnostic is armed by F12 (not forwarded to Win95
- * guest); overwrites the last two BMPs to avoid accumulating files. */
+/* One manual pair per distinct F12 keypress. A file number is reserved
+ * lazily in the game's own directory; previously created images are NEVER
+ * overwritten, including after game restarts or older experiments. */
 static unsigned g_manual_capture_pending=0,g_manual_capture_active=0;
+static unsigned g_manual_capture_sequence=0,g_f12_held=0;
 /* v0.24 purely diagnostic. Capture the first significant opaque-blue sprite
  * automatically, plus the next complete frame with ownership, without
  * changing a single game framebuffer pixel or requiring an F12 press. */
@@ -540,8 +545,10 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
     /* Capture the exact scene the tester is inspecting, not an arbitrary
      * numbered frame. F12 is a probe-only key and never forwarded to guest. */
     if((msg==WM_KEYDOWN || msg==WM_KEYUP) && (unsigned)wparam==0x7Bu){
-        if(msg==WM_KEYDOWN){
-            g_manual_capture_pending=1;
+        if(msg==WM_KEYUP)g_f12_held=0;
+        else if(!g_f12_held){
+            g_f12_held=1;
+            if(g_manual_capture_pending<32u)g_manual_capture_pending++;
             lognum("MANUAL_CAPTURE requested_at_frame=",g_frames,NULL,0);
         }
         return 0;
@@ -695,6 +702,49 @@ static void clean(void){
     g_preview_created=0;g_borderless_active=0;
 }
 
+/* Numbered manual captures live beside the DLL under game/. The two
+ * related filenames use one serial and contain a raw frame and ownership
+ * map from the SAME render frame. The sequence scans existing files so
+ * numbers survive program restarts and a partial/failed previous pair.
+ * The final CreateFile uses CREATE_NEW even after the existence probe:
+ * no race or manual collision can ever truncate an existing picture. */
+static void capture_name(char*dst,unsigned serial,const char*suffix){
+    DWORD n=0;
+    putstr(dst,&n,"matrox_capture_");
+    if(serial<1000u)dst[n++]='0';
+    if(serial<100u)dst[n++]='0';
+    if(serial<10u)dst[n++]='0';
+    putunsigned(dst,&n,serial);
+    putstr(dst,&n,suffix);
+    dst[n]=0;
+}
+static int capture_file_present(const char*filename){
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return -1;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;
+    while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return -1;
+    path[i+k]=0;
+    return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
+}
+static int next_capture_pair(char*frame,char*coverage){
+    for(unsigned tries=0;tries<999999u;tries++){
+        if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
+        unsigned serial=++g_manual_capture_sequence;
+        capture_name(frame,serial,"_frame.bmp");
+        capture_name(coverage,serial,"_coverage.bmp");
+        int frame_exists=capture_file_present(frame);
+        int coverage_exists=capture_file_present(coverage);
+        if(frame_exists<0||coverage_exists<0){
+            logtext("MANUAL_CAPTURE cannot resolve output directory");
+            return FALSE;
+        }
+        if(!frame_exists&&!coverage_exists)return TRUE;
+    }
+    logtext("MANUAL_CAPTURE exhausted available file numbers");
+    return FALSE;
+}
 /* Snapshot the combined CPU + experimental MSI RGB565 framebuffer.
  * BMP uses top-down BI_BITFIELDS. */
 static void put16le(BYTE *p,unsigned v){p[0]=(BYTE)v;p[1]=(BYTE)(v>>8);}
@@ -714,7 +764,7 @@ static void capture_frame(const char *filename,unsigned bit){
     if(n==0||n>=1023)return;
     DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
     DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
-    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     if(h==INVALID_HANDLE_VALUE){logtext("FRAME_CAPTURE FAILED: file could not be created");return;}
     BYTE header[66];zero(header,sizeof(header));
     header[0]='B';header[1]='M';put32le(header+2,66u+bytes);put32le(header+10,66u);
@@ -754,7 +804,7 @@ static void capture_blue_diagnostic(const char*filename,int atlas){
     if(n==0 || n>=1023)return;
     DWORD i=n;while(i>0 && path[i-1]!='\\' && path[i-1]!='/')i--;
     DWORD k=0;while(filename[k] && i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
-    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     if(h==INVALID_HANDLE_VALUE){logtext("BLUE_DIAGNOSTIC could not create BMP");return;}
     BYTE hdr[66];zero(hdr,sizeof(hdr));
     hdr[0]='B';hdr[1]='M';put32le(hdr+2,66u+bytes);put32le(hdr+10,66u);
@@ -811,7 +861,7 @@ static void capture_ownership(const char *filename){
     if(n==0||n>=1023)return;
     DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
     DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
-    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     if(h==INVALID_HANDLE_VALUE){logtext("WORLD_COVERAGE WRITE ERROR: open failed");return;}
     unsigned stride=(width*2u+3u)&~3u, bytes=stride*height;
     BYTE header[66];zero(header,sizeof(header));
@@ -902,6 +952,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_shadow_once_blended=g_shadow_once_repeated=0;
     g_shadow_once_no_base=g_shadow_once_nonshadow_resets=0;
     g_manual_capture_pending=g_manual_capture_active=0;
+    g_manual_capture_sequence=g_f12_held=0;
     g_auto_blue_frame_samples=g_auto_blue_first_captured=0;
     g_auto_blue_pair_pending=g_auto_blue_pair_captured=0;
     g_blue_mask_frame=0xFFFFFFFFu;g_blue_atlas_valid=0;
@@ -1067,8 +1118,8 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     if(ClearRGB&&g_color)zero(g_color,(unsigned)g_info.msiColor.MemSize);
     /* Only record selected frame indices; one-byte ownership writes never
      * affect regular frames' performance or the game's framebuffer. */
-    g_manual_capture_active=g_manual_capture_pending;
-    g_manual_capture_pending=0;
+    g_manual_capture_active=g_manual_capture_pending!=0;
+    if(g_manual_capture_pending)g_manual_capture_pending--;
     g_auto_blue_frame_samples=0;
     /* No automatic debug ownership tracking or BMP capture. */
     g_capture_ownership=g_manual_capture_active;
@@ -1140,64 +1191,22 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     (void)Dump;(void)Frame;(void)Wait;
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
     g_frames++;
-    if(g_frames==5)capture_frame("matrox_frame_start.bmp",1u);
-    if(g_frames==60)capture_frame("matrox_frame_0060.bmp",2u);
-    if(g_frames==240)capture_frame("matrox_frame_0240.bmp",4u);
-    if(g_frames==600)capture_frame("matrox_frame_0600.bmp",64u);
-    if(g_first_zplane_frame != 0xFFFFFFFFu && g_frames == g_first_zplane_frame + 1u)
-        capture_frame("matrox_first_zplane.bmp",8192u);
-    /* The trigger frame may be a single-frame explosion: preserve it now,
-     * then record the *following* full raster frame with its ownership map.
-     * Both are one-shot and cannot accumulate unlimited snapshots. */
-    if(g_frames>=1200u && g_auto_blue_frame_samples>=5000u &&
-       !g_auto_blue_first_captured){
-        capture_frame("matrox_auto_blue_trigger.bmp",0u);
-        capture_blue_diagnostic("matrox_auto_blue_mask.bmp",0);
-        capture_blue_diagnostic("matrox_auto_blue_source.bmp",1);
-        if(g_blue_atlas_valid){
-            char b[330];DWORD n=0;
-            putstr(b,&n,"BLUE_SOURCE frame=");putunsigned(b,&n,g_frames-1u);
-            putstr(b,&n," tex_offset=");putunsigned(b,&n,g_blue_atlas_tex_offset);
-            putstr(b,&n," lut_offset=");putunsigned(b,&n,g_blue_atlas_lut_offset);
-            putstr(b,&n," wh=");putunsigned(b,&n,g_blue_atlas_width);
-            putstr(b,&n,"x");putunsigned(b,&n,g_blue_atlas_height);
-            putstr(b,&n," planes=");putunsigned(b,&n,g_blue_atlas_planes);
-            putstr(b,&n," key=");puthex(b,&n,g_blue_atlas_key);
-            putstr(b,&n," mask=");puthex(b,&n,g_blue_atlas_key_mask);
-            b[n]=0;logtext(b);
+    /* No numbered frame snapshots: F12 is the only screenshot trigger. */
+    if(g_manual_capture_active){
+        char frame[100],coverage[100];
+        if(next_capture_pair(frame,coverage)){
+            capture_frame(frame,0u);
+            capture_ownership(coverage);
+            char message[350];DWORD n=0;
+            putstr(message,&n,"MANUAL_CAPTURE pair frame=");
+            putstr(message,&n,frame);
+            putstr(message,&n," coverage=");
+            putstr(message,&n,coverage);
+            message[n]=0;logtext(message);
         }
-        g_auto_blue_first_captured=1;
-        g_auto_blue_pair_pending=1;
-        lognum("AUTO_BLUE_CAPTURE first_frame=",g_frames,
-               "blue_pixels=",g_auto_blue_frame_samples);
+        g_manual_capture_active=0;
     }
-    if(g_frames==1200)capture_frame("matrox_frame_1200.bmp",128u);
-    if(g_frames==1800)capture_frame("matrox_frame_1800.bmp",256u);
-    if(g_frames==3000)capture_frame("matrox_frame_3000.bmp",512u);
-    if(g_frames==3600)capture_frame("matrox_frame_3600.bmp",1024u);
-    if(g_frames==4200)capture_frame("matrox_frame_4200.bmp",2048u);
-    if(g_frames==4800)capture_frame("matrox_frame_4800.bmp",4096u);
-    if(g_capture_ownership && g_ownership){
-        if(g_auto_blue_pair_pending && !g_auto_blue_pair_captured){
-            capture_frame("matrox_auto_blue_frame.bmp",0u);
-            capture_ownership("matrox_auto_blue_coverage.bmp");
-            g_auto_blue_pair_pending=0;
-            g_auto_blue_pair_captured=1;
-            lognum("AUTO_BLUE_CAPTURE paired_frame=",g_frames,
-                   "blue_pixels=",g_auto_blue_frame_samples);
-        }
-        if(g_manual_capture_active){
-            capture_frame("matrox_manual_frame.bmp",0u);
-            capture_ownership("matrox_manual_coverage.bmp");
-            g_manual_capture_active=0;
-            lognum("MANUAL_CAPTURE complete_at_frame=",g_frames,NULL,0);
-        }
-        if(g_frames==3000)capture_ownership("matrox_coverage_3000.bmp");
-        if(g_frames==3600)capture_ownership("matrox_coverage_3600.bmp");
-        if(g_frames==4800)capture_ownership("matrox_coverage_4800.bmp");
-        if(g_frames==6000)capture_ownership("matrox_coverage_6000.bmp");
-        g_capture_ownership=0;
-    }
+    g_capture_ownership=0;
     preview_present();
     frame_limit(); /* user-configured maximum FPS from [Graphics] */
     if(g_frames%120==0 && g_frames>360 && g_frames-g_last_triangle_frame>=120 && !g_no_geometry_logged){
@@ -1283,9 +1292,7 @@ static BOOL readable_parameters(const T_msiParameters *p){
 static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(!g_initialized){logtext("msiSetParameters called BEFORE successful msiInit");return FALSE;}
     g_params++;
-    if(g_params==120)capture_frame("matrox_buffer_0120.bmp",8u);
-    if(g_params==500)capture_frame("matrox_buffer_0500.bmp",16u);
-    if(g_params==1000)capture_frame("matrox_buffer_1000.bmp",32u);
+    /* No automatic buffer BMPs; only deliberate F12 pairs are saved. */
     if(p==(T_msiParameters*)0xffffffffu){
         if(g_params<=20 || g_params%200==0)
             lognum("msiSetParameters SPECIAL -1 (original driver handles explicitly) call=",g_params,NULL,0);

@@ -235,3 +235,23 @@ has exited successfully. Subsequently `Log=0` suppresses new runtime
 logging but retains the first diagnostic file; `Log=1` opts back in.
 `--install-only` and failed starts never consume the first-run receipt.
 The shared retail GameFrame backend follows exactly the same policy.
+
+## Repeatable user-requested F12 diagnostics (2026-11-20)
+
+The MSI95 shim now emits a *new paired set* each time the user presses
+F12, instead of overwriting `matrox_manual_frame.bmp` and
+`matrox_manual_coverage.bmp`:
+
+```
+game/matrox_capture_0001_frame.bmp
+game/matrox_capture_0001_coverage.bmp
+game/matrox_capture_0002_frame.bmp
+game/matrox_capture_0002_coverage.bmp
+```
+
+Both images come from the same rendered frame. Existing files survive
+multiple presses and process restarts. A half-written pair is also
+protected; the scan skips a serial if either filename exists and the
+final `CreateFileA(..., CREATE_NEW, ...)` never replaces previous data.
+F12 keyboard repeats are ignored until the key is released.
+No automatic BMP snapshots are enabled.

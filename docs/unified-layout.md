@@ -237,3 +237,14 @@ GameFrame or MSI95 renderer, without changing `Log=0` on disk.
 - No one-time `Log=1` rewrite of the INI is needed. The launcher passes
   an **effective temporary log flag to the child renderer**, and only the
   state receipt records completion.
+
+## Repeatable Matrox F12 image and diagnostic-map pairs (2026-11-20)
+
+Each **distinct** keypress generates a new, non-overwriting paired set
+under `game/`:
+`matrox_capture_0001_frame.bmp` plus
+`matrox_capture_0001_coverage.bmp`, increasing serial numbers across
+restarts. The driver skips a serial if **either** file exists and
+opens new files with `CREATE_NEW` as a final guard against overwrites.
+It ignores F12 autorepeat until the key is released. Automatic BMP
+capture and the default `[Debug] Log=0` are unchanged.

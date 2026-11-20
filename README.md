@@ -141,3 +141,13 @@ launcher records the completion in `state/`. Normal subsequent
 `Log=0` play keeps the original runtime diagnostic file without
 updating it. `Log=1` allows a fresh log per game session.
 The root INI never changes its `Log=0` default automatically.
+
+### Multiple Matrox screenshots without overwriting (2026-11-20)
+
+Every separate **F12** keypress on the Matrox edition generates a unique
+numbered pair in `game/`: `matrox_capture_0001_frame.bmp` and
+`matrox_capture_0001_coverage.bmp`, then `0002`, `0003`, etc.
+Existing screenshots are preserved across launches and the files are
+opened with the Windows no-overwrite `CREATE_NEW` flag. Release F12
+between captures. Attach both files with matching numbers when reporting
+the menu transparency and world rendering issues.
