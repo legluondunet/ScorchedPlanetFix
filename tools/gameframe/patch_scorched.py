@@ -46,6 +46,7 @@ def main() -> None:
     # GameFrame is a borderless OpenGL wrapper and never switches screen modes.
     replace("win32.rs", "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;",
             "    pub fn ShowWindow(w: HWND, cmd: i32) -> BOOL;\n"
+            "    pub fn SetForegroundWindow(w: HWND) -> BOOL;\n"
             "    pub fn IsWindow(w: HWND) -> BOOL;\n"
             "    pub fn GetWindowTextA(w: HWND, name: *mut u8, max: i32) -> i32;\n"
             "    pub fn GetSystemMetrics(index: i32) -> i32;")
@@ -101,6 +102,13 @@ pub fn adopt_scorched(w: u32, h: u32) -> Option<HWND> {
     if !fallback.is_null() && fallback!=sized {
         unsafe { ShowWindow(fallback,0); }
     }
+    // The early fallback can cause the console/desktop to stay in front when
+    // the actual game's HWND is adopted. Ask Windows for foreground ONCE,
+    // immediately after hiding fallback, while the user-initiated launch is
+    // still starting. Win32 may deny the request due to foreground lock;
+    // never force focus in the frame loop or steal it after Alt-Tab.
+    let activated=unsafe { SetForegroundWindow(sized) }!=0;
+    log!("SCORCHED_WINDOW: initial foreground request accepted={activated}");
     log!("SCORCHED_WINDOW: adopted original game HWND {sized:?}; fallback hidden; input and OpenGL on one HWND");
     Some(sized)
 }
@@ -487,7 +495,7 @@ mod tests {
             '            crate::gl::check(gl, "in the frame");',
             '            overlay.draw(gl, lfb, cw, ch, x0, y0, vw, vh);\n            crate::gl::check(gl, "in the frame");')
 
-    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + INI-configured FPS + menu telemetry + root-menu version overlay")
+    print("Pinned GameFrame Scorched Planet overrides applied: desktop borderless + native input HWND + one-shot startup foreground + INI-configured FPS + menu telemetry + root-menu version overlay")
     for file in ["window.rs","win32.rs","api/sst.rs"]:
         text=(ROOT/file).read_text()
         if "ChangeDisplaySettings" in text:
