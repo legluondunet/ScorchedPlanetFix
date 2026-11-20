@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`024ea842dc1d984c7387074629b941773277988a5a40e3ff365a2626e402d122`
+`50998ccfda4dd42f759c1e6cff843e1fec2bd02aa0f21c3d41ec17a3ca05a02d`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -177,3 +177,13 @@ run when `[Debug] Log=1` and never alter exception handling.
 Repeat normal menu exit under Wine; inspect the scene-list snapshot
 to distinguish a stale count, a failed resize, and a teardown order
 problem. Do not consider this crash fixed without live verification.
+
+## AV input-context probe (2026-11-20)
+
+When `[Debug] Log=1`, `FIRST_CHANCE_AV` now includes a passive
+`AV_INPUT_CONTEXT` snapshot: `endframe_depth`, `guest_callback_depth`,
+last forwarded Win32 message, its frame, and age in milliseconds.
+This tests whether scene-list faults occur synchronously inside the
+preview's forwarding of OEM events from `msiEndFrame`, or later during
+game-owned teardown. No input or exception handling behavior is changed.
+The age `4294967295` means no forwarded event occurred yet.
