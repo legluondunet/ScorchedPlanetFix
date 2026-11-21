@@ -70,6 +70,7 @@ typedef unsigned long SIZE_T;
 #define PM_REMOVE 0x0001u
 #define BI_BITFIELDS 3u
 #define DIB_RGB_COLORS 0u
+#define GDI_HALFTONE 4
 #define SRCCOPY 0x00CC0020u
 #define CW_USEDEFAULT ((int)0x80000000u)
 #define GDI_ERROR 0xFFFFFFFFu
@@ -137,6 +138,8 @@ __declspec(dllimport) HDC __stdcall BeginPaint(HWND,PAINTSTRUCT_MIN*);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND,const PAINTSTRUCT_MIN*);
 __declspec(dllimport) int __stdcall StretchDIBits(HDC,int,int,int,int,int,int,int,int,const void*,const BITMAPINFO565*,UINT,DWORD);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC,int,int,int,int,DWORD);
+__declspec(dllimport) int __stdcall SetStretchBltMode(HDC,int);
+__declspec(dllimport) BOOL __stdcall SetBrushOrgEx(HDC,int,int,POINT*);
 
 
 /* Matches MSI95/msi95.h in official Matrox SDK; all 32-bit layout. */
@@ -347,6 +350,12 @@ static int g_swallowed_right_down = 0;
 static int g_preview_created = 0;
 static int g_viewport_reported=0;
 static int g_borderless_enabled=0;
+/* Presentation-only experimental smoothing. The 640x400 game framebuffer,
+ * texture lookup, color-key, Z planes and geometry are never altered.
+ * HALFTONE behavior depends on the Win32 GDI implementation; in Wine it can
+ * interpolate scaled pixels. Off by default to preserve pixel-exact output. */
+static int g_smooth_scaling_enabled=0;
+static unsigned g_smooth_scaling_gdi_failures=0;
 static int g_borderless_active=0;
 static int g_preview_class_registered = 0;
 static int g_shutdown_started = 0;
@@ -753,6 +762,18 @@ static void preview_blit(HDC dc){
     bi.bmi.biCompression=BI_BITFIELDS;
     bi.bmi.biSizeImage=(DWORD)(w*h*2u);
     bi.masks[0]=0xF800u;bi.masks[1]=0x07E0u;bi.masks[2]=0x001Fu;
+    /* Keep the validated default GDI stretch path untouched. HALFTONE is
+     * optional and affects only the final display enlargement, never any
+     * source pixels or guest-owned memory. Wine's GDI implementation may
+     * interpolate while Windows implementation may use a different filter. */
+    if(g_smooth_scaling_enabled){
+        int old=SetStretchBltMode(dc,GDI_HALFTONE);
+        if(old){
+            SetBrushOrgEx(dc,0,0,NULL);
+        }else if(g_smooth_scaling_gdi_failures++==0u){
+            logtext("PREVIEW_SMOOTH_SCALING HALFTONE unsupported; GDI uses previous mode");
+        }
+    }
     int result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
     if(result==0 || (unsigned)result==GDI_ERROR){
         g_preview_failures++;
@@ -1359,6 +1380,12 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_msi_dither_enabled=(n==1u && setting[0]=='1');}
     logtext(g_msi_dither_enabled?"MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)":
             "MSI_DITHER disabled (v0.33 modulation quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_SMOOTH_SCALING",setting,sizeof(setting));
+      g_smooth_scaling_enabled=(n==1u && setting[0]=='1');}
+    g_smooth_scaling_gdi_failures=0u;
+    logtext(g_smooth_scaling_enabled?
+       "PREVIEW_SMOOTH_SCALING requested=HALFTONE (experimental; GDI platform-dependent)":
+       "PREVIEW_SMOOTH_SCALING requested=nearest (reference, unchanged)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
