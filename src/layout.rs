@@ -24,6 +24,8 @@ FPSLimit=60\r\n\
 ; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
 ; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
+; Matrox-only whole-image scaling: 0=sharp pixels, 1=smooth GDI HALFTONE (experimental)\r\n\
+SmoothScaling=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\
