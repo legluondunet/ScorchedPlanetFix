@@ -367,7 +367,8 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     let controlled=[
         "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
         "MATROX_MSI_INDEXED_KEY","MATROX_MSI_SHADOW_ONCE",
-        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
+        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_DITHER_GOURAUD",
+        "MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
         "MATROX_MSI_SHADOW_BLEND","MATROX_MSI_SHADOW_UNDERLAY",
         "MATROX_MSI_WORLD_BLUE_KEY",
     ];
@@ -379,6 +380,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     }
     command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
     command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
+    command.env("MATROX_MSI_DITHER_GOURAUD",if configured.dither_gouraud{"1"}else{"0"});
     command.env("MATROX_MSI_LOG",if configured.log || force_first_log{"1"}else{"0"});
     Ok(())
 }
@@ -463,12 +465,14 @@ mod tests {
         let _=fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("ScorchedPlanetFix.ini"),
-            b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
+            b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\nDitherGouraud=1\n").unwrap();
         let mut c=Command::new("unused");
         configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_FPS_LIMIT" &&
             v==Some(std::ffi::OsStr::new("120"))));
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_DITHER" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_DITHER_GOURAUD" &&
             v==Some(std::ffi::OsStr::new("1"))));
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
             v==Some(std::ffi::OsStr::new("0"))));
