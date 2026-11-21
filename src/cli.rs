@@ -301,7 +301,7 @@ fn matrox_play(root: &Path, logger: &Logger,
     configure_renderer_log(root,logger,first)?;
     let mut child = matrox_runtime::spawn(root,first)?;
     emit(logger, &mut sink, &format!("Matrox game started, PID {}.", child.id()));
-    let result=wait_for_game(&mut child, logger, sink);
+    let result=wait_for_game(&mut child, logger, sink, GameExitEdition::Matrox);
     finish_first_launch(root,logger,first,result)
 }
 
@@ -329,7 +329,7 @@ fn verify_and_play(root: &Path, logger: &Logger,
         |message|logger.write(message))?;
     emit(logger, &mut sink, &format!(
         "Game started, PID {} (full verification successful).", child.id()));
-    let result=wait_for_game(&mut child, logger, sink);
+    let result=wait_for_game(&mut child, logger, sink, GameExitEdition::Retail);
     finish_first_launch(root,logger,first,result)
 }
 
@@ -353,7 +353,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
         let mut child = matrox_runtime::spawn_unchecked(root)?;
         emit(logger, &mut sink,
             &format!("Matrox game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
-        return wait_for_game(&mut child, logger, sink);
+        return wait_for_game(&mut child, logger, sink, GameExitEdition::Matrox);
     }
     let executable = game.join("spvoodoo.exe");
     emit(logger, &mut sink,
@@ -369,7 +369,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
         .map_err(|e| format!("Unable to launch unchecked game {}: {e}", executable.display()))?;
     emit(logger, &mut sink,
         &format!("Game started, PID {} (UNVERIFIED; no file audit performed).", child.id()));
-    wait_for_game(&mut child, logger, sink)
+    wait_for_game(&mut child, logger, sink, GameExitEdition::Retail)
 }
 
 fn configure_renderer_log(root:&Path,logger:&Logger,force_first_log:bool)->Result<(),String>{
@@ -398,26 +398,38 @@ fn finish_first_launch(root:&Path,logger:&Logger,first:bool,result:Result<(),Str
     Ok(())
 }
 
-fn wait_for_game(child: &mut Child, logger: &Logger,
-                 mut sink: impl FnMut(&str)) -> Result<(), String> {
-    let status = child.wait()
-        .map_err(|e| format!("Failed while monitoring the game process: {e}"))?;
-    if !status.success() {
-        // Real Windows/Wine/Proton sessions show that this 1996 game may
-        // exit with code 1 after normal menu quit. Preserve the diagnostic,
-        // but do not claim a launcher error without independent evidence.
-        if status.code()==Some(1) {
-            emit(logger, &mut sink,
-                "Game exited with legacy code 1 (not necessarily a crash; check gameplay if unexpected).");
-            return Ok(());
-        }
-        if status.code()==Some(0xC0000005u32 as i32) {
-            return Err("Game crashed with Windows access violation 0xC0000005 (-1073741819). Check the most recent ScorchedPlanetFix.log for FIRST_CHANCE_AV, AV_REGISTERS and AV_CODE; enable [Debug] Log=1 if necessary.".into());
-        }
-        return Err(format!("The game exited with code {} (nonzero status; investigate the renderer and game logs)",
-            status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())));
+// Status 1 is a documented behavior of the original 1996 Matrox OEM
+// game, including on native Windows. Preserve the raw code for diagnostics:
+// interpreting 1 as accepted does NOT prove correct in-game behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GameExitEdition { Matrox, Retail }
+impl GameExitEdition {
+    fn label(self)->&'static str {
+        match self { Self::Matrox=>"matrox", Self::Retail=>"retail" }
     }
-    emit(logger, &mut sink, "The game exited with code 0.");
+}
+fn classify_game_exit(code:Option<i32>, edition:GameExitEdition)->Result<&'static str,String> {
+    match code {
+        Some(0)=>Ok("The game exited with code 0."),
+        Some(1) if edition==GameExitEdition::Matrox =>
+            Ok("Matrox game closed (OEM legacy exit status 1; accepted by ScorchedPlanetFix)."),
+        Some(1)=>Ok("Game exited with legacy code 1 (not necessarily a crash; check gameplay if unexpected)."),
+        Some(value) if value==0xC0000005u32 as i32 =>
+            Err("Game crashed with Windows access violation 0xC0000005 (-1073741819). Check the most recent ScorchedPlanetFix.log for FIRST_CHANCE_AV, AV_REGISTERS and AV_CODE; enable [Debug] Log=1 if necessary.".into()),
+        _=>Err(format!(
+            "The game exited with code {} (nonzero or unknown status; investigate the renderer and game logs)",
+            code.map(|v|v.to_string()).unwrap_or_else(||"unknown".into()))),
+    }
+}
+fn wait_for_game(child:&mut Child, logger:&Logger,
+                 mut sink:impl FnMut(&str), edition:GameExitEdition)->Result<(),String> {
+    let status=child.wait()
+        .map_err(|e|format!("Failed while monitoring the game process: {e}"))?;
+    let code=status.code();
+    logger.write(&format!("PROCESS_EXIT edition={} raw_code={}",
+        edition.label(),code.map(|v|v.to_string()).unwrap_or_else(||"unknown".into())));
+    let outcome=classify_game_exit(code,edition)?;
+    emit(logger,&mut sink,outcome);
     Ok(())
 }
 
@@ -671,6 +683,18 @@ mod tests {
     use super::*;
     fn args(items: &[&str]) -> Vec<OsString> {
         items.iter().map(OsString::from).collect()
+    }
+    #[test]
+    fn matrox_legacy_exit_accepted_and_real_crashes_still_fail() {
+        assert!(classify_game_exit(Some(1),GameExitEdition::Matrox).unwrap().contains("accepted"));
+        assert!(classify_game_exit(Some(0),GameExitEdition::Matrox).is_ok());
+        assert!(classify_game_exit(Some(0xC0000005u32 as i32),GameExitEdition::Matrox)
+            .unwrap_err().contains("access violation"));
+        assert!(classify_game_exit(Some(2),GameExitEdition::Matrox).is_err());
+        assert!(classify_game_exit(None,GameExitEdition::Matrox).is_err());
+        assert!(classify_game_exit(Some(1),GameExitEdition::Retail).unwrap()
+            .contains("legacy code 1"));
+        assert!(classify_game_exit(Some(0xC0000005u32 as i32),GameExitEdition::Retail).is_err());
     }
     #[test]
     fn command_line_modes_without_legacy_wrapper_flags() {
