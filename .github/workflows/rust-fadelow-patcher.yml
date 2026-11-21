@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
-    branches: [main, experiment/matrox-opaque-index1-20261121]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
