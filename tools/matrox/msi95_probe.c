@@ -356,6 +356,21 @@ static unsigned g_game_50dcd0_reports = 0;
 /* Last *observed* transition, not the exact guest-side write timestamp. */
 static DWORD g_global_transition_tick = 0;
 static unsigned g_global_transition_frame = 0;
+/* Original OEM EXE hash 1f268420... verified against owner's disc:
+ * [0x0050DCD0] is a SmackOpen video handle; handle+4/+8 are dimensions,
+ * +0x0c is Smack->Frames. Video mode is [0x00655750]==4.
+ * Passive snapshots ONLY; do not alter Smacker/video/guest state. */
+static DWORD g_smack_last_handle=0;
+static DWORD g_smack_last_width=0;
+static DWORD g_smack_last_height=0;
+static DWORD g_smack_last_frames=0;
+static DWORD g_smack_last_nonnull_frame=0;
+static DWORD g_smack_last_null_frame=0;
+/* Sample every MSI95 frame even though normal trace output is sparse.
+ * Matrox's SmackOpen may reuse the same address for different movies:
+ * compare frame-count, geometry AND counter restart, not pointer alone. */
+static DWORD g_smack_prev_counter=0;
+static BOOL g_smack_prev_counter_seen=FALSE;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -616,6 +631,27 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         }else putstr(game,&k,"unreadable");
         game[k]=0;WriteFile(g_log,game,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
+        /* Smacker reader at 0046D76D tries to read Smack->Frames at +0c
+         * AFTER a now-NULL handle was obtained from the global. Fields here
+         * are cached from the last readable handle snapshot, not derefs
+         * of a potentially closed/unallocated Smacker handle. */
+        {
+          char state[350];k=0;
+          DWORD mode=0xffffffffu;
+          if(readable_span((const void*)0x00655750u,4u))
+            mode=*(const volatile DWORD*)0x00655750u;
+          putstr(state,&k,"AV_SMACK_PLAYBACK mode=");puthex(state,&k,mode);
+          putstr(state,&k," cached_handle=");puthex(state,&k,g_smack_last_handle);
+          putstr(state,&k," last_width=");putunsigned(state,&k,g_smack_last_width);
+          putstr(state,&k," last_height=");putunsigned(state,&k,g_smack_last_height);
+          putstr(state,&k," last_total_frames=");putunsigned(state,&k,g_smack_last_frames);
+          putstr(state,&k," last_nonnull_observed_frame=");
+          putunsigned(state,&k,g_smack_last_nonnull_frame);
+          putstr(state,&k," last_null_observed_frame=");
+          putunsigned(state,&k,g_smack_last_null_frame);
+          state[k]=0;WriteFile(g_log,state,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
         /* Capture only factual context when this exact verified OEM fault
          * happens. Never change EIP, EDX, guest memory or exception result. */
         if(g_global_transition_tick){
@@ -773,8 +809,35 @@ static void sample_game_global_50dcd0(const char *phase){
         g_global_transition_tick=GetTickCount();
         g_global_transition_frame=g_frames;
     }
-    if(!changed && (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
-    char info[320];DWORD k=0;
+    DWORD movie_mode=0xffffffffu;
+    if(readable_span((const void*)0x00655750u,4u))
+        movie_mode=*(const volatile DWORD*)0x00655750u;
+    BOOL movie_readable=FALSE;
+    DWORD width=0,height=0,frames=0;
+    if(ptr && readable_span((const void*)(SIZE_T)ptr,16u)){
+        const volatile DWORD *movie=(const volatile DWORD*)(SIZE_T)ptr;
+        width=movie[1];height=movie[2];frames=movie[3];
+        movie_readable=TRUE;
+    }
+    BOOL format_changed=movie_readable && g_smack_last_handle==ptr &&
+        (width!=g_smack_last_width || height!=g_smack_last_height ||
+         frames!=g_smack_last_frames);
+    BOOL counter_restarted=movie_readable && g_smack_prev_counter_seen &&
+        g_smack_last_handle==ptr && counter<g_smack_prev_counter;
+    g_smack_prev_counter=counter;
+    g_smack_prev_counter_seen=TRUE;
+    /* Always refresh the last known Smacker header, even when a normal
+     * frame doesn't emit a line: avoids 120-frame blind spots. */
+    if(movie_readable){
+        g_smack_last_handle=ptr;
+        g_smack_last_width=width;
+        g_smack_last_height=height;
+        g_smack_last_frames=frames;
+        g_smack_last_nonnull_frame=g_frames;
+    }else if(changed && !ptr)g_smack_last_null_frame=g_frames;
+    if(!changed && !format_changed && !counter_restarted &&
+       (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
+    char info[480];DWORD k=0;
     putstr(info,&k,"GAME_GLOBAL_50DCD0 phase=");
     putstr(info,&k,phase);
     putstr(info,&k," frame=");putunsigned(info,&k,g_frames);
@@ -782,6 +845,19 @@ static void sample_game_global_50dcd0(const char *phase){
     putstr(info,&k," prior_ptr=");puthex(info,&k,g_game_50dcd0_last);
     putstr(info,&k," counter_50DCC0=");puthex(info,&k,counter);
     putstr(info,&k," callback_depth=");putunsigned(info,&k,g_guest_callback_depth);
+    putstr(info,&k," movie_mode=");puthex(info,&k,movie_mode);
+    if(format_changed)putstr(info,&k," smack_format_switch_same_handle=1");
+    if(counter_restarted)putstr(info,&k," smack_counter_restarted=1");
+    if(movie_readable){
+        putstr(info,&k," smack_width=");putunsigned(info,&k,width);
+        putstr(info,&k," smack_height=");putunsigned(info,&k,height);
+        putstr(info,&k," smack_frames=");putunsigned(info,&k,frames);
+    }else if(!ptr && g_smack_last_handle){
+        putstr(info,&k," last_smack_handle=");puthex(info,&k,g_smack_last_handle);
+        putstr(info,&k," last_smack_frames=");putunsigned(info,&k,g_smack_last_frames);
+        putstr(info,&k," last_smack_dimensions=");putunsigned(info,&k,g_smack_last_width);
+        putstr(info,&k,"x");putunsigned(info,&k,g_smack_last_height);
+    }else if(ptr)putstr(info,&k," smack_fields_unreadable=1");
     info[k]=0;logtext(info);
     g_game_50dcd0_last=ptr;
     g_game_50dcc0_last=counter;
@@ -1560,6 +1636,7 @@ static void capture_world_provenance(const char *filename){
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
     logtext("MATROX_INDEX1_OPAQUE_PREVIEW enabled=1 scope=world_8bpp_128x128_black_rgb565_key; ONLY experimental stacked PR");
+    logtext("SMACK_LIFECYCLE_PROBE enabled=1 read_only=1 known_oem_mov_and_cmp_signatures=1");
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
