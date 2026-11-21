@@ -5,6 +5,7 @@
  * Compile with clang targeting i686-pc-windows-msvc and lld-link; no CRT.
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
+#include "msi_dither_gouraud.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -216,9 +217,10 @@ static unsigned g_native_color_protect=0,g_native_state_details=0;
 /* v0.33 per-vertex texture-color modulation, independently selectable.
  * v0.34 ordered RGB565 quantization experiment, independently selectable;
  * it affects ONLY opt-in modulated 3D textures with Dither set in MSI95. */
-static int g_msi_modulate_enabled=0,g_msi_dither_enabled=0;
+static int g_msi_modulate_enabled=0,g_msi_dither_enabled=0,g_msi_dither_gouraud_enabled=0;
 static unsigned g_modulate_triangles=0,g_modulate_pixels=0,g_modulate_varying=0;
 static unsigned g_dither_candidates=0,g_dither_changed=0,g_dither_bypassed=0;
+static unsigned g_gouraud_dither_samples=0,g_gouraud_dither_changed=0,g_gouraud_shadow_protected=0;
 static unsigned g_fx_vertex_color_logs=0,g_fx_param_state_logs=0;
 /* FPS cap from [scorch] FPSLimit via launcher environment; default 60.
  * Zero disables pacing. Limits only at EndFrame, not during HUD draws. */
@@ -1577,6 +1579,11 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_msi_dither_enabled=(n==1u && setting[0]=='1');}
     logtext(g_msi_dither_enabled?"MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)":
             "MSI_DITHER disabled (v0.33 modulation quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_DITHER_GOURAUD",setting,sizeof(setting));
+      g_msi_dither_gouraud_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_msi_dither_gouraud_enabled?
+        "MSI_DITHER_GOURAUD requested (opt-in flat world, requires Dither=1; shadow 0x0841 preserved)":
+        "MSI_DITHER_GOURAUD disabled (reference flat world quantization)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
@@ -1907,6 +1914,9 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("MSI_MODULATE varying_triangles=",g_modulate_varying,"enabled=",(unsigned)g_msi_modulate_enabled);
         lognum("MSI_DITHER candidates=",g_dither_candidates,"changed_pixels=",g_dither_changed);
         lognum("MSI_DITHER bypassed_textured_pixels=",g_dither_bypassed,"enabled=",(unsigned)g_msi_dither_enabled);
+        lognum("MSI_DITHER_GOURAUD samples=",g_gouraud_dither_samples,"changed_pixels=",g_gouraud_dither_changed);
+        lognum("MSI_DITHER_GOURAUD shadow_protected=",g_gouraud_shadow_protected,
+               "enabled=",(unsigned)g_msi_dither_gouraud_enabled);
         lognum("FPS_CAP target_fps=",g_cap_target_fps,"waited_frames=",g_cap_waited_frames);
         lognum("FPS_CAP late_frames=",g_cap_late_frames,"fallback_frames=",g_cap_fallback_frames);
         lognum("FPS_CAP slept_ms=",g_cap_sleep_ms,"qpc_active=",(unsigned)g_cap_qpc_ready);
@@ -2356,6 +2366,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             float w0=1.f-w1-w2;
             if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
             unsigned color=0, source_index=0, source_index_valid=0;
+            int flat_shadow_color=0;
             if(textured){
                 float u=w0*a->u+w1*b->u+w2*c->u;
                 float v=w0*a->v+w1*b->v+w2*c->v;
@@ -2592,13 +2603,28 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 float rr=w0*a->r+w1*b->r+w2*c->r;
                 float gg=w0*a->g+w1*b->g+w2*c->g;
                 float bb=w0*a->b+w1*b->b+w2*c->b;
-                color=rgb565(clamp_u8(rr),clamp_u8(gg),clamp_u8(bb));
+                unsigned red=clamp_u8(rr),green=clamp_u8(gg),blue=clamp_u8(bb);
+                color=rgb565(red,green,blue);
+                /* Identify the existing dark-flat shadow BEFORE quantization.
+                 * A dithered unrelated dark shade must never become a shadow. */
+                flat_shadow_color=(color==0x0841u);
+                if(g_msi_dither_gouraud_enabled && g_msi_dither_enabled &&
+                   g_state.msiColor.Dither && !g_zplane_draw_context){
+                    if(flat_shadow_color)g_gouraud_shadow_protected++;
+                    else{
+                        unsigned dithered=msi_gouraud_ordered_565(red,green,blue,
+                                                                  (unsigned)x,(unsigned)y);
+                        g_gouraud_dither_samples++;
+                        if(dithered!=color)g_gouraud_dither_changed++;
+                        color=dithered;
+                    }
+                }
             }
             unsigned applied_opacity=opacity;
             unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
             /* Legacy modes remain byte-for-byte equivalent when SHADOW_ONCE
              * is disabled. Never treat z-plane/HUD triangles as terrain shadows. */
-            int candidate=(!g_zplane_draw_context && !textured && color==0x0841u);
+            int candidate=(!g_zplane_draw_context && !textured && flat_shadow_color);
             if(g_shadow_once_enabled && candidate && opacity==100u &&
                g_shadow_underlay && g_shadow_underlay[j]==3u){
                 /* Already blended against the textured underlay in this frame.
