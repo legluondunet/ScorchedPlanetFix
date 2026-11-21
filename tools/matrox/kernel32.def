@@ -16,3 +16,4 @@ EXPORTS
  VirtualFree
  AddVectoredExceptionHandler
  VirtualQuery
+ ExitProcess
