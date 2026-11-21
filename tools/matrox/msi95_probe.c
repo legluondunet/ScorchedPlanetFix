@@ -2183,6 +2183,11 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     int marked=g_texture_uploaded[absolute/256u]!=0;
                     int nonzero=(planes==16) ? (texture[rel]!=0 || texture[rel+1u]!=0) :
                                              (texture[rel]!=0);
+                    if(g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=(BYTE)(marked?
+                            (nonzero?1u:2u):(nonzero?3u:4u));
+                    }
                     if(!marked && !nonzero){
                         g_sparse_atlas_unmapped_pixels++;
                         if(g_capture_ownership && g_ownership){
@@ -2202,6 +2207,10 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 if(g_state.msiTexture.Transparency &&
                    ((color&g_state.msiTexture.KeyingColorMask)==
                     (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask))){
+                    if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=5u;
+                    }
                     if(g_capture_ownership && g_ownership){
                         unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
                         if(!g_ownership[j])g_ownership[j]=(BYTE)(g_zplane_draw_context?8:7);
@@ -2304,6 +2313,10 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 /* Experimental MSI Z-plane sprite chroma-key fallback.
                  * Do not apply to world triangles or non-textured primitives. */
                 if(g_zplane_draw_context && color==0x00FFu){
+                    if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=5u;
+                    }
                     g_zplane_blue_key_skips++;
                     if(g_capture_ownership && g_ownership){
                         unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
