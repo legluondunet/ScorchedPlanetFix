@@ -109,7 +109,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot link x86 raster-edge smoke' }
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "Native x86 top-left raster-edge smoke failed: case $LASTEXITCODE" }
-          Write-Host 'MATROX_TOPLEFT_X86_SMOKE_PASS 2x2 both winding orientations and no shared-edge double writes'
+          Write-Host 'MATROX_TOPLEFT_X86_SMOKE_PASS 2x2, rectangle tessellations, half-pixel boundaries, adjacent quads'
 
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh
