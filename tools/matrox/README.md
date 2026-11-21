@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`81396f1f51e2e926d8619dc31d8411e86e67ab24198232692298a9c60b9233d1`
+`40595f96c4fe6ab71d626b3168eefe2c72b24fa3e68cda88aad76c274edaa873`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -32,6 +32,29 @@ pacing and valid positive caps are 1..240. No separate Matrox CLI option is
 needed. The two renderer environment variables are implementation details.
 
 The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original proprietary OEM DLL is authenticated during CD extraction and is NOT retained as a backup. GameFrame uses the same `game/` directory when the retail edition is installed instead.
+
+### Gouraud dithering experiment (off by default)
+
+`[Matrox] DitherGouraud=0|1` controls a **separate** 4x4 ordered RGB565
+quantizer for untextured, non-Z-plane Gouraud polygons. Default `0` is
+the byte-for-byte reference. The feature only runs when both `Dither=1` and
+the actual game-requested `msiColor.Dither` state are active. It does not
+touch already-palettized textured pixels, Z-plane HUD sprites, color-key
+decisions, alpha blending, the 3dfx renderer or original game assets.
+
+The existing 0x0841 dark-flat shadow source color is protected from
+dithering; shadow recognition is performed on the **pre-dither** RGB565
+value so the new quantization cannot create false shadow pixels.
+Runtime counters: `MSI_DITHER_GOURAUD samples/changed_pixels` and
+`shadow_protected/enabled`. Source arithmetic is in the freestanding
+`msi_dither_gouraud.h`, also exercised by the independent
+`smoke_dither_gouraud.c` Windows x86 CI smoke.
+
+**Not established:** this Bayer matrix is a portable approximation;
+the exact 1996 Matrox Mystique hardware threshold pattern has not been
+recovered or compared against pixel-matched VM shots. This switch is an
+experiment and must not be presented as an original-driver fix.
+No modern bilinear or antialiasing is added.
 
 ## Debug logging
 
