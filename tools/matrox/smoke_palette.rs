@@ -20,8 +20,8 @@ type Exit = unsafe extern "C" fn() -> i32;
 
 #[repr(C)]
 struct Info {
-    major: i32,
-    minor: i32,
+    major: i16,
+    minor: i16,
     color: ColorInfo,
     depth: DepthInfo,
     texture: TextureInfo,
