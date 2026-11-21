@@ -24,6 +24,9 @@ FPSLimit=60\r\n\
 ; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
 ; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
+; Optional experimental 4x4 dithering of untextured 3D Gouraud surfaces\r\n\
+; Requires Dither=1. Off preserves original flat rendering and shadows.\r\n\
+DitherGouraud=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\
