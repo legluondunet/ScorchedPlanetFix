@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "b9db03f98b94398457e3ccfe9c8469d1dc9f960a7b7d85ab857a5e37f6588ffd"
+$expectedSourceHash = "b77355fa41bed3f112a8c67a7bf40cde44f8477dd3afb51ad39772b5f87357ae"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 

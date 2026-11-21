@@ -829,11 +829,20 @@ static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
 static BOOL game_global_probe_supported(void){
     const BYTE *load=(const BYTE*)0x0046D761u;
     const BYTE *cmp=(const BYTE*)0x0046D76Du;
-    return readable_span(load,6u) && readable_span(cmp,3u) &&
-        load[0]==0x8Bu && load[1]==0x15u &&
+    if(!readable_span(load,6u)||!readable_span(cmp,3u) ||
+       cmp[0]!=0x39u || cmp[1]!=0x42u || cmp[2]!=0x0Cu)return FALSE;
+    BOOL original=load[0]==0x8Bu && load[1]==0x15u &&
         load[2]==0xD0u && load[3]==0xDCu &&
-        load[4]==0x50u && load[5]==0x00u &&
-        cmp[0]==0x39u && cmp[1]==0x42u && cmp[2]==0x0Cu;
+        load[4]==0x50u && load[5]==0x00u;
+    if(original)return TRUE;
+    /* Once our opt-in guard is active, the authentic load instruction
+     * has been replaced by its verified rel32 jump. Preserve the existing
+     * passive movie/AV probes by recognizing only OUR exact detour. */
+    if(!g_video_null_guard_installed || !g_video_null_guard_stub ||
+       load[0]!=0xE9u || load[5]!=0x90u)return FALSE;
+    DWORD displacement=(DWORD)load[1] | ((DWORD)load[2]<<8u) |
+        ((DWORD)load[3]<<16u) | ((DWORD)load[4]<<24u);
+    return (DWORD)load+5u+displacement == (DWORD)g_video_null_guard_stub;
 }
 /* Scan a bounded, readable area of this thread's stack for possible
  * OEM return addresses just before the crashing Smacker frame advance.
@@ -905,6 +914,11 @@ static BOOL install_video_null_guard(void){
     if(!VirtualProtect(stub,4096u,PAGE_EXECUTE_READ,&previous)){
         VirtualFree(stub,0u,MEM_RELEASE);
         logtext("SMACK_NULL_GUARD_REFUSED reason=cannot_protect_trampoline");
+        return FALSE;
+    }
+    if(!FlushInstructionCache(GetCurrentProcess(),stub,26u)){
+        VirtualFree(stub,0u,MEM_RELEASE);
+        logtext("SMACK_NULL_GUARD_REFUSED reason=trampoline_cache_flush_failed");
         return FALSE;
     }
     BYTE *site=(BYTE*)0x0046D761u;

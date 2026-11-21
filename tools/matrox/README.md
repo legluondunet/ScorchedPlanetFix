@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`b9db03f98b94398457e3ccfe9c8469d1dc9f960a7b7d85ab857a5e37f6588ffd`
+`b77355fa41bed3f112a8c67a7bf40cde44f8477dd3afb51ad39772b5f87357ae`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -714,3 +714,9 @@ The option defaults to **0**. Runtime logs show
 This is a candidate crash fix, **not validated** under actual gameplay.
 Do not merge until Windows and Wine tests confirm normal video completion,
 early skip, scene transitions, audio and shutdown.
+
+The passive movie and original OEM signature probes explicitly recognize
+the guard's own exact rel32 detour while it is installed. This preserves
+`GAME_GLOBAL_50DCD0`, `AV_SMACK_PLAYBACK` and callback diagnostics
+during opt-in live testing. The trampoline instruction cache is flushed
+before the game code is redirected to it.
