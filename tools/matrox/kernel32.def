@@ -19,3 +19,4 @@ EXPORTS
  VirtualProtect
  FlushInstructionCache
  GetCurrentProcess
+ ExitProcess

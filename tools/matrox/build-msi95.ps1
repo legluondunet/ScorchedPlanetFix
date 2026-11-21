@@ -8,7 +8,11 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "b77355fa41bed3f112a8c67a7bf40cde44f8477dd3afb51ad39772b5f87357ae"
+$expectedSourceHash = "68998da6dcc13a93e303925ca44b29da8bf7a35c71b8fb022e13e23a7596c4b3"
+$header = (Resolve-Path (Join-Path $sourceRoot "smacker_guard_x86.h")).Path
+$expectedGuardHash = "1a8a6dd7244a39efb5950efb8dda581daa82abd1af131c731dde32002f02b345"
+$guardHash = (Get-FileHash $header -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($guardHash -cne $expectedGuardHash) { throw "Smacker guard emitter checksum mismatch: $guardHash" }
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 

@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/matrox-smacker-null-tick-20261121]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -95,6 +95,30 @@ jobs:
           python tools/matrox/audit_exports.py $msi
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Execute x86 Smacker guard null and live-handle smoke (synthetic only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $obj = Join-Path $env:RUNNER_TEMP 'scorched-smacker-guard-smoke.obj'
+          $exe = Join-Path $env:RUNNER_TEMP 'scorched-smacker-guard-smoke.exe'
+          & clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -c tools/matrox/smoke_smacker_guard.c -o $obj
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile synthetic x86 guard smoke' }
+          $kernel = (Resolve-Path 'target/matrox-msi95-x86/kernel32.lib').Path
+          $linkArgs = @(
+            '/MACHINE:X86','/NODEFAULTLIB','/SUBSYSTEM:CONSOLE',
+            '/ENTRY:mainCRTStartup',"/OUT:$exe",$obj,$kernel,
+            '/alternatename:__imp__VirtualAlloc@16=__imp__VirtualAlloc',
+            '/alternatename:__imp__VirtualProtect@16=__imp__VirtualProtect',
+            '/alternatename:__imp__FlushInstructionCache@12=__imp__FlushInstructionCache',
+            '/alternatename:__imp__GetCurrentProcess@0=__imp__GetCurrentProcess',
+            '/alternatename:__imp__ExitProcess@4=__imp__ExitProcess'
+          )
+          & lld-link @linkArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot link synthetic x86 guard smoke' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "Smacker guard x86 execution failed: case $LASTEXITCODE" }
+          Write-Host 'SMACK_GUARD_X86_SMOKE_PASS null and nonnull native x86 paths'
 
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh

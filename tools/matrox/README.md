@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`b77355fa41bed3f112a8c67a7bf40cde44f8477dd3afb51ad39772b5f87357ae`
+`68998da6dcc13a93e303925ca44b29da8bf7a35c71b8fb022e13e23a7596c4b3`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -720,3 +720,21 @@ the guard's own exact rel32 detour while it is installed. This preserves
 `GAME_GLOBAL_50DCD0`, `AV_SMACK_PLAYBACK` and callback diagnostics
 during opt-in live testing. The trampoline instruction cache is flushed
 before the game code is redirected to it.
+
+## Native Windows x86 execution test for the opt-in Smacker guard
+
+The runtime MSI95 and standalone test now use the exact same 26-byte x86
+trampoline generator in `smacker_guard_x86.h`. Windows CI executes the
+actual generated code under a **synthetic, standalone 32-bit process**,
+without ever loading the proprietary game executable or Smacker DLL. It
+tests a NULL handle (early return and increment of private counter), a
+valid handle (normal continuation and exact EDX value), all-ones nonzero
+handle, and another NULL in sequence, including the synthetic six-byte
+code detour. The test uses a writable-then-executable page and isolated
+writable fake globals. No original CD data or copyrighted executable is
+bundled.
+
+Passing this test would establish that the real machine-code branches
+work as designed, but **not** prove that the intermittent game crash is
+fixed or that the game's state machine survives a rare canceled tick.
+A real `null_tick_skips>0` in a continuing game session is still needed.

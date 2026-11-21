@@ -8,6 +8,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
+#include "smacker_guard_x86.h"
 typedef int BOOL;
 typedef int LONG;
 typedef unsigned int UINT;
@@ -883,11 +884,6 @@ static BOOL video_guard_exact_signature(void){
             if(addresses[j][i]!=signatures[j][i])return FALSE;
     return TRUE;
 }
-static void write_video_guard_rel32(BYTE *src,DWORD base,DWORD destination){
-    DWORD delta=destination-(base+5u);
-    src[0]=0xe9;
-    for(unsigned i=0;i<4u;i++)src[i+1u]=(BYTE)(delta>>(i*8u));
-}
 static BOOL install_video_null_guard(void){
     if(g_video_null_guard_installed)return TRUE;
     if(!video_guard_exact_signature()){
@@ -896,20 +892,10 @@ static BOOL install_video_null_guard(void){
     }
     BYTE *stub=(BYTE*)VirtualAlloc(NULL,4096u,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     if(!stub){logtext("SMACK_NULL_GUARD_REFUSED reason=out_of_memory");return FALSE;}
-    /* 0: mov edx,[0050DCD0], 6 bytes
-     * 6: test edx,edx, 2 bytes
-     * 8: jne +11 => offsets 21..25, 2 bytes
-     * 10: inc DWORD PTR [private_counter], 6 bytes
-     * 16: jmp 0046D7D2 (existing video-tick epilogue), 5 bytes
-     * 21: jmp 0046D767 (resume original normal path), 5 bytes */
+    /* Shared code emitter exercised by actual native x86 smoke. */
     static const BYTE load[6]={0x8b,0x15,0xd0,0xdc,0x50,0x00};
-    for(unsigned i=0;i<6u;i++)stub[i]=load[i];
-    stub[6]=0x85;stub[7]=0xd2;stub[8]=0x75;stub[9]=0x0b;
-    stub[10]=0xff;stub[11]=0x05;
-    DWORD countptr=(DWORD)&g_video_null_guard_skips;
-    for(unsigned i=0;i<4u;i++)stub[12u+i]=(BYTE)(countptr>>(8u*i));
-    write_video_guard_rel32(stub+16u,(DWORD)stub+16u,0x0046D7D2u);
-    write_video_guard_rel32(stub+21u,(DWORD)stub+21u,0x0046D767u);
+    video_guard_emit_trampoline(stub,0x0050DCD0u,
+            (DWORD)&g_video_null_guard_skips,0x0046D7D2u,0x0046D767u);
     DWORD previous=0;
     if(!VirtualProtect(stub,4096u,PAGE_EXECUTE_READ,&previous)){
         VirtualFree(stub,0u,MEM_RELEASE);
@@ -928,7 +914,7 @@ static BOOL install_video_null_guard(void){
         return FALSE;
     }
     BYTE patch[6]={0};
-    write_video_guard_rel32(patch,(DWORD)site,(DWORD)stub);
+    video_guard_emit_rel32(patch,(DWORD)site,(DWORD)stub);
     patch[5]=0x90;
     for(unsigned i=0;i<6u;i++)site[i]=patch[i];
     BOOL flushed=FlushInstructionCache(GetCurrentProcess(),site,6u);
