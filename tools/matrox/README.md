@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`0466008290191664494ba1a79fe573894cf6c6834f73d1df801b14c77a594f35`
+`455174796cce4cfca2eaeaf7f4816cd4131904f656cf04d47c77b19dd2b0180c`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -118,12 +118,22 @@ Color legend:
 - Green: RGB565 (16bpp) texture drawn
 - Olive: 8bpp nonzero palette index drawn
 - Orange: 8bpp zero palette index drawn
-- Magenta: RGB565 key comparison discarded the sample
+- Dark purple: RGB565 key rejected a non-indexed (4/16-bit) texel
+- Magenta: RGB565 key rejected an **8-bit source index 0**
+- Yellow: RGB565 key rejected an **8-bit nonzero source index**
 - Red: palette-index key comparison discarded the sample
 - Blue: optional RGB565 0x00FF fallback discarded the sample
 - Cyan: 4bpp indexed world texture drawn
 
 `WORLD_CAPTURE` emits counts for all classes with `[Debug] Log=1`.
+After the owner's 2026-11-21 08:16 test showed only RGB565 key skips,
+the F12 world map further distinguishes an 8-bit **source index zero**
+from a **nonzero index that also maps to RGB565 key color**.
+The `rgb565_key` total still includes all categories, and
+`rgb565_key_index0`, `rgb565_key_otherindex`, and
+`rgb565_key_unindexed` log their precise subdivisions. No transparency
+decision, source texture bytes, palette, or screenshot framebuffer changes.
+
 The map is diagnostic **only**: CPU writes, later flat primitives or later
 Z-plane draws may cover the recorded texture sample. Neither the world/Z-plane
 renderer, its transparency choices, palettes, installed assets, original
