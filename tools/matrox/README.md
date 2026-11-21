@@ -105,16 +105,18 @@ residency and keying actually need code changes. Existing pixels and the
 
 ## Repeatable F12 diagnostics (2026-11-20)
 
-Each separate F12 press produces a numbered pair of native 640x400
-RGB565 BMP files inside `game/`, next to the MSI95 DLL:
+Each separate F12 press produces a numbered group of three native
+640x400 RGB565 BMP files inside `game/`, next to the MSI95 DLL:
 
 - `matrox_capture_0001_frame.bmp`: original framebuffer.
-- `matrox_capture_0001_coverage.bmp`: raster ownership map of the same frame.
+- `matrox_capture_0001_coverage.bmp`: raster ownership map.
+- `matrox_capture_0001_atlas.bmp`: last sparse-atlas sample provenance,
+  with color legend and limitations documented above.
 
 Next presses create the corresponding `0002`, `0003`, etc. The driver
-skips serial numbers if **either** file already exists from another
-session (or an interrupted capture). It uses Win32 `CREATE_NEW`
-for both files to prevent overwrites, even with a late collision.
+skips serial numbers if **any** of the three files already exists from
+another session (or an interrupted capture). It uses Win32 `CREATE_NEW`
+for all three files to prevent overwrites, even with a late collision.
 Holding F12 cannot produce repeated pictures through key autorepeat:
 release and press again.
 
