@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`d46eb7838a5b7ae666e7e94bde0b1d2035fe8233eeb28cd8d71b178b6f0d0a72`
+`532dc181e98173f51400884b5025600438ea84fb9efc1d7a9a077fdaa83460cd`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -69,6 +69,55 @@ application icon is the fallback. No icon asset is bundled, the game EXE is
 not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
+
+## Nested renderer-frame telemetry (2026-11-21)
+
+Historical comparison: earlier fatal Wine run had the Smacker handle observed
+NULL at MSI frame 3564, then `0x0046D76D` AV at frame 3671 (**107 frames**);
+its sparse `NESTED_INPUT_PUMP_DEFERRED count=100` snapshot showed
+`endframe_depth=2` at frame 3646. A later safe Escape video-skip run
+observed NULL at MSI frame 661 and return from the original game
+`WM_KEYDOWN Escape` handler at frame 768 (also **107 frames**), but its
+corresponding sparse count=100 sample showed `endframe_depth=1`.
+This is suggestive, not proof: the samples were taken at one arbitrary
+event counter rather than measuring the maximum.
+
+The **read-only** `MSI_NESTED_ENDFRAME_PROBE` counts every call to
+`msiEndFrame` entered while a prior `msiEndFrame` is still active,
+records the maximum observed nesting depth, and logs a bounded set of
+`MSI_NESTED_ENDFRAME` entries (mode, Smacker handle/counter,
+callback depth and MSI frame). `SMACK_CALLBACK_CLOSED_VIDEO` now
+includes `nested_ends_during_callback`, while the exact crash logs
+its cumulative nesting state. `MSI_NESTED_ENDFRAME_STATS` reports
+the total and maximum on clean MSI95 shutdown.
+
+These counters do not prevent nested rendering, do not modify the
+game, Smacker or MSI95 draw state, and are active only under
+`[Debug] Log=1`. The difference between `depth=1` and `depth=2`
+will only be considered causally relevant if an actual fault or
+repeated controlled comparisons support it.
+
+## Stack-candidate telemetry for suspended Smacker tick (2026-11-21)
+
+With `[Debug] Log=1` on the authentic OEM EXE only, inspect **at most
+16 KiB of readable current-thread stack memory** during actual forwarded
+Win32 callbacks. Detect raw candidate return addresses `0x0046D752`,
+`0x0046D757`, `0x0046D75C` around the crash-prone Smacker playback tick.
+These are raw stack values, **not an unwound call stack or proof of live
+frames**. Log `SMACK_CALLBACK_PENDING_TICK` for input actions that find
+a candidate, `SMACK_CALLBACK_CLOSED_VIDEO` when a callback returns after
+closing a valid handle, and `SMACK_CLOSE_WITH_PENDING_TICK` on a
+NULL transition while such a candidate is on the stack. At the exact
+AV `0x0046D76D`, also report `AV_SMACK_TICK_CALLBACK_CONTEXT`.
+
+The periodic Smacker video probe still logs at most 96 ordinary heartbeat
+lines, but **important handle, metadata and counter-reset transitions**
+are now independently recorded up to 256, so long sessions do not lose
+all transition diagnostics.
+
+This is *read-only diagnosis*, not a fix. No new input interception,
+no game EXE/SMACKW32 modifications and no exception recovery. Existing
+Matrox palette smoke tests and 3dfx behavior remain unchanged.
 
 ## Smacker playback handle lifecycle diagnosis (2026-11-21)
 
