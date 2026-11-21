@@ -179,6 +179,11 @@ static unsigned g_sparse_atlas_log_count=0;
  * game CPU writes or previous framebuffer content can still be present.
  * Diagnostic buffer is NEVER used as input to the main rasterizer. */
 static BYTE *g_ownership = NULL;
+/* F12-only provenance of the last attempted sparse Z-plane atlas sample.
+ * 0=not sampled, 1=uploaded nonzero, 2=uploaded zero, 3=unmarked nonzero,
+ * 4=unmarked zero (heuristically skipped), 5=keyed transparency.
+ * Zero index is NOT evidence of a missing asset; diagnostic only. */
+static BYTE *g_atlas_provenance=NULL;
 static unsigned g_ownership_bytes = 0;
 static int g_capture_ownership = 0;
 static unsigned g_world_texture_samples = 0;
@@ -1052,9 +1057,11 @@ static void clean(void){
     if(g_depth)VirtualFree(g_depth,0,MEM_RELEASE);
     if(g_texture)VirtualFree(g_texture,0,MEM_RELEASE);
     if(g_ownership)VirtualFree(g_ownership,0,MEM_RELEASE);
+    if(g_atlas_provenance)VirtualFree(g_atlas_provenance,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
-    g_ownership=NULL;g_ownership_bytes=0;g_capture_ownership=0;
+    g_ownership=NULL;g_atlas_provenance=NULL;
+    g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
     zero(&g_state,sizeof(g_state));
@@ -1089,19 +1096,21 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage){
+static int next_capture_pair(char*frame,char*coverage,char*atlas){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
         capture_name(frame,serial,"_frame.bmp");
         capture_name(coverage,serial,"_coverage.bmp");
+        capture_name(atlas,serial,"_atlas.bmp");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
-        if(frame_exists<0||coverage_exists<0){
+        int atlas_exists=capture_file_present(atlas);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1266,6 +1275,72 @@ static void capture_ownership(const char *filename){
     buf[z]=0;logtext(buf);
 }
 
+/* Exact F12-only sparse-atlas provenance bitmap. This reveals where atlas
+ * page-residency guesses and chroma keys were used, NOT which game assets
+ * are actually missing. Colors: green=uploaded nonzero, cyan=uploaded zero,
+ * magenta=unmarked nonzero, red=unmarked zero skipped, yellow=keyed. */
+static void capture_atlas_provenance(const char *filename){
+    if(!g_manual_capture_active||!g_initialized||!g_atlas_provenance||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD length=GetModuleFileNameA(g_module,path,1023);
+    if(!length||length>=1023)return;
+    DWORD i=length;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("ATLAS_CAPTURE WRITE ERROR: open failed");return;}
+    unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned counts[6]={0}, tiles[4][4][6]={0};
+    static const WORD colors[6]={0x0000u,0x07E0u,0x07FFu,0xF81Fu,0xF800u,0xFFE0u};
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_atlas_provenance[y*width+x];
+            if(kind>5u)kind=0;
+            row[x]=colors[kind];
+            counts[kind]++;
+            tiles[y*4u/height][x*4u/width][kind]++;
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[380];DWORD n=0;
+    putstr(msg,&n,ok?"ATLAS_CAPTURE OK file=":"ATLAS_CAPTURE WRITE ERROR file=");
+    putstr(msg,&n,filename);
+    putstr(msg,&n," frame=");putunsigned(msg,&n,g_frames);
+    putstr(msg,&n," uploaded_nonzero=");putunsigned(msg,&n,counts[1]);
+    putstr(msg,&n," uploaded_zero=");putunsigned(msg,&n,counts[2]);
+    putstr(msg,&n," unmarked_nonzero=");putunsigned(msg,&n,counts[3]);
+    putstr(msg,&n," unmarked_zero_skip=");putunsigned(msg,&n,counts[4]);
+    putstr(msg,&n," keyed=");putunsigned(msg,&n,counts[5]);
+    msg[n]=0;logtext(msg);
+    for(unsigned ty=0;ty<4u;ty++)for(unsigned tx=0;tx<4u;tx++){
+        if(!tiles[ty][tx][4]&&!tiles[ty][tx][5])continue;
+        n=0;
+        putstr(msg,&n,"ATLAS_TILE row=");putunsigned(msg,&n,ty);
+        putstr(msg,&n," col=");putunsigned(msg,&n,tx);
+        putstr(msg,&n," unmarked_zero_skip=");putunsigned(msg,&n,tiles[ty][tx][4]);
+        putstr(msg,&n," keyed=");putunsigned(msg,&n,tiles[ty][tx][5]);
+        putstr(msg,&n," uploaded_zero=");putunsigned(msg,&n,tiles[ty][tx][2]);
+        msg[n]=0;logtext(msg);
+    }
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
@@ -1373,6 +1448,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_color=alloc(framesize);g_depth=alloc(zsize);g_texture=alloc(texsize);
     g_ownership_bytes=(unsigned)Width*(unsigned)Height;
     g_ownership=(BYTE*)alloc(g_ownership_bytes);
+    g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
+    if(!g_atlas_provenance)logtext("ATLAS_CAPTURE disabled: optional diagnostic allocation failed");
     g_shadow_underlay=(g_shadow_underlay_enabled||g_shadow_once_enabled)?(BYTE*)alloc(g_ownership_bytes):NULL;
     if(!g_color||!g_depth||!g_texture||!g_ownership||
        ((g_shadow_underlay_enabled||g_shadow_once_enabled) && !g_shadow_underlay)){
@@ -1532,8 +1609,9 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     g_auto_blue_frame_samples=0;
     /* No automatic debug ownership tracking or BMP capture. */
     g_capture_ownership=g_manual_capture_active;
-    if(g_capture_ownership && g_ownership){
-        zero(g_ownership,g_ownership_bytes);
+    if(g_capture_ownership){
+        if(g_ownership)zero(g_ownership,g_ownership_bytes);
+        if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
         g_world_texture_samples=0;
     }
     /* Tracker is per-frame, never inherited from a preceding frame. */
@@ -1603,15 +1681,17 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100];
-        if(next_capture_pair(frame,coverage)){
+        char frame[100],coverage[100],atlas[100];
+        if(next_capture_pair(frame,coverage,atlas)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
+            capture_atlas_provenance(atlas);
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
             putstr(message,&n,frame);
             putstr(message,&n," coverage=");
             putstr(message,&n,coverage);
+            putstr(message,&n," atlas=");putstr(message,&n,atlas);
             message[n]=0;logtext(message);
         }
         g_manual_capture_active=0;
