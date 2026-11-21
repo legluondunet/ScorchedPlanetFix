@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`81396f1f51e2e926d8619dc31d8411e86e67ab24198232692298a9c60b9233d1`
+`cdb72e45cc617858d839b604b2bb17abd289bf64d1cac193280bed4489177dc4`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -69,6 +69,29 @@ application icon is the fallback. No icon asset is bundled, the game EXE is
 not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
+
+## Read-only briefing crash investigation (2026-11-21)
+
+The owner's run `ScorchedPlanetFix(20261121-100047).log` reproduced
+the *preexisting* OEM `splanetw.exe` AV at `0x0046D76D` (dereference of
+`0x0050DCD0+0x0c` with NULL pointer), at frame 3671 and 63.282 seconds.
+The pointer was last **observed** changing non-NULL to NULL at frame 3564;
+the counter changed from 8 to 9. Non-NULL to NULL is also seen in healthy
+runs, so a global forced pointer or blind exception skip is NOT justified.
+
+A new strictly **Debug Log=1-only, read-only** investigation adds:
+- `AV_6D76D_GLOBAL_EPOCH`: time and frame since the wrapper last noticed
+  the guest global change, which need not equal the actual guest write time
+- `AV_6D76D_ACTION`: up to 16 recent forwarded button/key events, retained
+  past intervening mouse-move events, with original message payloads and ages
+- `AV_6D76D_STACK_CODE`: up to 8 possible OEM in-image addresses found in
+  the faulting thread's stack, with 12 nearby bytes before/after each; these
+  are **candidates, not proven return addresses or stack frames**
+
+The diagnostics do not patch `splanetw.exe`, modify guest state or recover
+from exceptions. The existing pixel-verified index 1 opaque / index 241
+transparent rule and retail 3dfx path are untouched. No extra normal-frame
+BMP captures. Do not merge this change as a repair for the crash.
 
 ## EXCLUSIVE experimental A/B build — opaque black index 1 (2026-11-21)
 
