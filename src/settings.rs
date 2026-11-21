@@ -295,10 +295,10 @@ mod tests{
     #[test]
     fn edge_rule_is_off_by_default_and_strictly_validated(){
         assert!(!parse(b"").unwrap().0.edge_top_left);
-        assert!(parse(b"[Matrox]\\nEdgeTopLeft=1").unwrap().0.edge_top_left);
-        assert!(!parse(b"[Matrox]\\nEdgeTopLeft=0").unwrap().0.edge_top_left);
-        assert!(parse(b"[Matrox]\\nEdgeTopLeft=2").is_err());
-        assert!(parse(b"[Matrox]\\nEdgeTopLeft=1\\nedgeTopLeft=0").is_err());
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=1").unwrap().0.edge_top_left);
+        assert!(!parse(b"[Matrox]\nEdgeTopLeft=0").unwrap().0.edge_top_left);
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=2").is_err());
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=1\nedgeTopLeft=0").is_err());
     }
     #[test]
     fn legacy_fps_migrates_without_losing_player_values(){
