@@ -96,6 +96,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
 
+      - name: Smoke test real x86 Matrox palette-index keying
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-palette-smoke'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' (Join-Path $folder 'msi95.dll')
+          $exe = Join-Path $folder 'MatroxPaletteSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_palette.rs -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile real MSI95 palette-keying smoke test' }
+          Push-Location $folder
+          try {
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw 'MSI95 palette-index keying regression smoke failed' }
+          } finally {
+            Pop-Location
+          }
+
       - name: Smoke test MSI95 x86 dynamic texture-heap growth past 256 live allocations
         shell: pwsh
         run: |

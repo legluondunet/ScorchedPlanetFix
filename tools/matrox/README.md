@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`edad1ef90d555d1d6893d5ad91f03804b5221b625c52c26597001bd3bb4e1ad7`
+`81396f1f51e2e926d8619dc31d8411e86e67ab24198232692298a9c60b9233d1`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -69,6 +69,39 @@ application icon is the fallback. No icon asset is bundled, the game EXE is
 not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
+
+## EXCLUSIVE experimental A/B build — opaque black index 1 (2026-11-21)
+
+**WARNING:** This stacked PR is not the validated Matrox renderer and is
+not intended to be merged into `main` without on-device visual testing.
+It is stacked on the separate passive diagnostic PR #39, not on retail
+3dfx/GameFrame code.
+
+In the owner's 0010 Difficulty capture, source palette index **1**
+resolved to black RGB565, was rejected 20,683 times in the unique last
+world-sample map, and coincides spatially with the missing black silhouette
+behind three portrait heads. The screenshot supplied by the owner has
+solid dark silhouette backgrounds. An offline preview replacing **only**
+this index's rejected pixels with opaque black approximated that reference,
+with index **241** remaining transparent.
+
+For this **experimental build only**, world 128x128, 8-bit indexed textures
+with `Transparency=TRUE`, RGB565 key `0x0000/0xFFFF` and resolved black
+retain **source index 1** as opaque RGB565 black instead of skipping it.
+All other indexed colors (including index **241**) still use their
+original keying behavior. Z-planes and 3dfx are entirely unchanged.
+The experiment is enabled automatically for this disposable CI artifact
+so no INI edits or environment setup are required.
+
+With `[Debug] Log=1`, `MATROX_INDEX1_OPAQUE_PREVIEW` identifies the
+build and `WORLD_KEY_SCREEN index1_opaque_preview=` counts distinct
+last-attempt pixels drawn with the override (marked **amber** in the
+F12 `*_world.bmp` map). As before, one F12 captures four bitmaps;
+`*_frame.bmp` is the actual framebuffer.
+
+Test visually in **Difficulty**, then **Language**, **Quit** and, if stable,
+a brief mission. Compare against PR #39's #553 build before integrating
+any rules into the supported renderer.
 
 ## F12 sprite-atlas provenance diagnostics (2026-11-21)
 
