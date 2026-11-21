@@ -572,3 +572,33 @@ without a crash but *without* a suppressed character is useful evidence
 of a stable run, not a proof that the guard handles the failing sequence.
 Check for both `FIRST_CHANCE_AV` and `SHUTDOWN_COMPLETE`; keep PR #36
 in draft until this and the earlier menu-exit scene-list fault are covered.
+
+## Matrox native MSI95 requests versus sparse Z-plane zero samples (issue #48)
+
+The archival MSI95 SDK header documents **no bilinear filter switch**:
+https://github.com/kytulendu/MSISDK/blob/master/MSI95/msi95.h.
+Restoring original texture/palette and Z-plane behavior is a separate
+step from adding modern optional filtering.
+
+**Read-only diagnostics** now count valid OEM `msiSetParameters` requests
+in `MSI_NATIVE_REQUEST` (textured transparency, nonzero KeyingAlphaMask,
+U/V clamp, depth enabled/protected, color protected) and log the first
+16 unusual `MSI_NATIVE_STATE` samples with full keying color/alpha
+fields. These counters are **not proof** the renderer accurately implements
+each requested mode.
+
+In the existing sparse large-Z-plane-atlas path, `LARGE_Z_ATLAS
+zero_skips_color_keyed=N zero_skips_not_keyed=M` subdivides only
+the samples **already skipped as unmarked zero**. The first count is zero
+values that would have matched the current color key after the palette
+lookup (or current Z-plane blue-key), the second is **potentially opaque**
+zero values. Neither group establishes whether an unwritten zero was a
+real game texel. This counter is *not* the same as
+`RENDER_PROGRESS missing_textures`. No pixel write, key, depth rule, or
+original game data is changed by this diagnostic.
+
+Use the original 640x400 frame/coverage/world/atlas F12 captures and a
+same-scene authentic Mystique VM comparison to determine which skipped
+pixels are wrong before changing opacity or adding smooth filtering.
+The special-case indexed black portrait fill from PR #40 concerns world
+triangles and must not be conflated with large Z-plane atlas residency.

@@ -169,6 +169,12 @@ static unsigned g_sparse_atlas_triangles=0;
 static unsigned g_sparse_atlas_drawn_pixels=0;
 static unsigned g_sparse_atlas_unmapped_pixels=0;
 static unsigned g_sparse_atlas_direct_pixels=0;
+/* Read-only attribution for the existing sparse-atlas zero skip: count
+ * how often zero WOULD be transparent according to the currently bound
+ * palette and original color key, vs potentially opaque palette zero.
+ * Neither class changes the current renderer's skip decision. */
+static unsigned g_sparse_atlas_zero_keyed_skips=0;
+static unsigned g_sparse_atlas_zero_unkeyed_skips=0;
 static unsigned g_sparse_atlas_log_count=0;
 /* v0.20: capture per-frame ownership for selected rendered frames only.
  * 1: world textured nonblack, 2: world textured black, 3: world flat nonblack,
@@ -201,6 +207,12 @@ static unsigned g_fx_dither_parameters=0,g_fx_modulate_parameters=0,g_fx_decal_p
 static unsigned g_fx_dither_textured_states=0,g_fx_modulate_textured_states=0;
 static unsigned g_fx_dither_triangles=0,g_fx_modulate_triangles=0,g_fx_decal_triangles=0;
 static unsigned g_fx_dither_zplanes=0,g_fx_modulate_zplanes=0,g_fx_decal_zplanes=0;
+/* Passive original MSI95 state audit. This reports *requests* by the
+ * OEM client, not proof that each effect was accurately implemented. */
+static unsigned g_native_tex_transparency=0,g_native_alpha_mask=0;
+static unsigned g_native_tex_clamp_u=0,g_native_tex_clamp_v=0;
+static unsigned g_native_depth_enabled=0,g_native_depth_protect=0;
+static unsigned g_native_color_protect=0,g_native_state_details=0;
 /* v0.33 per-vertex texture-color modulation, independently selectable.
  * v0.34 ordered RGB565 quantization experiment, independently selectable;
  * it affects ONLY opt-in modulated 3D textures with Dither set in MSI95. */
@@ -1875,6 +1887,15 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("ZPLANE_BLUE_KEY rgb565=0x00FF skipped_pixels=",g_zplane_blue_key_skips,NULL,0);
         lognum("LARGE_Z_ATLAS triangles=",g_sparse_atlas_triangles,"drawn_pixels=",g_sparse_atlas_drawn_pixels);
         lognum("LARGE_Z_ATLAS missing_samples=",g_sparse_atlas_unmapped_pixels,"direct_nonzero_samples=",g_sparse_atlas_direct_pixels);
+        lognum("LARGE_Z_ATLAS zero_skips_color_keyed=",g_sparse_atlas_zero_keyed_skips,
+               "zero_skips_not_keyed=",g_sparse_atlas_zero_unkeyed_skips);
+        lognum("MSI_NATIVE_REQUEST texture_transparency=",g_native_tex_transparency,
+               "alpha_mask_nonzero=",g_native_alpha_mask);
+        lognum("MSI_NATIVE_REQUEST clamp_u=",g_native_tex_clamp_u,
+               "clamp_v=",g_native_tex_clamp_v);
+        lognum("MSI_NATIVE_REQUEST depth_enabled=",g_native_depth_enabled,
+               "depth_protect=",g_native_depth_protect);
+        lognum("MSI_NATIVE_REQUEST color_protect=",g_native_color_protect,NULL,0);
         lognum("MSI_FX_STATES updates=",g_fx_param_updates,"dither=",g_fx_dither_parameters);
         lognum("MSI_FX_STATES modulate=",g_fx_modulate_parameters,"decal=",g_fx_decal_parameters);
         lognum("MSI_FX_STATES dither_textured=",g_fx_dither_textured_states,"modulate_textured=",g_fx_modulate_textured_states);
@@ -1963,6 +1984,35 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(p->msiTexture.Decal)g_fx_decal_parameters++;
     if(p->msiTexture.Enable && p->msiColor.Dither)g_fx_dither_textured_states++;
     if(p->msiTexture.Enable && p->msiTexture.Modulate)g_fx_modulate_textured_states++;
+    if(p->msiTexture.Enable){
+        if(p->msiTexture.Transparency)g_native_tex_transparency++;
+        if(p->msiTexture.Transparency && p->msiTexture.KeyingAlphaMask)
+            g_native_alpha_mask++;
+        if(p->msiTexture.Clamp_u)g_native_tex_clamp_u++;
+        if(p->msiTexture.Clamp_v)g_native_tex_clamp_v++;
+    }
+    if(p->msiDepth.Enable)g_native_depth_enabled++;
+    if(p->msiDepth.Protect)g_native_depth_protect++;
+    if(p->msiColor.Protect)g_native_color_protect++;
+    if(g_native_state_details<16u &&
+       ((p->msiTexture.Enable && p->msiTexture.Transparency &&
+         p->msiTexture.KeyingAlphaMask) ||
+        p->msiDepth.Enable || p->msiDepth.Protect ||
+        p->msiColor.Protect || p->msiTexture.Decal)){
+        char ns[500];DWORD nn=0;
+        putstr(ns,&nn,"MSI_NATIVE_STATE frame=");putunsigned(ns,&nn,g_frames);
+        putstr(ns,&nn," texture=");putunsigned(ns,&nn,(unsigned)(p->msiTexture.Enable!=0));
+        putstr(ns,&nn," transparent=");putunsigned(ns,&nn,(unsigned)(p->msiTexture.Transparency!=0));
+        putstr(ns,&nn," key_color=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingColor);
+        putstr(ns,&nn," key_color_mask=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingColorMask);
+        putstr(ns,&nn," key_alpha=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingAlpha);
+        putstr(ns,&nn," key_alpha_mask=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingAlphaMask);
+        putstr(ns,&nn," depth_enable=");putunsigned(ns,&nn,(unsigned)(p->msiDepth.Enable!=0));
+        putstr(ns,&nn," depth_compare=");putunsigned(ns,&nn,(unsigned)p->msiDepth.Compare);
+        putstr(ns,&nn," depth_protect=");putunsigned(ns,&nn,(unsigned)(p->msiDepth.Protect!=0));
+        putstr(ns,&nn," color_protect=");putunsigned(ns,&nn,(unsigned)(p->msiColor.Protect!=0));
+        ns[nn]=0;logtext(ns);g_native_state_details++;
+    }
     if(g_fx_param_state_logs<12u || (g_fx_param_updates%100000u)==0){
         char fb[360];DWORD fn=0;
         putstr(fb,&fn,"MSI_FX_PARAMS frame=");putunsigned(fb,&fn,g_frames);
@@ -2191,6 +2241,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     const BYTE* texture=NULL;const BYTE* lut=NULL;
     unsigned texW=0,texH=0,planes=0;
     int sparseAtlas=0;
+    int sparseZeroWouldBeKeyed=0; /* diagnostic only; never affects a skip */
     unsigned texOffset=0;
     int perspective=0;
     float aow=a->invW, bow=b->invW, cow=c->invW;
@@ -2270,6 +2321,20 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             }
             lut=(const BYTE*)g_texture+(unsigned)loff;
         }
+        if(sparseAtlas){
+            /* Classify a zero-valued *sample* after palette lookup, but do
+             * not assume that source zero is a valid written texel. This
+             * distinguishes a reasonable transparent skip from an ambiguous
+             * potentially opaque pixel without changing rasterization. */
+            unsigned zero_color=planes==16u?0u:
+                ((unsigned)lut[0]|((unsigned)lut[1]<<8));
+            unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+            int original_key=(g_state.msiTexture.Transparency &&
+                ((zero_color & mask)==
+                 ((unsigned)g_state.msiTexture.KeyingColor & mask)));
+            /* Existing OEM Z-plane blue-key heuristic also skips 0x00FF. */
+            sparseZeroWouldBeKeyed=original_key || zero_color==0x00FFu;
+        }
         if(!(a->u>=-10000.f&&a->u<=10000.f&&b->u>=-10000.f&&b->u<=10000.f&&
              c->u>=-10000.f&&c->u<=10000.f&&a->v>=-10000.f&&a->v<=10000.f&&
              b->v>=-10000.f&&b->v<=10000.f&&c->v>=-10000.f&&c->v<=10000.f)){
@@ -2327,6 +2392,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     }
                     if(!marked && !nonzero){
                         g_sparse_atlas_unmapped_pixels++;
+                        if(sparseZeroWouldBeKeyed)g_sparse_atlas_zero_keyed_skips++;
+                        else g_sparse_atlas_zero_unkeyed_skips++;
                         if(g_capture_ownership && g_ownership){
                             unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
                             if(!g_ownership[j])g_ownership[j]=9;
