@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/matrox-top-left-edges-20261121]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -95,6 +95,21 @@ jobs:
           python tools/matrox/audit_exports.py $msi
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Native x86 top-left raster edge smoke (synthetic squares)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $obj = Join-Path $env:RUNNER_TEMP 'matrox-edge-smoke.obj'
+          $exe = Join-Path $env:RUNNER_TEMP 'matrox-edge-smoke.exe'
+          & clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -c tools/matrox/smoke_edge_rule.c -o $obj
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile x86 raster-edge smoke' }
+          $kernel = (Resolve-Path 'target/matrox-msi95-x86/kernel32.lib').Path
+          & lld-link /MACHINE:X86 /NODEFAULTLIB /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup "/OUT:$exe" $obj $kernel '/alternatename:__imp__ExitProcess@4=__imp__ExitProcess'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot link x86 raster-edge smoke' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "Native x86 top-left raster-edge smoke failed: case $LASTEXITCODE" }
+          Write-Host 'MATROX_TOPLEFT_X86_SMOKE_PASS 2x2 both winding orientations and no shared-edge double writes'
 
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh

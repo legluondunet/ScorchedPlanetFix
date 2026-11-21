@@ -1,3 +1,5 @@
 # Reproducible SHA-256 for the Matrox MSI95 clean-room C source on Windows CI.
 tools/matrox/msi95_probe.c text eol=lf
 tools/matrox/*.def text eol=lf
+tools/matrox/msi_edge_top_left.h text eol=lf
+tools/matrox/smoke_edge_rule.c text eol=lf
