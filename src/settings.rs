@@ -11,6 +11,7 @@ const OPTION_HELP_MARKER: &[u8] = b"; ScorchedPlanetFix option descriptions";
 const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
 ; [Graphics] FPSLimit: 0=unlimited, 1..240=maximum FPS for both renderers\r\n\
 ; [Matrox] Dither: 0=off, 1=experimental RGB565 dithering (Matrox only)\r\n\
+; [Matrox] SmackerCancelGuard: 0=off (default), 1=experimental in-memory canceled-video guard\r\n\
 ; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
 ; [Cheats] ALIAH: invulnerability code, manual in-game only; default=0\r\n\
 ; [Cheats] FATAL: all weapons and ammunition, manual in-game only; default=0\r\n\
@@ -24,18 +25,19 @@ pub const MAX_FPS:u32=240;
 pub struct GameSettings{
     pub fps_limit:u32,
     pub dither:bool,
+    pub smacker_cancel_guard:bool,
     pub unlimited_fuel:bool,
     pub aliah:bool,
     pub fatal:bool,
     pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,smacker_cancel_guard:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
-    graphics_fps:bool,legacy_fps:bool,dither:bool,unlimited_fuel:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,smacker_cancel_guard:bool,unlimited_fuel:bool,
     aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
@@ -110,6 +112,11 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.dither{return Err("INI: duplicate [matrox] Dither".into());}
                 seen.dither=true;result.dither=switch(value,"[matrox] Dither")?;
             },
+            3 if name.eq_ignore_ascii_case(b"SmackerCancelGuard")=>{
+                if seen.smacker_cancel_guard{return Err("INI: duplicate [Matrox] SmackerCancelGuard".into());}
+                seen.smacker_cancel_guard=true;
+                result.smacker_cancel_guard=switch(value,"[Matrox] SmackerCancelGuard")?;
+            },
             4 if name.eq_ignore_ascii_case(b"UnlimitedFuel")=>{
                 if seen.unlimited_fuel{return Err("INI: duplicate [Cheats] UnlimitedFuel".into());}
                 seen.unlimited_fuel=true;
@@ -153,19 +160,21 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let (before,seen)=parse(original)?;
     let add_fps=!seen.graphics_fps;
     let add_dither=matrox&&!seen.dither;
+    let add_smacker_guard=matrox&&!seen.smacker_cancel_guard;
     let add_fuel=!seen.unlimited_fuel;
     let add_aliah=!seen.aliah;
     let add_fatal=!seen.fatal;
     let add_log=!seen.log;
     let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
         .any(|slice|slice==OPTION_HELP_MARKER);
-    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_smacker_guard&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
     if add_descriptions {out.extend_from_slice(OPTION_HELP);}
     let mut current=0u8;
     let mut did_fps=false;
     let mut did_dither=false;
+    let mut did_smacker_guard=false;
     let mut did_fuel=false;
     let mut did_aliah=false;
     let mut did_fatal=false;
@@ -173,6 +182,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut finish=|old:u8,out:&mut Vec<u8>|{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
+        if old==3&&add_smacker_guard&&!did_smacker_guard{append(out,b"SmackerCancelGuard=0");did_smacker_guard=true;}
         if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
         if old==4&&add_aliah&&!did_aliah{append(out,b"ALIAH=0");did_aliah=true;}
         if old==4&&add_fatal&&!did_fatal{append(out,b"FATAL=0");did_fatal=true;}
@@ -199,6 +209,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_fps&&!did_fps{append(&mut out,fpsline.as_bytes());}
     if matrox&&!seen.matrox{append(&mut out,b"[matrox]");}
     if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
+    if add_smacker_guard&&!did_smacker_guard{append(&mut out,b"SmackerCancelGuard=0");}
     if !seen.cheats{append(&mut out,b"[Cheats]");}
     if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
     if add_aliah&&!did_aliah{append(&mut out,b"ALIAH=0");}
@@ -265,7 +276,7 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,unlimited_fuel:true,aliah:true,fatal:true,log:false});
+            fps_limit:120,dither:true,smacker_cancel_guard:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
@@ -276,6 +287,9 @@ mod tests{
         assert!(parse(b"[Cheats]\nFATAL=YES").is_err());
         assert!(parse(b"[Cheats]\naliah=0\nALIAH=1").is_err());
         assert!(parse(b"[Cheats]\nFATAL=0\nfatal=1").is_err());
+        assert_eq!(parse(b"[Matrox]\nSmackerCancelGuard=1").unwrap().0.smacker_cancel_guard,true);
+        assert!(parse(b"[Matrox]\nSmackerCancelGuard=2").is_err());
+        assert!(parse(b"[Matrox]\nSmackerCancelGuard=1\nsmackercancelguard=0").is_err());
         assert_eq!(parse(b"[Debug]\nLog=1").unwrap().0.log,true);
         assert!(!parse(b"").unwrap().0.log);
         assert!(parse(b"[Debug]\nLog=2").is_err());
@@ -297,7 +311,7 @@ mod tests{
         assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
         assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false,aliah:false,fatal:false,log:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,smacker_cancel_guard:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
