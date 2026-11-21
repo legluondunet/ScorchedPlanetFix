@@ -8,6 +8,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
+#include "msi_edge_top_left.h"
 typedef int BOOL;
 typedef int LONG;
 typedef unsigned int UINT;
@@ -232,6 +233,11 @@ static int g_cap_qpc_ready=0;
 
 /* Experimental perspective correction is off unless explicitly selected
  * by the launcher. It never affects the 2D Z-plane HUD. */
+/* Optional A/B of exact half-open triangle coverage. Disabled by default;
+ * NEVER alter the already validated legacy point-sampling / palette path.
+ * The new edge predicate is shared with a real native x86 synthetic smoke. */
+static int g_edge_top_left_enabled=0;
+static unsigned g_edge_rule_rejected=0,g_edge_rule_boundary_accepted=0;
 static int g_perspective_enabled=0;
 static unsigned g_perspective_triangles=0, g_perspective_pixels=0;
 static unsigned g_world_varying_invw=0, g_world_constant_invw=0;
@@ -1569,6 +1575,11 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PERSPECTIVE",setting,sizeof(setting));
       g_perspective_enabled=(n==1u && setting[0]=='1');}
     logtext(g_perspective_enabled?"PERSPECTIVE_MODE enabled (world triangles only)":"PERSPECTIVE_MODE disabled (v0.19 reference rasterization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_EDGE_TOPLEFT",setting,sizeof(setting));
+      g_edge_top_left_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_edge_top_left_enabled?
+        "EDGE_RULE top_left (EXPERIMENTAL: half-open shared edges)":
+        "EDGE_RULE legacy (original ScorchedPlanetFix coverage, unchanged)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_MODULATE",setting,sizeof(setting));
       g_msi_modulate_enabled=(n==1u && setting[0]=='1');}
     logtext(g_msi_modulate_enabled?"MSI_MODULATE enabled (opt-in per-vertex RGB, textured triangles only; Z-plane HUD excluded)":
@@ -1862,6 +1873,9 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("CACHE_DIRECT_READS triangles=",g_direct_cache_reads,NULL,0);
         lognum("RENDER_REJECTED triangles=",g_rejected_triangles,"rasterized_pixels=",g_drawn_pixels);
         lognum("PERSPECTIVE_UV enabled=",(unsigned)g_perspective_enabled,"triangles=",g_perspective_triangles);
+        lognum("EDGE_RULE top_left_enabled=",(unsigned)g_edge_top_left_enabled,
+               "rejected_samples=",g_edge_rule_rejected);
+        lognum("EDGE_RULE accepted_boundary_samples=",g_edge_rule_boundary_accepted,NULL,0);
         lognum("PERSPECTIVE_UV adjusted_pixels=",g_perspective_pixels,"varying_invw_world_tris=",g_world_varying_invw);
         lognum("PERSPECTIVE_UV constant_invw_world_tris=",g_world_constant_invw,"invalid_invw_world_tris=",g_world_invalid_invw);
         lognum("WORLD_BLUE_KEY samples=",g_world_blue_samples,"transparent_state_samples=",g_world_blue_eligible);
@@ -2354,7 +2368,14 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
         float w2=cross2(x1-x0,y1-y0,startpx-x0,py-y0)*inv;
         for(int x=left;x<right;x++, w1+=step1, w2+=step2){
             float w0=1.f-w1-w2;
-            if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
+            if(g_edge_top_left_enabled){
+                if(!msi_top_left_accept(w0,w1,w2,x0,y0,x1,y1,x2,y2,den)){
+                    g_edge_rule_rejected++;
+                    continue;
+                }
+                if(w0<=0.00001f||w1<=0.00001f||w2<=0.00001f)
+                    g_edge_rule_boundary_accepted++;
+            }else if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
             unsigned color=0, source_index=0, source_index_valid=0;
             if(textured){
                 float u=w0*a->u+w1*b->u+w2*c->u;

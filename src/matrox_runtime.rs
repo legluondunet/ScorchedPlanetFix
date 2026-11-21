@@ -365,6 +365,7 @@ pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
 fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),String> {
     let configured=settings::read_settings(&root.join("ScorchedPlanetFix.ini"))?;
     let controlled=[
+        "MATROX_MSI_EDGE_TOPLEFT",
         "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
         "MATROX_MSI_INDEXED_KEY","MATROX_MSI_SHADOW_ONCE",
         "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
@@ -379,6 +380,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     }
     command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
     command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
+    command.env("MATROX_MSI_EDGE_TOPLEFT",if configured.edge_top_left{"1"}else{"0"});
     command.env("MATROX_MSI_LOG",if configured.log || force_first_log{"1"}else{"0"});
     Ok(())
 }

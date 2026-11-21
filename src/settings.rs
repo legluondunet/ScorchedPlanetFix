@@ -11,6 +11,7 @@ const OPTION_HELP_MARKER: &[u8] = b"; ScorchedPlanetFix option descriptions";
 const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
 ; [Graphics] FPSLimit: 0=unlimited, 1..240=maximum FPS for both renderers\r\n\
 ; [Matrox] Dither: 0=off, 1=experimental RGB565 dithering (Matrox only)\r\n\
+; [Matrox] EdgeTopLeft: 0=existing edge rule, 1=experimental half-open triangle edges\r\n\
 ; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
 ; [Cheats] ALIAH: invulnerability code, manual in-game only; default=0\r\n\
 ; [Cheats] FATAL: all weapons and ammunition, manual in-game only; default=0\r\n\
@@ -24,18 +25,19 @@ pub const MAX_FPS:u32=240;
 pub struct GameSettings{
     pub fps_limit:u32,
     pub dither:bool,
+    pub edge_top_left:bool,
     pub unlimited_fuel:bool,
     pub aliah:bool,
     pub fatal:bool,
     pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,edge_top_left:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
-    graphics_fps:bool,legacy_fps:bool,dither:bool,unlimited_fuel:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,edge_top_left:bool,unlimited_fuel:bool,
     aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
@@ -110,6 +112,11 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.dither{return Err("INI: duplicate [matrox] Dither".into());}
                 seen.dither=true;result.dither=switch(value,"[matrox] Dither")?;
             },
+            3 if name.eq_ignore_ascii_case(b"EdgeTopLeft")=>{
+                if seen.edge_top_left{return Err("INI: duplicate [Matrox] EdgeTopLeft".into());}
+                seen.edge_top_left=true;
+                result.edge_top_left=switch(value,"[Matrox] EdgeTopLeft")?;
+            },
             4 if name.eq_ignore_ascii_case(b"UnlimitedFuel")=>{
                 if seen.unlimited_fuel{return Err("INI: duplicate [Cheats] UnlimitedFuel".into());}
                 seen.unlimited_fuel=true;
@@ -153,19 +160,21 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let (before,seen)=parse(original)?;
     let add_fps=!seen.graphics_fps;
     let add_dither=matrox&&!seen.dither;
+    let add_edge=matrox&&!seen.edge_top_left;
     let add_fuel=!seen.unlimited_fuel;
     let add_aliah=!seen.aliah;
     let add_fatal=!seen.fatal;
     let add_log=!seen.log;
     let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
         .any(|slice|slice==OPTION_HELP_MARKER);
-    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_edge&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
     if add_descriptions {out.extend_from_slice(OPTION_HELP);}
     let mut current=0u8;
     let mut did_fps=false;
     let mut did_dither=false;
+    let mut did_edge=false;
     let mut did_fuel=false;
     let mut did_aliah=false;
     let mut did_fatal=false;
@@ -173,6 +182,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut finish=|old:u8,out:&mut Vec<u8>|{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
+        if old==3&&add_edge&&!did_edge{append(out,b"EdgeTopLeft=0");did_edge=true;}
         if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
         if old==4&&add_aliah&&!did_aliah{append(out,b"ALIAH=0");did_aliah=true;}
         if old==4&&add_fatal&&!did_fatal{append(out,b"FATAL=0");did_fatal=true;}
@@ -199,6 +209,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_fps&&!did_fps{append(&mut out,fpsline.as_bytes());}
     if matrox&&!seen.matrox{append(&mut out,b"[matrox]");}
     if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
+    if add_edge&&!did_edge{append(&mut out,b"EdgeTopLeft=0");}
     if !seen.cheats{append(&mut out,b"[Cheats]");}
     if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
     if add_aliah&&!did_aliah{append(&mut out,b"ALIAH=0");}
@@ -265,7 +276,7 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,unlimited_fuel:true,aliah:true,fatal:true,log:false});
+            fps_limit:120,dither:true,edge_top_left:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
@@ -282,6 +293,14 @@ mod tests{
         assert!(parse(b"[Debug]\nLog=0\nlog=1").is_err());
     }
     #[test]
+    fn edge_rule_is_off_by_default_and_strictly_validated(){
+        assert!(!parse(b"").unwrap().0.edge_top_left);
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=1").unwrap().0.edge_top_left);
+        assert!(!parse(b"[Matrox]\nEdgeTopLeft=0").unwrap().0.edge_top_left);
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=2").is_err());
+        assert!(parse(b"[Matrox]\nEdgeTopLeft=1\nedgeTopLeft=0").is_err());
+    }
+    #[test]
     fn legacy_fps_migrates_without_losing_player_values(){
         let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
         let original=b"[scorch]\r\nlanguage=2\r\nFPSLimit=75\r\n[Other]\r\nnotes=\xff\r\n[Matrox]\r\nDither=1\r\n";
@@ -294,10 +313,11 @@ mod tests{
         assert!(out.windows(b"UnlimitedFuel=0".len()).any(|v|v==b"UnlimitedFuel=0"));
         assert!(out.windows(b"ALIAH=0".len()).any(|v|v==b"ALIAH=0"));
         assert!(out.windows(b"FATAL=0".len()).any(|v|v==b"FATAL=0"));
+        assert!(out.windows(b"EdgeTopLeft=0".len()).any(|v|v==b"EdgeTopLeft=0"));
         assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
         assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,unlimited_fuel:false,aliah:false,fatal:false,log:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,edge_top_left:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -311,6 +331,7 @@ mod tests{
         assert!(s.contains("FPSLimit=60"));
         assert!(s.contains("[Matrox]\r\n"));
         assert!(s.contains("Dither=0"));
+        assert!(s.contains("EdgeTopLeft=0"));
         assert!(s.contains("[Cheats]\r\n"));
         assert!(s.contains("UnlimitedFuel=0"));
         assert!(s.contains("ALIAH=0"));

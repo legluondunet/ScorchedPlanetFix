@@ -602,3 +602,32 @@ same-scene authentic Mystique VM comparison to determine which skipped
 pixels are wrong before changing opacity or adding smooth filtering.
 The special-case indexed black portrait fill from PR #40 concerns world
 triangles and must not be conflated with large Z-plane atlas residency.
+
+## Opt-in experimental top-left triangle edge rule (issue #48)
+
+The original MSI95 *hardware* edge-fill convention has not yet been
+proven. The existing clean-room rasterizer uses an inclusive floating
+epsilon for **both** triangles meeting along a shared diagonal. When
+pixel centers fall exactly on that diagonal, both triangles can write
+those pixels; this may double-apply source opacity or highlights.
+
+For a controlled owner A/B test, `[Matrox] EdgeTopLeft=1` selects the
+usual half-open **top-left edge** convention (top and left inclusive,
+bottom and right exclusive) for triangles rendered by MSI95. It handles
+either vertex winding. `EdgeTopLeft=0` (default) retains the prior
+rasterizer's existing inclusion expression **byte-for-byte**.
+
+The helper `msi_edge_top_left.h` is compiled by the runtime AND a
+standalone Windows x86 synthetic smoke that executes it on two triangles
+covering a 2x2 square, in both orientations, asserting **one writer for
+every pixel**, with no holes or duplicate diagonal coverage. This proves
+the mathematical behavior of our implementation, **not** that Mystique
+used the identical sample convention or that it fixes menu frame edges.
+The test does NOT require game assets.
+
+Suggested A/B: screenshot the **same** portrait/menu and HUD frame with
+EdgeTopLeft=0 and =1 (same resolution, options and session), using F12,
+and visually check diagonal seams and missing edge pixels. Do not merge
+based solely on a green synthetic smoke. This setting has **no role**
+in texture sampling, black/palette index1 vs index241 keying, Z-plane
+atlas residency, bilinear filtering, shaders, or Smacker lifecycle.
