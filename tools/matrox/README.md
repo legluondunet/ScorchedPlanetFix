@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`84f7ecf24720a2caa5d288711f64ec9fa2c9c7aeb29193bdcde9c2cba23c6ee0`
+`40595f96c4fe6ab71d626b3168eefe2c72b24fa3e68cda88aad76c274edaa873`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -32,6 +32,29 @@ pacing and valid positive caps are 1..240. No separate Matrox CLI option is
 needed. The two renderer environment variables are implementation details.
 
 The single Matrox runtime DLL resides at `game/msi95.dll` next to `game/splanetw.exe`. The original proprietary OEM DLL is authenticated during CD extraction and is NOT retained as a backup. GameFrame uses the same `game/` directory when the retail edition is installed instead.
+
+### Gouraud dithering experiment (off by default)
+
+`[Matrox] DitherGouraud=0|1` controls a **separate** 4x4 ordered RGB565
+quantizer for untextured, non-Z-plane Gouraud polygons. Default `0` is
+the byte-for-byte reference. The feature only runs when both `Dither=1` and
+the actual game-requested `msiColor.Dither` state are active. It does not
+touch already-palettized textured pixels, Z-plane HUD sprites, color-key
+decisions, alpha blending, the 3dfx renderer or original game assets.
+
+The existing 0x0841 dark-flat shadow source color is protected from
+dithering; shadow recognition is performed on the **pre-dither** RGB565
+value so the new quantization cannot create false shadow pixels.
+Runtime counters: `MSI_DITHER_GOURAUD samples/changed_pixels` and
+`shadow_protected/enabled`. Source arithmetic is in the freestanding
+`msi_dither_gouraud.h`, also exercised by the independent
+`smoke_dither_gouraud.c` Windows x86 CI smoke.
+
+**Not established:** this Bayer matrix is a portable approximation;
+the exact 1996 Matrox Mystique hardware threshold pattern has not been
+recovered or compared against pixel-matched VM shots. This switch is an
+experiment and must not be presented as an original-driver fix.
+No modern bilinear or antialiasing is added.
 
 ## Debug logging
 
@@ -70,18 +93,152 @@ not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
 
+## EXCLUSIVE experimental A/B build — opaque black index 1 (2026-11-21)
+
+**WARNING:** This stacked PR is not the validated Matrox renderer and is
+not intended to be merged into `main` without on-device visual testing.
+It is stacked on the separate passive diagnostic PR #39, not on retail
+3dfx/GameFrame code.
+
+In the owner's 0010 Difficulty capture, source palette index **1**
+resolved to black RGB565, was rejected 20,683 times in the unique last
+world-sample map, and coincides spatially with the missing black silhouette
+behind three portrait heads. The screenshot supplied by the owner has
+solid dark silhouette backgrounds. An offline preview replacing **only**
+this index's rejected pixels with opaque black approximated that reference,
+with index **241** remaining transparent.
+
+For this **experimental build only**, world 128x128, 8-bit indexed textures
+with `Transparency=TRUE`, RGB565 key `0x0000/0xFFFF` and resolved black
+retain **source index 1** as opaque RGB565 black instead of skipping it.
+All other indexed colors (including index **241**) still use their
+original keying behavior. Z-planes and 3dfx are entirely unchanged.
+The experiment is enabled automatically for this disposable CI artifact
+so no INI edits or environment setup are required.
+
+With `[Debug] Log=1`, `MATROX_INDEX1_OPAQUE_PREVIEW` identifies the
+build and `WORLD_KEY_SCREEN index1_opaque_preview=` counts distinct
+last-attempt pixels drawn with the override (marked **amber** in the
+F12 `*_world.bmp` map). As before, one F12 captures four bitmaps;
+`*_frame.bmp` is the actual framebuffer.
+
+Test visually in **Difficulty**, then **Language**, **Quit** and, if stable,
+a brief mission. Compare against PR #39's #553 build before integrating
+any rules into the supported renderer.
+
+## F12 sprite-atlas provenance diagnostics (2026-11-21)
+
+For the unresolved black rectangles around menu portraits, patchy dark
+regions and apparently incomplete menu frames, the game now records **four**
+matching, numbered F12 bitmaps in `game/`: `*_frame.bmp`,
+`*_coverage.bmp`, and **`*_atlas.bmp`**. The third bitmap is
+*diagnostic only*. It tracks the **last attempted sparse Z-plane atlas texel**
+at each framebuffer pixel; it is **not** a mask of proven missing game art.
+Colors:
+
+- **Green**: texture cache page marked uploaded, nonzero texel
+- **Cyan**: marked uploaded, zero texel/index (potentially a valid palette color)
+- **Magenta**: unmarked cache page but texel nonzero (direct CPU cache write)
+- **Red**: unmarked page and raw zero, discarded by the existing sparse-atlas
+  heuristic (could be a legitimate zero palette index; **not proof of absence**)
+- **Yellow**: color-key transparency discarded from the large Z-plane atlas
+- **Black**: no large Z-plane atlas sample attempted at that pixel
+
+On F12, the standalone MSI95 log emits `ATLAS_CAPTURE` category totals
+and `ATLAS_TILE` diagnostics on a 4x4 screen grid. These are generated
+from the same rendered frame as the original `*_frame.bmp` and
+`*_coverage.bmp`. The overlay is **never shown to the player** or used
+as a rasterizer input. There is no automatic screenshot generation; regular
+frames do not record per-pixel provenance. No INI option or gameplay
+setting changes are needed; enable `[Debug] Log=1` to keep the counters.
+
+**Testing:** capture the same menu in the clean-room renderer and the
+original-driver VM for comparison. Send all three F12 BMPs from the
+clean-room build plus the runtime log. First inspect the red and yellow
+areas against the portrait/corner holes; then decide whether palette-index
+residency and keying actually need code changes. Existing pixels and the
+3dfx backend are untouched.
+
+## F12 ordinary-world texture provenance (2026-11-21)
+
+The user's five menu triplets were inspected: all atlas BMPs were black,
+because those menus use ordinary world triangles (green/cyan/blue coverage)
+rather than large sparse Z-plane texture reads. This is **not** evidence of
+missing texture uploads.
+
+A fourth BMP, `matrox_capture_N_world.bmp`, now records each framebuffer
+pixel's **last attempted ordinary world-texture sample** for the F12 frame.
+Color legend:
+
+- Black: no world texture sample attempted
+- Green: RGB565 (16bpp) texture drawn
+- Olive: 8bpp nonzero palette index drawn
+- Orange: 8bpp zero palette index drawn
+- Dark purple: RGB565 key rejected a non-indexed (4/16-bit) texel
+- Magenta: RGB565 key rejected an **8-bit source index 0**
+- Yellow: RGB565 key rejected an **8-bit source index 1**
+- Violet: RGB565 key rejected an **8-bit source index 241**
+- White: RGB565 key rejected another **8-bit nonzero source index**
+- Red: palette-index key comparison discarded the sample
+- Blue: optional RGB565 0x00FF fallback discarded the sample
+- Cyan: 4bpp indexed world texture drawn
+
+`WORLD_CAPTURE` emits counts for all classes with `[Debug] Log=1`.
+After the owner's 2026-11-21 08:16 test showed only RGB565 key skips,
+the F12 world map further distinguishes an 8-bit **source index zero**
+from a **nonzero index that also maps to RGB565 key color**.
+The `rgb565_key` total still includes all categories, and
+`rgb565_key_index0`, `rgb565_key_otherindex`, and
+`rgb565_key_unindexed` log their precise subdivisions. No transparency
+decision, source texture bytes, palette, or screenshot framebuffer changes.
+
+The 2026-11-21 F12 capture 0006 from the owner's Language menu
+has **13,292 RGB565-keyed 8-bit samples with nonzero source indices**
+in the world map and **zero keyed index-0 pixels**. This does not prove
+that the skips are wrong: an intentional transparency index can be
+nonzero. The next F12-only diagnostic records a histogram of the
+**raw 8-bit indices** of keyed samples in the run log:
+`WORLD_KEY_INDEX_HIST` and up to eight `WORLD_KEY_INDEX_TOP` lines.
+The per-index log counts **all attempted samples**, including overlapping
+triangles, and are not the same as distinct pixels in `*_world.bmp`.
+No indexed texture data, palette, color-key comparison or output pixel is
+modified by this diagnostic.
+
+The 2026-11-21 09:14 runtime log confirms that **only palette indices
+1 and 241** are discarded by RGB565 black keying in captured Difficulty,
+Language and Quit menus. Its per-sample histograms count overlapping
+triangle attempts. In the new F12 world map, **yellow denotes keyed
+index 1**, **violet denotes keyed index 241** and **white denotes other
+nonzero keyed indices**, so that the origin of missing-looking artwork
+can be compared spatially against the original Matrox-driver VM.
+A new `WORLD_KEY_SCREEN` log line counts each color's last-attempted
+pixels in the F12 world bitmap, unlike the per-attempt `WORLD_KEY_INDEX_TOP`
+histogram. All texture, keying, palette and frame output remain unchanged.
+
+The map is diagnostic **only**: CPU writes, later flat primitives or later
+Z-plane draws may cover the recorded texture sample. Neither the world/Z-plane
+renderer, its transparency choices, palettes, installed assets, original
+binaries nor the 3dfx backend are modified.
+
+For next comparison, collect four matching F12 BMPs for Difficulty and
+Language, the same-session runtime log and original-driver screenshots.
+
 ## Repeatable F12 diagnostics (2026-11-20)
 
-Each separate F12 press produces a numbered pair of native 640x400
-RGB565 BMP files inside `game/`, next to the MSI95 DLL:
+Each separate F12 press produces a numbered group of four native
+640x400 RGB565 BMP files inside `game/`, next to the MSI95 DLL:
 
 - `matrox_capture_0001_frame.bmp`: original framebuffer.
-- `matrox_capture_0001_coverage.bmp`: raster ownership map of the same frame.
+- `matrox_capture_0001_coverage.bmp`: raster ownership map.
+- `matrox_capture_0001_atlas.bmp`: last sparse-atlas sample provenance,
+  with color legend and limitations documented above.
+- `matrox_capture_0001_world.bmp`: ordinary-world texture provenance,
+  with color legend and limitations documented above.
 
 Next presses create the corresponding `0002`, `0003`, etc. The driver
-skips serial numbers if **either** file already exists from another
-session (or an interrupted capture). It uses Win32 `CREATE_NEW`
-for both files to prevent overwrites, even with a late collision.
+skips serial numbers if **any** of the four files already exists from
+another session (or an interrupted capture). It uses Win32 `CREATE_NEW`
+for all four files to prevent overwrites, even with a late collision.
 Holding F12 cannot produce repeated pictures through key autorepeat:
 release and press again.
 
@@ -438,3 +595,33 @@ without a crash but *without* a suppressed character is useful evidence
 of a stable run, not a proof that the guard handles the failing sequence.
 Check for both `FIRST_CHANCE_AV` and `SHUTDOWN_COMPLETE`; keep PR #36
 in draft until this and the earlier menu-exit scene-list fault are covered.
+
+## Matrox native MSI95 requests versus sparse Z-plane zero samples (issue #48)
+
+The archival MSI95 SDK header documents **no bilinear filter switch**:
+https://github.com/kytulendu/MSISDK/blob/master/MSI95/msi95.h.
+Restoring original texture/palette and Z-plane behavior is a separate
+step from adding modern optional filtering.
+
+**Read-only diagnostics** now count valid OEM `msiSetParameters` requests
+in `MSI_NATIVE_REQUEST` (textured transparency, nonzero KeyingAlphaMask,
+U/V clamp, depth enabled/protected, color protected) and log the first
+16 unusual `MSI_NATIVE_STATE` samples with full keying color/alpha
+fields. These counters are **not proof** the renderer accurately implements
+each requested mode.
+
+In the existing sparse large-Z-plane-atlas path, `LARGE_Z_ATLAS
+zero_skips_color_keyed=N zero_skips_not_keyed=M` subdivides only
+the samples **already skipped as unmarked zero**. The first count is zero
+values that would have matched the current color key after the palette
+lookup (or current Z-plane blue-key), the second is **potentially opaque**
+zero values. Neither group establishes whether an unwritten zero was a
+real game texel. This counter is *not* the same as
+`RENDER_PROGRESS missing_textures`. No pixel write, key, depth rule, or
+original game data is changed by this diagnostic.
+
+Use the original 640x400 frame/coverage/world/atlas F12 captures and a
+same-scene authentic Mystique VM comparison to determine which skipped
+pixels are wrong before changing opacity or adding smooth filtering.
+The special-case indexed black portrait fill from PR #40 concerns world
+triangles and must not be conflated with large Z-plane atlas residency.
