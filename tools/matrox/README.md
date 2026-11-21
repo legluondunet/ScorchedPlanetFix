@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`2e6ec4b9df0b4c037868bf599e30d582253eabbbac04a7e8f555d009e546790f`
+`edad1ef90d555d1d6893d5ad91f03804b5221b625c52c26597001bd3bb4e1ad7`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -120,7 +120,9 @@ Color legend:
 - Orange: 8bpp zero palette index drawn
 - Dark purple: RGB565 key rejected a non-indexed (4/16-bit) texel
 - Magenta: RGB565 key rejected an **8-bit source index 0**
-- Yellow: RGB565 key rejected an **8-bit nonzero source index**
+- Yellow: RGB565 key rejected an **8-bit source index 1**
+- Violet: RGB565 key rejected an **8-bit source index 241**
+- White: RGB565 key rejected another **8-bit nonzero source index**
 - Red: palette-index key comparison discarded the sample
 - Blue: optional RGB565 0x00FF fallback discarded the sample
 - Cyan: 4bpp indexed world texture drawn
@@ -145,6 +147,17 @@ The per-index log counts **all attempted samples**, including overlapping
 triangles, and are not the same as distinct pixels in `*_world.bmp`.
 No indexed texture data, palette, color-key comparison or output pixel is
 modified by this diagnostic.
+
+The 2026-11-21 09:14 runtime log confirms that **only palette indices
+1 and 241** are discarded by RGB565 black keying in captured Difficulty,
+Language and Quit menus. Its per-sample histograms count overlapping
+triangle attempts. In the new F12 world map, **yellow denotes keyed
+index 1**, **violet denotes keyed index 241** and **white denotes other
+nonzero keyed indices**, so that the origin of missing-looking artwork
+can be compared spatially against the original Matrox-driver VM.
+A new `WORLD_KEY_SCREEN` log line counts each color's last-attempted
+pixels in the F12 world bitmap, unlike the per-attempt `WORLD_KEY_INDEX_TOP`
+histogram. All texture, keying, palette and frame output remain unchanged.
 
 The map is diagnostic **only**: CPU writes, later flat primitives or later
 Z-plane draws may cover the recorded texture sample. Neither the world/Z-plane

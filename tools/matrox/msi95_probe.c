@@ -1362,7 +1362,8 @@ static void capture_atlas_provenance(const char *filename){
  * 0 none; 1 RGB565 drawn; 2 8bpp nonzero index drawn;
  * 3 8bpp zero index drawn; 4 RGB565 key discarded;
  * 5 indexed key discarded; 6 blue fallback discarded; 7 4bpp drawn.
- * 8=RGB565 keyed raw 8-bit index zero; 9=RGB565 keyed nonzero index.
+ * 8=RGB565 keyed raw 8-bit index zero; 9=keyed source index 1;
+ * 10=keyed source index 241; 11=keyed any other nonzero index.
  * Last textured world sample only; later untextured or CPU writes can cover it.
  * Never feeds this buffer to the rasterizer or the framebuffer. */
 static void capture_world_provenance(const char *filename){
@@ -1390,17 +1391,17 @@ static void capture_world_provenance(const char *filename){
     DWORD written=0;
     BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
     static WORD row[4096];const BYTE pad[3]={0,0,0};
-    unsigned counts[10];
+    unsigned counts[12];
     {volatile unsigned *p=(volatile unsigned*)&counts[0];
-     for(unsigned i=0;i<10u;i++)p[i]=0u;}
-    /* Magenta=index 0 keyed, yellow=nonzero 8bpp index keyed. */
-    static const WORD colors[10]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
+     for(unsigned i=0;i<12u;i++)p[i]=0u;}
+    /* Keyed source index 0=magenta; 1=yellow; 241=violet; other=white. */
+    static const WORD colors[12]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
                                   0x8010u,0xF800u,0x001Fu,0x07FFu,
-                                  0xF81Fu,0xFFE0u};
+                                  0xF81Fu,0xFFE0u,0xA01Fu,0xFFFFu};
     for(unsigned y=0;y<height&&ok;y++){
         for(unsigned x=0;x<width;x++){
             unsigned kind=g_world_provenance[y*width+x];
-            if(kind>9u)kind=0u;
+            if(kind>11u)kind=0u;
             row[x]=colors[kind];counts[kind]++;
         }
         ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
@@ -1415,14 +1416,20 @@ static void capture_world_provenance(const char *filename){
     putstr(msg,&n," rgb16_draw=");putunsigned(msg,&n,counts[1]);
     putstr(msg,&n," indexed_nonzero_draw=");putunsigned(msg,&n,counts[2]);
     putstr(msg,&n," indexed_zero_draw=");putunsigned(msg,&n,counts[3]);
-    putstr(msg,&n," rgb565_key=");putunsigned(msg,&n,counts[4]+counts[8]+counts[9]);
+    putstr(msg,&n," rgb565_key=");putunsigned(msg,&n,counts[4]+counts[8]+counts[9]+counts[10]+counts[11]);
     putstr(msg,&n," rgb565_key_index0=");putunsigned(msg,&n,counts[8]);
-    putstr(msg,&n," rgb565_key_otherindex=");putunsigned(msg,&n,counts[9]);
+    putstr(msg,&n," rgb565_key_otherindex=");putunsigned(msg,&n,counts[9]+counts[10]+counts[11]);
     putstr(msg,&n," rgb565_key_unindexed=");putunsigned(msg,&n,counts[4]);
     putstr(msg,&n," index_key=");putunsigned(msg,&n,counts[5]);
     putstr(msg,&n," blue_fallback=");putunsigned(msg,&n,counts[6]);
     putstr(msg,&n," indexed4_draw=");putunsigned(msg,&n,counts[7]);
     msg[n]=0;logtext(msg);
+    char sl[180];DWORD sn=0;
+    putstr(sl,&sn,"WORLD_KEY_SCREEN frame=");putunsigned(sl,&sn,g_frames);
+    putstr(sl,&sn," index1=");putunsigned(sl,&sn,counts[9]);
+    putstr(sl,&sn," index241=");putunsigned(sl,&sn,counts[10]);
+    putstr(sl,&sn," other_nonzero=");putunsigned(sl,&sn,counts[11]);
+    sl[sn]=0;logtext(sl);
     /* Top eight RGB565-keyed 8-bit source indices, counted at sample time.
      * A single screen pixel can be sampled multiple times by overlapping
      * triangles, so sample counts need not match the colored BMP counts. */
@@ -2346,7 +2353,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         g_world_rgbkey_index_hist[source_index]++;
                     if(!g_zplane_draw_context && g_capture_ownership && g_world_provenance){
                         unsigned kind=source_index_valid?
-                            (source_index==0u?8u:9u):4u;
+                            (source_index==0u?8u:(source_index==1u?9u:
+                             (source_index==241u?10u:11u))):4u;
                         g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=(BYTE)kind;
                     }
                     if(g_capture_ownership && g_ownership){
