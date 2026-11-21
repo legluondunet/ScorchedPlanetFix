@@ -321,6 +321,15 @@ static unsigned g_endframe_depth = 0;
 static unsigned g_last_forwarded_msg = 0;
 static unsigned g_last_forwarded_frame = 0;
 static DWORD g_last_forwarded_tick = 0;
+/* Read-only, Debug Log=1-only queue of the 32 most recent intentional
+ * keyboard/button actions actually forwarded into the OEM game callback.
+ * Mouse moves are omitted: they would hide an earlier unpaired ESC/Space
+ * action before a delayed scene-transition fault. */
+typedef struct {
+    DWORD tick,frame,msg,wparam,lparam;
+} MSI_ACTION_TRACE;
+static MSI_ACTION_TRACE g_action_history[32];
+static unsigned g_action_history_next = 0;
 static unsigned g_focus_filtered_events = 0;
 /* Nested game callbacks may render another frame before returning to their
  * outer WM_LBUTTONDOWN handler. Prevent recursively pumping more input during
@@ -344,6 +353,9 @@ static unsigned g_transition_space_char_evaluations = 0;
 static DWORD g_game_50dcd0_last = 0xFFFFFFFFu;
 static DWORD g_game_50dcc0_last = 0xFFFFFFFFu;
 static unsigned g_game_50dcd0_reports = 0;
+/* Last *observed* transition, not the exact guest-side write timestamp. */
+static DWORD g_global_transition_tick = 0;
+static unsigned g_global_transition_frame = 0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -604,6 +616,64 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         }else putstr(game,&k,"unreadable");
         game[k]=0;WriteFile(g_log,game,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
+        /* Capture only factual context when this exact verified OEM fault
+         * happens. Never change EIP, EDX, guest memory or exception result. */
+        if(g_global_transition_tick){
+          char ep[250];k=0;
+          putstr(ep,&k,"AV_6D76D_GLOBAL_EPOCH observed_change_frame=");
+          putunsigned(ep,&k,g_global_transition_frame);
+          putstr(ep,&k," age_ms=");
+          putunsigned(ep,&k,GetTickCount()-g_global_transition_tick);
+          ep[k]=0;WriteFile(g_log,ep,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
+        /* Recent dispatched *action* events, oldest first; unlike
+         * AV_INPUT_CONTEXT this survives subsequent WM_MOUSEMOVE traffic. */
+        unsigned recorded=g_action_history_next<16u?
+            g_action_history_next:16u;
+        unsigned action_start=g_action_history_next-recorded;
+        for(unsigned seq=action_start;seq<g_action_history_next;seq++){
+          const MSI_ACTION_TRACE *entry=&g_action_history[seq%32u];
+          char ev[230];k=0;
+          putstr(ev,&k,"AV_6D76D_ACTION frame=");
+          putunsigned(ev,&k,entry->frame);
+          putstr(ev,&k," msg=");puthex(ev,&k,entry->msg);
+          putstr(ev,&k," wparam=");puthex(ev,&k,entry->wparam);
+          putstr(ev,&k," lparam=");puthex(ev,&k,entry->lparam);
+          putstr(ev,&k," age_ms=");
+          putunsigned(ev,&k,GetTickCount()-entry->tick);
+          ev[k]=0;WriteFile(g_log,ev,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
+        /* The stack is not a reliable unwound call-chain with frame-pointer
+         * omission. Report *candidate* in-image words, including their
+         * instruction neighborhood, without asserting they are callers. */
+        if(ctx->Esp && readable_span((const void*)ctx->Esp,256u)){
+          const DWORD *stack_words=(const DWORD*)ctx->Esp;
+          static const char digits[]="0123456789ABCDEF";
+          unsigned candidates=0;
+          for(unsigned word=0;word<64u && candidates<8u;word++){
+            DWORD value=stack_words[word];
+            if(value<0x00401010u || value>=0x006B7000u)continue;
+            if(!readable_span((const void*)(value-12u),24u))continue;
+            const BYTE *nearby=(const BYTE*)(value-12u);
+            char candidate[220];k=0;
+            putstr(candidate,&k,"AV_6D76D_STACK_CODE word=");
+            putunsigned(candidate,&k,word);
+            putstr(candidate,&k," candidate=");puthex(candidate,&k,value);
+            putstr(candidate,&k," bytes_at_candidate_minus12=");
+            for(unsigned n=0;n<24u;n++){
+              if(n==12u)putstr(candidate,&k," |");
+              if(k+4>=sizeof(candidate))break;
+              candidate[k++]=' ';
+              candidate[k++]=digits[nearby[n]>>4];
+              candidate[k++]=digits[nearby[n]&15u];
+            }
+            candidate[k]=0;WriteFile(g_log,candidate,k,&wr,NULL);
+            WriteFile(g_log,"\r\n",2,&wr,NULL);
+            candidates++;
+          }
+        }
         if(readable_span((const void*)ctx->Esp,48u)){
           char stack2[360];k=0;
           putstr(stack2,&k,"AV_GAME_STACK first12=");
@@ -699,6 +769,10 @@ static void sample_game_global_50dcd0(const char *phase){
     const volatile DWORD *globals=(const volatile DWORD*)0x0050DCC0u;
     DWORD counter=globals[0],ptr=globals[4];
     BOOL changed=ptr!=g_game_50dcd0_last;
+    if(changed){
+        g_global_transition_tick=GetTickCount();
+        g_global_transition_frame=g_frames;
+    }
     if(!changed && (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
     char info[320];DWORD k=0;
     putstr(info,&k,"GAME_GLOBAL_50DCD0 phase=");
@@ -943,6 +1017,17 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         g_last_forwarded_msg=msg;
         g_last_forwarded_frame=g_frames;
         g_last_forwarded_tick=GetTickCount();
+        if(g_log && (msg==WM_KEYDOWN || msg==WM_KEYUP ||
+             msg==WM_CHAR || msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP ||
+             msg==WM_RBUTTONDOWN || msg==WM_RBUTTONUP)){
+            MSI_ACTION_TRACE *trace=&g_action_history[g_action_history_next%32u];
+            trace->tick=g_last_forwarded_tick;
+            trace->frame=g_frames;
+            trace->msg=msg;
+            trace->wparam=(DWORD)wparam;
+            trace->lparam=(DWORD)lparam;
+            g_action_history_next++;
+        }
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
         sample_game_global_50dcd0("post_callback");
