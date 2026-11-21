@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
-    branches: [main, diagnostics/matrox-smack-pending-tick-20261121]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
