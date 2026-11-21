@@ -52,6 +52,12 @@ typedef unsigned long SIZE_T;
 #define WM_CLOSE 0x0010u
 #define WM_ACTIVATEAPP 0x001Cu
 #define WM_NCACTIVATE 0x0086u
+#define WM_SETICON 0x0080u
+#define ICON_SMALL 0u
+#define ICON_BIG 1u
+#define IMAGE_ICON 1u
+#define LR_SHARED 0x8000u
+#define OEM_GROUP_ICON_ID 101u
 #define WM_DESTROY 0x0002u
 #define WM_PAINT 0x000Fu
 #define WM_ERASEBKGND 0x0014u
@@ -114,6 +120,8 @@ __declspec(dllimport) WORD __stdcall RegisterClassA(const WNDCLASSA_MIN*);
 __declspec(dllimport) HWND __stdcall CreateWindowExA(DWORD,const char*,const char*,DWORD,int,int,int,int,HWND,void*,void*,void*);
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND,int);
 __declspec(dllimport) BOOL __stdcall UpdateWindow(HWND);
+__declspec(dllimport) HANDLE __stdcall LoadImageA(void*,const char*,UINT,int,int,UINT);
+__declspec(dllimport) LRESULT __stdcall SendMessageA(HWND,UINT,WPARAM,LPARAM);
 __declspec(dllimport) BOOL __stdcall PeekMessageA(MSG_MIN*,HWND,UINT,UINT,UINT);
 __declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG_MIN*);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageA(const MSG_MIN*);
@@ -762,6 +770,9 @@ static void preview_blit(HDC dc){
  */
 static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LPARAM lparam){
     if(msg==WM_ERASEBKGND)return 1;
+    /* The renderer owns its native preview icon. The 1996 OEM WndProc
+     * must not receive this housekeeping message. */
+    if(msg==WM_SETICON)return DefWindowProcA(hwnd,msg,wparam,lparam);
     if(msg==WM_PAINT){
         PAINTSTRUCT_MIN ps;zero(&ps,sizeof(ps));
         HDC dc=BeginPaint(hwnd,&ps);
@@ -929,11 +940,24 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
     }
     return DefWindowProcA(hwnd,msg,wparam,lparam);
 }
+/* The user-owned OEM splanetw.exe contains GROUP_ICON #101 with 16x16,
+ * 32x32 and 48x48 variants. We inspected that group on the original CD.
+ * Use its already-installed resource: no icon files or copyrighted assets
+ * are shipped with the fix. LR_SHARED icons live as long as the module.
+ * Fall back to Windows stock icon only if the OEM resource is absent. */
+static HANDLE game_preview_icon(int size){
+    HANDLE exe=GetModuleHandleA(NULL);
+    HANDLE result=exe?LoadImageA(exe,(const char*)OEM_GROUP_ICON_ID,IMAGE_ICON,size,size,LR_SHARED):NULL;
+    if(!result)result=LoadImageA(NULL,(const char*)32512u,IMAGE_ICON,size,size,LR_SHARED);
+    return result;
+}
 static void preview_open(void){
     if(g_preview_created)return;
     g_preview_created=1;
     WNDCLASSA_MIN wc;zero(&wc,sizeof(wc));
     wc.style=3;wc.lpfnWndProc=preview_window_proc;
+    HANDLE icon_big=game_preview_icon(32),icon_small=game_preview_icon(16);
+    wc.hIcon=icon_big;
     wc.hInstance=g_module;
     wc.lpszClassName="MSI95_Class";
     if(!g_preview_class_registered){
@@ -962,6 +986,16 @@ static void preview_open(void){
         "Scorched Planet Matrox - MSI95 software renderer (experimental)",
         style,x,y,winw,winh,NULL,NULL,g_module,NULL);
     if(!g_preview){logtext("PREVIEW_WINDOW: CreateWindowExA failed");return;}
+    /* Send both sizes before showing the borderless popup: Wine can then
+     * propagate _NET_WM_ICON to XFCE and Windows gets the taskbar icon. */
+    if(icon_big)SendMessageA(g_preview,WM_SETICON,ICON_BIG,(LPARAM)icon_big);
+    if(icon_small)SendMessageA(g_preview,WM_SETICON,ICON_SMALL,(LPARAM)icon_small);
+    {char message[150];DWORD n=0;
+      putstr(message,&n,"PREVIEW_WINDOW_ICON OEM_group=101 big_present=");
+      putunsigned(message,&n,(unsigned)(icon_big!=NULL));
+      putstr(message,&n," small_present=");putunsigned(message,&n,(unsigned)(icon_small!=NULL));
+      message[n]=0;logtext(message);
+    }
     ShowWindow(g_preview,1);UpdateWindow(g_preview);
     {char buf[220];DWORD n=0;
       putstr(buf,&n,"PREVIEW_WINDOW CREATED mode=");

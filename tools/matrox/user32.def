@@ -4,6 +4,8 @@ EXPORTS
  CreateWindowExA
  ShowWindow
  UpdateWindow
+ LoadImageA
+ SendMessageA
  PeekMessageA
  TranslateMessage
  DispatchMessageA

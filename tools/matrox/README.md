@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`88f4c1fcf2ddaeb6361b45060737dc0767920d5589d05ab22ff8ef660c8ea222`
+`84f7ecf24720a2caa5d288711f64ec9fa2c9c7aeb29193bdcde9c2cba23c6ee0`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -56,6 +56,19 @@ exclude Proton. The standalone C DLL probes Wine directly using
 log. No Steam paths, Wine prefixes, usernames or host identifiers are
 written. This is passive Win32 logging only, not a graphics or input change.
 With `Log=0`, the host probe is skipped entirely.
+
+## Native Matrox taskbar icon (2026-11-21)
+
+The MSI95 borderless/windowed Win32 preview loads the OEM game's existing
+`RT_GROUP_ICON` resource **101** from the already-installed original
+`splanetw.exe` (contains 16x16, 32x32 and 48x48 variants). It registers
+the 32x32 class icon and sets both small and large window icons with
+`WM_SETICON` **before** showing the window, for Windows and Wine/XFCE
+taskbars. If the executable's icon group is unavailable, the standard Win32
+application icon is the fallback. No icon asset is bundled, the game EXE is
+not modified, and the original game window callback does not receive the
+renderer-only `WM_SETICON` messages. Debug logs include
+`PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
 
 ## Repeatable F12 diagnostics (2026-11-20)
 
