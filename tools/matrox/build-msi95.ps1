@@ -46,7 +46,7 @@ $apiAliases = @(
     "CallWindowProcA@20", "GetDC@4", "ReleaseDC@8",
     "GetClientRect@8", "AdjustWindowRect@12", "GetSystemMetrics@4",
     "DestroyWindow@4", "BeginPaint@8", "EndPaint@8",
-    "StretchDIBits@52", "PatBlt@24"
+    "StretchDIBits@52", "PatBlt@24", "SetStretchBltMode@8", "SetBrushOrgEx@16"
 )
 foreach ($alias in $apiAliases) {
     $arguments += "/alternatename:__imp__$alias=__imp__" + $alias.Split("@")[0]
