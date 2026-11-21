@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`84f7ecf24720a2caa5d288711f64ec9fa2c9c7aeb29193bdcde9c2cba23c6ee0`
+`e4553cbee6f17d8ba552487e7b91ec84bdc8f84a583558f2896791e72cef3e78`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -69,6 +69,32 @@ application icon is the fallback. No icon asset is bundled, the game EXE is
 not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
+
+## Optional whole-frame image smoothing (2026-11-21)
+
+The original Matrox Mystique has no bilinear **texture** sampling. A
+2026-11-21 VM screenshot using original Matrox drivers nevertheless looks
+smoother than our GDI output: the VM screenshot has roughly 56k distinct
+colors and only ~65% equal adjacent pixels, while the native RGB565
+`640x400` diagnostic frame has 540 colors. Bilinear upscaling to the VM's
+display dimensions produces around 61k colors and ~64% equal neighbors.
+This suggests presentation scaling, *not* proof of Mystique texture filtering.
+
+The experimental option `[Matrox] SmoothScaling=1` asks GDI to use
+`HALFTONE` mode for the **final** RGB565 `StretchDIBits` enlargement.
+This may provide interpolation under Wine's GDI. The behavior on native
+Windows is implementation-dependent and may not be identical to Wine.
+`SmoothScaling=0` remains the default, retaining byte-for-byte existing
+source pixels and the validated presentation behavior.
+No palette, 3D texture interpolation, transparency, world geometry, HUD,
+framebuffer content, screenshots, or retail 3dfx behavior changes. The
+INI setting is passed only by the launcher to the MSI95 child process.
+
+With `[Debug] Log=1`, the runtime shows
+`PREVIEW_SMOOTH_SCALING requested=nearest` or
+`PREVIEW_SMOOTH_SCALING requested=HALFTONE`.
+Check subjective quality and performance on the **same** game/menu screen
+with both options before changing the default.
 
 ## Repeatable F12 diagnostics (2026-11-20)
 
