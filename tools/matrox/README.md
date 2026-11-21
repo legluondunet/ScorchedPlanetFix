@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`959cb454a8e488f9855dd358b6b1e84216fa700fdfaf72a09663ca10c4f9e28b`
+`0466008290191664494ba1a79fe573894cf6c6834f73d1df801b14c77a594f35`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -73,7 +73,7 @@ renderer-only `WM_SETICON` messages. Debug logs include
 ## F12 sprite-atlas provenance diagnostics (2026-11-21)
 
 For the unresolved black rectangles around menu portraits, patchy dark
-regions and apparently incomplete menu frames, the game now records **three**
+regions and apparently incomplete menu frames, the game now records **four**
 matching, numbered F12 bitmaps in `game/`: `*_frame.bmp`,
 `*_coverage.bmp`, and **`*_atlas.bmp`**. The third bitmap is
 *diagnostic only*. It tracks the **last attempted sparse Z-plane atlas texel**
@@ -103,20 +103,51 @@ areas against the portrait/corner holes; then decide whether palette-index
 residency and keying actually need code changes. Existing pixels and the
 3dfx backend are untouched.
 
+## F12 ordinary-world texture provenance (2026-11-21)
+
+The user's five menu triplets were inspected: all atlas BMPs were black,
+because those menus use ordinary world triangles (green/cyan/blue coverage)
+rather than large sparse Z-plane texture reads. This is **not** evidence of
+missing texture uploads.
+
+A fourth BMP, `matrox_capture_N_world.bmp`, now records each framebuffer
+pixel's **last attempted ordinary world-texture sample** for the F12 frame.
+Color legend:
+
+- Black: no world texture sample attempted
+- Green: RGB565 (16bpp) texture drawn
+- Olive: 8bpp nonzero palette index drawn
+- Orange: 8bpp zero palette index drawn
+- Magenta: RGB565 key comparison discarded the sample
+- Red: palette-index key comparison discarded the sample
+- Blue: optional RGB565 0x00FF fallback discarded the sample
+- Cyan: 4bpp indexed world texture drawn
+
+`WORLD_CAPTURE` emits counts for all classes with `[Debug] Log=1`.
+The map is diagnostic **only**: CPU writes, later flat primitives or later
+Z-plane draws may cover the recorded texture sample. Neither the world/Z-plane
+renderer, its transparency choices, palettes, installed assets, original
+binaries nor the 3dfx backend are modified.
+
+For next comparison, collect four matching F12 BMPs for Difficulty and
+Language, the same-session runtime log and original-driver screenshots.
+
 ## Repeatable F12 diagnostics (2026-11-20)
 
-Each separate F12 press produces a numbered group of three native
+Each separate F12 press produces a numbered group of four native
 640x400 RGB565 BMP files inside `game/`, next to the MSI95 DLL:
 
 - `matrox_capture_0001_frame.bmp`: original framebuffer.
 - `matrox_capture_0001_coverage.bmp`: raster ownership map.
 - `matrox_capture_0001_atlas.bmp`: last sparse-atlas sample provenance,
   with color legend and limitations documented above.
+- `matrox_capture_0001_world.bmp`: ordinary-world texture provenance,
+  with color legend and limitations documented above.
 
 Next presses create the corresponding `0002`, `0003`, etc. The driver
-skips serial numbers if **any** of the three files already exists from
+skips serial numbers if **any** of the four files already exists from
 another session (or an interrupted capture). It uses Win32 `CREATE_NEW`
-for all three files to prevent overwrites, even with a late collision.
+for all four files to prevent overwrites, even with a late collision.
 Holding F12 cannot produce repeated pictures through key autorepeat:
 release and press again.
 
