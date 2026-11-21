@@ -96,6 +96,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
 
+      - name: Native Windows x86 Gouraud RGB565 ordered-dither smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $obj = Join-Path $env:RUNNER_TEMP 'matrox-gouraud-smoke.obj'
+          $exe = Join-Path $env:RUNNER_TEMP 'matrox-gouraud-smoke.exe'
+          & clang --target=i686-pc-windows-msvc -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector -c tools/matrox/smoke_dither_gouraud.c -o $obj
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile native x86 Gouraud smoke' }
+          $kernel = (Resolve-Path 'target/matrox-msi95-x86/kernel32.lib').Path
+          & lld-link /MACHINE:X86 /NODEFAULTLIB /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup "/OUT:$exe" $obj $kernel '/alternatename:__imp__ExitProcess@4=__imp__ExitProcess'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot link native x86 Gouraud smoke' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "Native x86 Gouraud smoke failed: case $LASTEXITCODE" }
+          Write-Host 'MATROX_GOURAUD_X86_SMOKE_PASS endpoints, 4x4 tile, average quantization, shadow sentinel'
+
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh
         run: |
