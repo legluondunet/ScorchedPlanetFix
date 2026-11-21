@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`0ae17310b2f83b9107a760ad559417b6dc7d7b474638ab7d9fe89db13d36f827`
+`d46eb7838a5b7ae666e7e94bde0b1d2035fe8233eeb28cd8d71b178b6f0d0a72`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -89,6 +89,26 @@ on existing sparse `GAME_GLOBAL_50DCD0` snapshots (max 96):
 - at the exact fault `0x0046D76D`, report `AV_SMACK_PLAYBACK` with
   the last known metadata and observed open/close frame, *in addition* to
   the existing crash-action ring and stack-code candidate logging
+
+Following the 2026-11-21 **no-video-skipping** owner baseline, one
+diagnostic edge case was discovered: `SmackOpen` reuses address
+`0x00DE0550` for different videos. For example the sampled metadata changes
+from 285 to 4500 frames and later 610 to 198 frames **without a pointer
+transition** in the sparse log. The passive sampler now checks the metadata
+and video counter **on every renderer snapshot** (once/twice per MSI frame),
+and emits immediate `smack_format_switch_same_handle=1` or
+`smack_counter_restarted=1` on such changes. Normal periodic logs remain
+limited and only Debug Log=1 sessions record them.
+
+**Real normal-playback baseline**:
+- 320x152 movie 4500 frames: reset to NULL at MSI frame 4799, counter 4501
+- 320x200 briefing 198 frames: reset to NULL at MSI frame 6074, counter 199
+- No first-chance access violation; `msiExit total_frames=6547`,
+  `SHUTDOWN_COMPLETE`, `exit_live=0` during 685186 ms (~11m25s).
+The 610-frame 320x152 movie transitions to the 198-frame 320x200
+briefing between periodic snapshots; the old sampler did not catch its
+exact final frame count. This is **not evidence of a skip**, since the
+owner explicitly reports none.
 
 The observed transition frame is **not** the exact instruction timestamp
 for `SmackClose`; a snapshot of a valid handle cannot prove that an

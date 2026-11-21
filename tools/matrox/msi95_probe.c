@@ -366,6 +366,11 @@ static DWORD g_smack_last_height=0;
 static DWORD g_smack_last_frames=0;
 static DWORD g_smack_last_nonnull_frame=0;
 static DWORD g_smack_last_null_frame=0;
+/* Sample every MSI95 frame even though normal trace output is sparse.
+ * Matrox's SmackOpen may reuse the same address for different movies:
+ * compare frame-count, geometry AND counter restart, not pointer alone. */
+static DWORD g_smack_prev_counter=0;
+static BOOL g_smack_prev_counter_seen=FALSE;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -804,7 +809,6 @@ static void sample_game_global_50dcd0(const char *phase){
         g_global_transition_tick=GetTickCount();
         g_global_transition_frame=g_frames;
     }
-    if(!changed && (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
     DWORD movie_mode=0xffffffffu;
     if(readable_span((const void*)0x00655750u,4u))
         movie_mode=*(const volatile DWORD*)0x00655750u;
@@ -814,14 +818,25 @@ static void sample_game_global_50dcd0(const char *phase){
         const volatile DWORD *movie=(const volatile DWORD*)(SIZE_T)ptr;
         width=movie[1];height=movie[2];frames=movie[3];
         movie_readable=TRUE;
-        /* Snapshot before handle is closed; still report raw values if
-         * dimensions don't match expectations rather than inventing data. */
+    }
+    BOOL format_changed=movie_readable && g_smack_last_handle==ptr &&
+        (width!=g_smack_last_width || height!=g_smack_last_height ||
+         frames!=g_smack_last_frames);
+    BOOL counter_restarted=movie_readable && g_smack_prev_counter_seen &&
+        g_smack_last_handle==ptr && counter<g_smack_prev_counter;
+    g_smack_prev_counter=counter;
+    g_smack_prev_counter_seen=TRUE;
+    /* Always refresh the last known Smacker header, even when a normal
+     * frame doesn't emit a line: avoids 120-frame blind spots. */
+    if(movie_readable){
         g_smack_last_handle=ptr;
         g_smack_last_width=width;
         g_smack_last_height=height;
         g_smack_last_frames=frames;
         g_smack_last_nonnull_frame=g_frames;
     }else if(changed && !ptr)g_smack_last_null_frame=g_frames;
+    if(!changed && !format_changed && !counter_restarted &&
+       (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
     char info[480];DWORD k=0;
     putstr(info,&k,"GAME_GLOBAL_50DCD0 phase=");
     putstr(info,&k,phase);
@@ -831,6 +846,8 @@ static void sample_game_global_50dcd0(const char *phase){
     putstr(info,&k," counter_50DCC0=");puthex(info,&k,counter);
     putstr(info,&k," callback_depth=");putunsigned(info,&k,g_guest_callback_depth);
     putstr(info,&k," movie_mode=");puthex(info,&k,movie_mode);
+    if(format_changed)putstr(info,&k," smack_format_switch_same_handle=1");
+    if(counter_restarted)putstr(info,&k," smack_counter_restarted=1");
     if(movie_readable){
         putstr(info,&k," smack_width=");putunsigned(info,&k,width);
         putstr(info,&k," smack_height=");putunsigned(info,&k,height);
