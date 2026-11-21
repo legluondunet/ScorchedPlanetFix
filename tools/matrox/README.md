@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`532dc181e98173f51400884b5025600438ea84fb9efc1d7a9a077fdaa83460cd`
+`b9db03f98b94398457e3ccfe9c8469d1dc9f960a7b7d85ab857a5e37f6588ffd`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -692,3 +692,25 @@ without a crash but *without* a suppressed character is useful evidence
 of a stable run, not a proof that the guard handles the failing sequence.
 Check for both `FIRST_CHANCE_AV` and `SHUTDOWN_COMPLETE`; keep PR #36
 in draft until this and the earlier menu-exit scene-list fault are covered.
+
+## Experimental opt-in Smacker null-tick guard (unvalidated)
+
+The Matrox-only `[Matrox] SmackerCancelGuard=1` option requests a
+**process-memory-only** patch after strict signature verification of the
+original OEM EXE at `0046D761`, `0046D76D` and `0046D7D2`.
+It does not redistribute or alter the proprietary game executable or
+SMACKW32.DLL on disk. When the handle is valid it executes the original
+load and resumes normal code; if it is NULL it skips only the stale
+frame-advance tick via the OEM function epilogue, without calling
+SmackClose twice or catching any exception. All protections are restored
+and the original code site is restored at normal MSI95 shutdown.
+Private trampoline memory is retained until the process exits to avoid
+freeing code that an in-flight call may still be executing.
+
+The option defaults to **0**. Runtime logs show
+`SMACK_NULL_GUARD_INSTALLED`,
+`SMACK_NULL_GUARD_SUMMARY null_tick_skips=N` and
+`SMACK_NULL_GUARD_RESTORED`.
+This is a candidate crash fix, **not validated** under actual gameplay.
+Do not merge until Windows and Wine tests confirm normal video completion,
+early skip, scene transitions, audio and shutdown.

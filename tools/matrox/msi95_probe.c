@@ -30,6 +30,8 @@ typedef unsigned long SIZE_T;
 #define MEM_RESERVE 0x2000U
 #define MEM_RELEASE 0x8000U
 #define PAGE_READWRITE 4U
+#define PAGE_EXECUTE_READ 0x20U
+#define PAGE_EXECUTE_READWRITE 0x40U
 #define INVALID_HANDLE_VALUE ((HANDLE)(-1))
 #define EXCEPTION_CONTINUE_SEARCH 0
 #define EXCEPTION_ACCESS_VIOLATION 0xC0000005u
@@ -94,6 +96,9 @@ __declspec(dllimport) void* __stdcall GetProcAddress(HANDLE,const char*);
 __declspec(dllimport) void * __stdcall VirtualAlloc(void*,DWORD,DWORD,DWORD);
 __declspec(dllimport) BOOL __stdcall VirtualFree(void*,DWORD,DWORD);
 __declspec(dllimport) void* __stdcall AddVectoredExceptionHandler(unsigned long, void*);
+__declspec(dllimport) BOOL __stdcall VirtualProtect(void*,SIZE_T,DWORD,DWORD*);
+__declspec(dllimport) BOOL __stdcall FlushInstructionCache(HANDLE,const void*,SIZE_T);
+__declspec(dllimport) HANDLE __stdcall GetCurrentProcess(void);
 __declspec(dllimport) unsigned long __stdcall VirtualQuery(const void*,void*,SIZE_T);
 
 /* Minimal Windows x86 ABI definitions for diagnostic GDI presentation.
@@ -381,6 +386,9 @@ static BOOL g_smack_prev_counter_seen=FALSE;
  * invoking renderer flush 0x004185C0. Read-only stack candidates only:
  * matching a value does NOT prove a live call frame. */
 static DWORD g_smack_callback_pending_tick=0;
+static BOOL g_video_null_guard_installed=FALSE;
+static BYTE *g_video_null_guard_stub=NULL;
+static DWORD g_video_null_guard_skips=0;
 static unsigned g_smack_pending_reports=0;
 static unsigned g_smack_callback_close_reports=0;
 static unsigned g_smack_pending_close_reports=0;
@@ -845,6 +853,114 @@ static DWORD find_pending_smack_tick(const void *anchor){
     }
     return 0u;
 }
+
+/* EXPERIMENTAL, opt-in, hash-locked EXE memory patch.
+ * Never change the original game file or Smacker DLL on disk.
+ * Only the original six-byte load at 0046D761 is redirected. */
+static BOOL video_guard_exact_signature(void){
+    static const BYTE load[6]={0x8b,0x15,0xd0,0xdc,0x50,0x00};
+    static const BYTE cmp[5]={0x39,0x42,0x0c,0x72,0x30};
+    static const BYTE end[8]={0x5d,0x5f,0x5e,0x5b,0x83,0xc4,0x18,0xc3};
+    if((DWORD)GetModuleHandleA(NULL)!=0x00400000u ||
+       !game_global_probe_supported() ||
+       !readable_span((const void*)0x0046D761u,6u) ||
+       !readable_span((const void*)0x0046D76Du,5u) ||
+       !readable_span((const void*)0x0046D7D2u,8u))return FALSE;
+    const BYTE* addresses[3]={(BYTE*)0x0046D761u,(BYTE*)0x0046D76Du,(BYTE*)0x0046D7D2u};
+    const BYTE* signatures[3]={load,cmp,end};
+    const unsigned lengths[3]={6u,5u,8u};
+    for(unsigned j=0;j<3u;j++)
+        for(unsigned i=0;i<lengths[j];i++)
+            if(addresses[j][i]!=signatures[j][i])return FALSE;
+    return TRUE;
+}
+static void write_video_guard_rel32(BYTE *src,DWORD base,DWORD destination){
+    DWORD delta=destination-(base+5u);
+    src[0]=0xe9;
+    for(unsigned i=0;i<4u;i++)src[i+1u]=(BYTE)(delta>>(i*8u));
+}
+static BOOL install_video_null_guard(void){
+    if(g_video_null_guard_installed)return TRUE;
+    if(!video_guard_exact_signature()){
+        logtext("SMACK_NULL_GUARD_REFUSED reason=OEM_signatures_not_recognized");
+        return FALSE;
+    }
+    BYTE *stub=(BYTE*)VirtualAlloc(NULL,4096u,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    if(!stub){logtext("SMACK_NULL_GUARD_REFUSED reason=out_of_memory");return FALSE;}
+    /* 0: mov edx,[0050DCD0], 6 bytes
+     * 6: test edx,edx, 2 bytes
+     * 8: jne +11 => offsets 21..25, 2 bytes
+     * 10: inc DWORD PTR [private_counter], 6 bytes
+     * 16: jmp 0046D7D2 (existing video-tick epilogue), 5 bytes
+     * 21: jmp 0046D767 (resume original normal path), 5 bytes */
+    static const BYTE load[6]={0x8b,0x15,0xd0,0xdc,0x50,0x00};
+    for(unsigned i=0;i<6u;i++)stub[i]=load[i];
+    stub[6]=0x85;stub[7]=0xd2;stub[8]=0x75;stub[9]=0x0b;
+    stub[10]=0xff;stub[11]=0x05;
+    DWORD countptr=(DWORD)&g_video_null_guard_skips;
+    for(unsigned i=0;i<4u;i++)stub[12u+i]=(BYTE)(countptr>>(8u*i));
+    write_video_guard_rel32(stub+16u,(DWORD)stub+16u,0x0046D7D2u);
+    write_video_guard_rel32(stub+21u,(DWORD)stub+21u,0x0046D767u);
+    DWORD previous=0;
+    if(!VirtualProtect(stub,4096u,PAGE_EXECUTE_READ,&previous)){
+        VirtualFree(stub,0u,MEM_RELEASE);
+        logtext("SMACK_NULL_GUARD_REFUSED reason=cannot_protect_trampoline");
+        return FALSE;
+    }
+    BYTE *site=(BYTE*)0x0046D761u;
+    if(!VirtualProtect(site,6u,PAGE_EXECUTE_READWRITE,&previous)){
+        VirtualFree(stub,0u,MEM_RELEASE);
+        logtext("SMACK_NULL_GUARD_REFUSED reason=cannot_protect_game_code");
+        return FALSE;
+    }
+    BYTE patch[6]={0};
+    write_video_guard_rel32(patch,(DWORD)site,(DWORD)stub);
+    patch[5]=0x90;
+    for(unsigned i=0;i<6u;i++)site[i]=patch[i];
+    BOOL flushed=FlushInstructionCache(GetCurrentProcess(),site,6u);
+    DWORD ignored=0;
+    VirtualProtect(site,6u,previous,&ignored);
+    if(!flushed){
+        DWORD writable=0;
+        if(VirtualProtect(site,6u,PAGE_EXECUTE_READWRITE,&writable)){
+            for(unsigned i=0;i<6u;i++)site[i]=load[i];
+            FlushInstructionCache(GetCurrentProcess(),site,6u);
+            VirtualProtect(site,6u,writable,&ignored);
+            VirtualFree(stub,0u,MEM_RELEASE);
+        }else{
+            /* Never free reachable code if rollback cannot be guaranteed. */
+            g_video_null_guard_stub=stub;
+            g_video_null_guard_installed=TRUE;
+        }
+        logtext("SMACK_NULL_GUARD_REFUSED reason=flush_failed");
+        return FALSE;
+    }
+    g_video_null_guard_stub=stub;
+    g_video_null_guard_installed=TRUE;
+    logtext("SMACK_NULL_GUARD_INSTALLED mode=opt_in in_memory=1 resume_valid=0x0046D767 skip_null=0x0046D7D2");
+    return TRUE;
+}
+static void restore_video_null_guard(void){
+    if(!g_video_null_guard_installed)return;
+    BYTE *site=(BYTE*)0x0046D761u;
+    const BYTE old_code[6]={0x8b,0x15,0xd0,0xdc,0x50,0x00};
+    if(site[0]!=0xe9||site[5]!=0x90){
+        logtext("SMACK_NULL_GUARD_RESTORE_FAILED reason=site_changed");return;
+    }
+    DWORD before=0,ignored=0;
+    if(!VirtualProtect(site,6u,PAGE_EXECUTE_READWRITE,&before)){
+        logtext("SMACK_NULL_GUARD_RESTORE_FAILED reason=protect_failed");return;
+    }
+    for(unsigned i=0;i<6u;i++)site[i]=old_code[i];
+    BOOL flushed=FlushInstructionCache(GetCurrentProcess(),site,6u);
+    VirtualProtect(site,6u,before,&ignored);
+    if(!flushed){logtext("SMACK_NULL_GUARD_RESTORE_FAILED reason=flush_failed");return;}
+    g_video_null_guard_installed=FALSE;
+    /* The one-page trampoline remains reserved until process shutdown:
+     * an in-flight redirected call could still be returning through it. */
+    lognum("SMACK_NULL_GUARD_RESTORED null_tick_skips=",g_video_null_guard_skips,NULL,0);
+}
+
 static void sample_game_global_50dcd0(const char *phase){
     if(!g_log || !game_global_probe_supported() ||
        !readable_span((const void*)0x0050DCC0u,0x14u))return;
@@ -1746,6 +1862,15 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     logtext("SMACK_LIFECYCLE_PROBE enabled=1 read_only=1 known_oem_mov_and_cmp_signatures=1");
     logtext("SMACK_PENDING_TICK_PROBE enabled=1 return_candidates=0x0046D752,0x0046D757,0x0046D75C read_only=1");
     logtext("MSI_NESTED_ENDFRAME_PROBE enabled=1 max_depth_and_callback_lifecycle=1 read_only=1");
+    {char flag[4]={0};
+     DWORD n=GetEnvironmentVariableA("MATROX_MSI_SMACK_GUARD",flag,sizeof(flag));
+     if(n==1u && flag[0]=='1'){
+         if(!install_video_null_guard()){
+             logtext("msiInit FAILED: requested Smacker null-tick guard not installed");
+             return NULL;
+         }
+     }else logtext("SMACK_NULL_GUARD disabled_default=1");
+    }
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
@@ -1932,6 +2057,8 @@ BOOL __cdecl msiExit(void){
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("MSI_NESTED_ENDFRAME_STATS total=",g_nested_endframe_events,
            "max_depth=",g_nested_endframe_max_depth);
+    if(g_video_null_guard_installed)
+        lognum("SMACK_NULL_GUARD_SUMMARY null_tick_skips=",g_video_null_guard_skips,NULL,0);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
@@ -1939,6 +2066,7 @@ BOOL __cdecl msiExit(void){
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);
     lognum("SESSION_TIMING gdi_ms=",g_preview_ms,"state_ms=",g_state_ms);
+    restore_video_null_guard();
     return TRUE;
 }
 /* Reserve space for the next heap handle BEFORE allocating game memory,
