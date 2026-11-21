@@ -1364,6 +1364,7 @@ static void capture_atlas_provenance(const char *filename){
  * 5 indexed key discarded; 6 blue fallback discarded; 7 4bpp drawn.
  * 8=RGB565 keyed raw 8-bit index zero; 9=keyed source index 1;
  * 10=keyed source index 241; 11=keyed any other nonzero index.
+ * 12=EXPERIMENTAL opaque source index 1, resolved RGB565 black (amber).
  * Last textured world sample only; later untextured or CPU writes can cover it.
  * Never feeds this buffer to the rasterizer or the framebuffer. */
 static void capture_world_provenance(const char *filename){
@@ -1391,17 +1392,19 @@ static void capture_world_provenance(const char *filename){
     DWORD written=0;
     BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
     static WORD row[4096];const BYTE pad[3]={0,0,0};
-    unsigned counts[12];
+    unsigned counts[13];
     {volatile unsigned *p=(volatile unsigned*)&counts[0];
-     for(unsigned i=0;i<12u;i++)p[i]=0u;}
-    /* Keyed source index 0=magenta; 1=yellow; 241=violet; other=white. */
-    static const WORD colors[12]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
+     for(unsigned i=0;i<13u;i++)p[i]=0u;}
+    /* Keyed index 0=magenta; 1=yellow; 241=violet; other=white;
+     * previewed opaque index1 is amber. */
+    static const WORD colors[13]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
                                   0x8010u,0xF800u,0x001Fu,0x07FFu,
-                                  0xF81Fu,0xFFE0u,0xA01Fu,0xFFFFu};
+                                  0xF81Fu,0xFFE0u,0xA01Fu,0xFFFFu,
+                                  0xFC00u};
     for(unsigned y=0;y<height&&ok;y++){
         for(unsigned x=0;x<width;x++){
             unsigned kind=g_world_provenance[y*width+x];
-            if(kind>11u)kind=0u;
+            if(kind>12u)kind=0u;
             row[x]=colors[kind];counts[kind]++;
         }
         ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
@@ -1429,6 +1432,7 @@ static void capture_world_provenance(const char *filename){
     putstr(sl,&sn," index1=");putunsigned(sl,&sn,counts[9]);
     putstr(sl,&sn," index241=");putunsigned(sl,&sn,counts[10]);
     putstr(sl,&sn," other_nonzero=");putunsigned(sl,&sn,counts[11]);
+    putstr(sl,&sn," index1_opaque_preview=");putunsigned(sl,&sn,counts[12]);
     sl[sn]=0;logtext(sl);
     /* Top eight RGB565-keyed 8-bit source indices, counted at sample time.
      * A single screen pixel can be sampled multiple times by overlapping
@@ -1470,6 +1474,7 @@ static void capture_world_provenance(const char *filename){
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
+    logtext("MATROX_INDEX1_OPAQUE_PREVIEW enabled=1 scope=world_8bpp_128x128_black_rgb565_key; ONLY experimental stacked PR");
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
@@ -2342,9 +2347,23 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         ((source_index_valid && source_index==0u)?3u:2u):7u);
                     g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=(BYTE)kind;
                 }
+                /* Isolated diagnostic-render experiment (NOT on main).
+                 * F12 source-index map shows index 1 occupies the missing
+                 * black silhouette around three menu portraits. Under the
+                 * original RGB565=0 key, both palette indices 1 and 241
+                 * become black. Keep index 241 keyed, but let index 1 render
+                 * its black palette color when using 128x128 indexed menu
+                 * textures. A/B against PR #39; never apply to Z-planes. */
+                int preview_index1_opaque=
+                    !g_zplane_draw_context && source_index_valid &&
+                    source_index==1u && texW==128u && texH==128u &&
+                    color==0u && g_state.msiTexture.Transparency &&
+                    g_state.msiTexture.KeyingColor==0u &&
+                    g_state.msiTexture.KeyingColorMask==0xffffu;
                 if(g_state.msiTexture.Transparency &&
                    ((color&g_state.msiTexture.KeyingColorMask)==
-                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask))){
+                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)) &&
+                   !preview_index1_opaque){
                     if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
                         unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
                         g_atlas_provenance[screen]=5u;
@@ -2363,6 +2382,10 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     }
                     continue;
                 }
+                if(preview_index1_opaque && g_capture_ownership &&
+                   g_world_provenance)
+                    g_world_provenance[(unsigned)y*(unsigned)width+
+                                       (unsigned)x]=12u;
                 /* The 8-bit MSI interface has a palette-index ambiguity:
                  * source pixel index zero can map through the CLUT to blue
                  * RGB565 0x00FF. Record source index for every blue texel,
