@@ -464,12 +464,14 @@ mod tests {
         let _=fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("ScorchedPlanetFix.ini"),
-            b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\n").unwrap();
+            b"[scorch]\nFPSLimit=120\n[matrox]\nDither=1\nSmoothScaling=1\n").unwrap();
         let mut c=Command::new("unused");
         configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_FPS_LIMIT" &&
             v==Some(std::ffi::OsStr::new("120"))));
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_DITHER" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMOOTH_SCALING" &&
             v==Some(std::ffi::OsStr::new("1"))));
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
             v==Some(std::ffi::OsStr::new("0"))));
@@ -477,6 +479,8 @@ mod tests {
         configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
             v==Some(std::ffi::OsStr::new("1"))));
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMOOTH_SCALING" &&
+            v==Some(std::ffi::OsStr::new("0"))));
         fs::write(root.join("ScorchedPlanetFix.ini"),b"[Debug]\nLog=0\n").unwrap();
         configure(&mut c,&root,true).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
