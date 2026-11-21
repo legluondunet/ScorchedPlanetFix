@@ -318,6 +318,12 @@ static unsigned g_input_messages = 0;
  * delay, suppress or rearrange user input or game callbacks. */
 static unsigned g_guest_callback_depth = 0;
 static unsigned g_endframe_depth = 0;
+/* Real nesting of MSI95 end-of-frame calls: sampled deferral depth=2 in
+ * the historical 0046D76D AV, but depth=1 in a comparable safe ESC skip.
+ * Count every nested entry; log only with explicit Debug Log=1. */
+static unsigned g_nested_endframe_events = 0;
+static unsigned g_nested_endframe_max_depth = 0;
+static unsigned g_nested_endframe_reports = 0;
 static unsigned g_last_forwarded_msg = 0;
 static unsigned g_last_forwarded_frame = 0;
 static DWORD g_last_forwarded_tick = 0;
@@ -668,6 +674,10 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
           putunsigned(pending,&k,g_smack_callback_close_reports);
           putstr(pending,&k," candidate_closes=");
           putunsigned(pending,&k,g_smack_pending_close_reports);
+          putstr(pending,&k," nested_endframe_total=");
+          putunsigned(pending,&k,g_nested_endframe_events);
+          putstr(pending,&k," max_endframe_depth=");
+          putunsigned(pending,&k,g_nested_endframe_max_depth);
           pending[k]=0;WriteFile(g_log,pending,k,&wr,NULL);
           WriteFile(g_log,"\r\n",2,&wr,NULL);
         }
@@ -1163,6 +1173,7 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
          * playback tick is suspended in a rendering call. */
         DWORD stack_anchor=0u;
         DWORD previous_pending_tick=g_smack_callback_pending_tick;
+        unsigned nested_before_callback=g_nested_endframe_events;
         DWORD candidate=find_pending_smack_tick(&stack_anchor);
         DWORD before=0xffffffffu;
         if(g_log && game_global_probe_supported() &&
@@ -1193,6 +1204,8 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
                 putstr(msgbuf,&n," key=");puthex(msgbuf,&n,(DWORD)wparam);
                 putstr(msgbuf,&n," render_depth=");
                 putunsigned(msgbuf,&n,g_endframe_depth);
+                putstr(msgbuf,&n," nested_ends_during_callback=");
+                putunsigned(msgbuf,&n,g_nested_endframe_events-nested_before_callback);
                 putstr(msgbuf,&n," candidate=");puthex(msgbuf,&n,candidate);
                 putstr(msgbuf,&n," before=");puthex(msgbuf,&n,before);
                 putstr(msgbuf,&n," after=");puthex(msgbuf,&n,after);
@@ -1732,6 +1745,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     logtext("MATROX_INDEX1_OPAQUE_PREVIEW enabled=1 scope=world_8bpp_128x128_black_rgb565_key; ONLY experimental stacked PR");
     logtext("SMACK_LIFECYCLE_PROBE enabled=1 read_only=1 known_oem_mov_and_cmp_signatures=1");
     logtext("SMACK_PENDING_TICK_PROBE enabled=1 return_candidates=0x0046D752,0x0046D757,0x0046D75C read_only=1");
+    logtext("MSI_NESTED_ENDFRAME_PROBE enabled=1 max_depth_and_callback_lifecycle=1 read_only=1");
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
@@ -1916,6 +1930,8 @@ BOOL __cdecl msiExit(void){
         logtext("SHUTDOWN_PREVIEW already absent");
     }
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
+    lognum("MSI_NESTED_ENDFRAME_STATS total=",g_nested_endframe_events,
+           "max_depth=",g_nested_endframe_max_depth);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
@@ -2071,6 +2087,45 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
     g_endframe_depth++;
     g_frames++;
+    if(g_log){
+        if(g_endframe_depth>g_nested_endframe_max_depth)
+            g_nested_endframe_max_depth=g_endframe_depth;
+        if(g_endframe_depth>=2u){
+            ++g_nested_endframe_events;
+            /* Keep hard-to-reproduce nested callbacks observable, but
+             * don't generate enormous logs in extended play sessions. */
+            if(g_nested_endframe_reports<32u ||
+               (g_nested_endframe_events%250u)==0u){
+                char nest[410];DWORD n=0;
+                DWORD mode=0xffffffffu,handle=0xffffffffu,counter=0xffffffffu;
+                if(game_global_probe_supported()){
+                    if(readable_span((const void*)0x00655750u,4u))
+                        mode=*(const volatile DWORD*)0x00655750u;
+                    if(readable_span((const void*)0x0050DCC0u,0x14u)){
+                        const volatile DWORD *globals=(const volatile DWORD*)0x0050DCC0u;
+                        counter=globals[0];
+                        handle=globals[4];
+                    }
+                }
+                putstr(nest,&n,"MSI_NESTED_ENDFRAME frame=");
+                putunsigned(nest,&n,g_frames);
+                putstr(nest,&n," depth=");
+                putunsigned(nest,&n,g_endframe_depth);
+                putstr(nest,&n," callback_depth=");
+                putunsigned(nest,&n,g_guest_callback_depth);
+                putstr(nest,&n," mode=");
+                puthex(nest,&n,mode);
+                putstr(nest,&n," video_handle=");
+                puthex(nest,&n,handle);
+                putstr(nest,&n," video_counter=");
+                puthex(nest,&n,counter);
+                putstr(nest,&n," total=");
+                putunsigned(nest,&n,g_nested_endframe_events);
+                nest[n]=0;logtext(nest);
+                ++g_nested_endframe_reports;
+            }
+        }
+    }
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
         char frame[100],coverage[100],atlas[100],world[100];
