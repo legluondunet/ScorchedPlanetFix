@@ -8,7 +8,11 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "532dc181e98173f51400884b5025600438ea84fb9efc1d7a9a077fdaa83460cd"
+$expectedSourceHash = "68998da6dcc13a93e303925ca44b29da8bf7a35c71b8fb022e13e23a7596c4b3"
+$header = (Resolve-Path (Join-Path $sourceRoot "smacker_guard_x86.h")).Path
+$expectedGuardHash = "1a8a6dd7244a39efb5950efb8dda581daa82abd1af131c731dde32002f02b345"
+$guardHash = (Get-FileHash $header -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($guardHash -cne $expectedGuardHash) { throw "Smacker guard emitter checksum mismatch: $guardHash" }
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 
@@ -39,7 +43,8 @@ $apiAliases = @(
     "WriteFile@20", "CloseHandle@4", "GetModuleFileNameA@12",
     "GetFileAttributesA@4",
     "VirtualAlloc@16", "VirtualFree@12", "AddVectoredExceptionHandler@8",
-    "VirtualQuery@12", "RegisterClassA@4", "CreateWindowExA@48",
+    "VirtualQuery@12", "VirtualProtect@16", "FlushInstructionCache@12",
+    "GetCurrentProcess@0", "RegisterClassA@4", "CreateWindowExA@48",
     "ShowWindow@8", "UpdateWindow@4", "LoadImageA@24", "SendMessageA@16",
     "PeekMessageA@20",
     "TranslateMessage@4", "DispatchMessageA@4", "DefWindowProcA@16",

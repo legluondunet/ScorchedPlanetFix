@@ -24,6 +24,9 @@ FPSLimit=60\r\n\
 ; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
 ; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
+; Experimental cancellation guard for Smacker videos: 0=off (default)\r\n\
+; 1=opt-in in-memory video-tick safety check, not yet validated\r\n\
+SmackerCancelGuard=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\
