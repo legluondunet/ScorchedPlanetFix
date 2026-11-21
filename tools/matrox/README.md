@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`455174796cce4cfca2eaeaf7f4816cd4131904f656cf04d47c77b19dd2b0180c`
+`2e6ec4b9df0b4c037868bf599e30d582253eabbbac04a7e8f555d009e546790f`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -133,6 +133,18 @@ The `rgb565_key` total still includes all categories, and
 `rgb565_key_index0`, `rgb565_key_otherindex`, and
 `rgb565_key_unindexed` log their precise subdivisions. No transparency
 decision, source texture bytes, palette, or screenshot framebuffer changes.
+
+The 2026-11-21 F12 capture 0006 from the owner's Language menu
+has **13,292 RGB565-keyed 8-bit samples with nonzero source indices**
+in the world map and **zero keyed index-0 pixels**. This does not prove
+that the skips are wrong: an intentional transparency index can be
+nonzero. The next F12-only diagnostic records a histogram of the
+**raw 8-bit indices** of keyed samples in the run log:
+`WORLD_KEY_INDEX_HIST` and up to eight `WORLD_KEY_INDEX_TOP` lines.
+The per-index log counts **all attempted samples**, including overlapping
+triangles, and are not the same as distinct pixels in `*_world.bmp`.
+No indexed texture data, palette, color-key comparison or output pixel is
+modified by this diagnostic.
 
 The map is diagnostic **only**: CPU writes, later flat primitives or later
 Z-plane draws may cover the recorded texture sample. Neither the world/Z-plane

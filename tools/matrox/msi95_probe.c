@@ -186,6 +186,10 @@ static BYTE *g_ownership = NULL;
 static BYTE *g_atlas_provenance=NULL;
 /* F12-only last ordinary world-texture sample, never used for rendering. */
 static BYTE *g_world_provenance=NULL;
+/* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
+ * value matched the hardware color key. This is not a pixel-coverage map:
+ * overdraw and triangle overlap can count a texel more than once. */
+static unsigned g_world_rgbkey_index_hist[256];
 static unsigned g_ownership_bytes = 0;
 static int g_capture_ownership = 0;
 static unsigned g_world_texture_samples = 0;
@@ -1419,6 +1423,41 @@ static void capture_world_provenance(const char *filename){
     putstr(msg,&n," blue_fallback=");putunsigned(msg,&n,counts[6]);
     putstr(msg,&n," indexed4_draw=");putunsigned(msg,&n,counts[7]);
     msg[n]=0;logtext(msg);
+    /* Top eight RGB565-keyed 8-bit source indices, counted at sample time.
+     * A single screen pixel can be sampled multiple times by overlapping
+     * triangles, so sample counts need not match the colored BMP counts. */
+    unsigned total=0,distinct=0;
+    for(unsigned i=0;i<256u;i++){
+        total+=g_world_rgbkey_index_hist[i];
+        if(g_world_rgbkey_index_hist[i])distinct++;
+    }
+    char histline[256];DWORD hn=0;
+    putstr(histline,&hn,"WORLD_KEY_INDEX_HIST frame=");putunsigned(histline,&hn,g_frames);
+    putstr(histline,&hn," attempts=");putunsigned(histline,&hn,total);
+    putstr(histline,&hn," distinct=");putunsigned(histline,&hn,distinct);
+    putstr(histline,&hn," index0=");putunsigned(histline,&hn,g_world_rgbkey_index_hist[0]);
+    histline[hn]=0;logtext(histline);
+    unsigned listed[8];for(unsigned r=0;r<8u;r++)listed[r]=256u;
+    for(unsigned rank=0;rank<8u;rank++){
+        unsigned best=256u,bestCount=0;
+        for(unsigned i=0;i<256u;i++){
+            unsigned count=g_world_rgbkey_index_hist[i];
+            if(!count||count<bestCount)continue;
+            int already=0;
+            for(unsigned r=0;r<rank;r++)if(listed[r]==i){already=1;break;}
+            if(already)continue;
+            if(count>bestCount||best==256u||i<best){
+                best=i;bestCount=count;
+            }
+        }
+        if(best==256u)break;
+        listed[rank]=best;
+        hn=0;
+        putstr(histline,&hn,"WORLD_KEY_INDEX_TOP rank=");putunsigned(histline,&hn,rank+1u);
+        putstr(histline,&hn," source_index=");putunsigned(histline,&hn,best);
+        putstr(histline,&hn," attempts=");putunsigned(histline,&hn,bestCount);
+        histline[hn]=0;logtext(histline);
+    }
 }
 
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
@@ -1695,6 +1734,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_ownership)zero(g_ownership,g_ownership_bytes);
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
         if(g_world_provenance)zero(g_world_provenance,g_ownership_bytes);
+        zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
         g_world_texture_samples=0;
     }
     /* Tracker is per-frame, never inherited from a preceding frame. */
@@ -2302,6 +2342,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
                         g_atlas_provenance[screen]=5u;
                     }
+                    if(!g_zplane_draw_context && g_capture_ownership && source_index_valid)
+                        g_world_rgbkey_index_hist[source_index]++;
                     if(!g_zplane_draw_context && g_capture_ownership && g_world_provenance){
                         unsigned kind=source_index_valid?
                             (source_index==0u?8u:9u):4u;
