@@ -1304,7 +1304,14 @@ static void capture_atlas_provenance(const char *filename){
     DWORD written=0;
     BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
     static WORD row[4096];const BYTE pad[3]={0,0,0};
-    unsigned counts[6]={0}, tiles[4][4][6]={0};
+    unsigned counts[6],tiles[4][4][6];
+    /* The freestanding MSI95 DLL cannot call the C runtime memset.
+     * Volatile writes prevent Clang from replacing fixed-size stack
+     * initialization with an unresolved external memset. F12 only. */
+    {volatile unsigned *p=(volatile unsigned*)&counts[0];
+     for(unsigned i=0;i<6u;i++)p[i]=0u;}
+    {volatile unsigned *p=(volatile unsigned*)&tiles[0][0][0];
+     for(unsigned i=0;i<4u*4u*6u;i++)p[i]=0u;}
     static const WORD colors[6]={0x0000u,0x07E0u,0x07FFu,0xF81Fu,0xF800u,0xFFE0u};
     for(unsigned y=0;y<height&&ok;y++){
         for(unsigned x=0;x<width;x++){
