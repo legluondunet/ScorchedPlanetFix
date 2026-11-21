@@ -371,6 +371,14 @@ static DWORD g_smack_last_null_frame=0;
  * compare frame-count, geometry AND counter restart, not pointer alone. */
 static DWORD g_smack_prev_counter=0;
 static BOOL g_smack_prev_counter_seen=FALSE;
+/* The exact OEM video playback tick resumes at 0x0046D757 after
+ * invoking renderer flush 0x004185C0. Read-only stack candidates only:
+ * matching a value does NOT prove a live call frame. */
+static DWORD g_smack_callback_pending_tick=0;
+static unsigned g_smack_pending_reports=0;
+static unsigned g_smack_callback_close_reports=0;
+static unsigned g_smack_pending_close_reports=0;
+static unsigned g_smack_important_transitions=0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -652,6 +660,17 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
           state[k]=0;WriteFile(g_log,state,k,&wr,NULL);
           WriteFile(g_log,"\r\n",2,&wr,NULL);
         }
+        {
+          char pending[230];k=0;
+          putstr(pending,&k,"AV_SMACK_TICK_CALLBACK_CONTEXT candidate=");
+          puthex(pending,&k,g_smack_callback_pending_tick);
+          putstr(pending,&k," callback_closes=");
+          putunsigned(pending,&k,g_smack_callback_close_reports);
+          putstr(pending,&k," candidate_closes=");
+          putunsigned(pending,&k,g_smack_pending_close_reports);
+          pending[k]=0;WriteFile(g_log,pending,k,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
         /* Capture only factual context when this exact verified OEM fault
          * happens. Never change EIP, EDX, guest memory or exception result. */
         if(g_global_transition_tick){
@@ -798,9 +817,26 @@ static BOOL game_global_probe_supported(void){
         load[4]==0x50u && load[5]==0x00u &&
         cmp[0]==0x39u && cmp[1]==0x42u && cmp[2]==0x0Cu;
 }
+/* Scan a bounded, readable area of this thread's stack for possible
+ * OEM return addresses just before the crashing Smacker frame advance.
+ * The scan runs ONLY for actual forwarded Win32 callbacks with Log=1. */
+static DWORD find_pending_smack_tick(const void *anchor){
+    if(!g_log||!game_global_probe_supported()||!anchor)return 0u;
+    DWORD a=((DWORD)anchor)&~3u;
+    if(a<65536u || a>0xFFFFC000u)return 0u;
+    for(DWORD off=0;off<16384u;off+=256u){
+        const DWORD*words=(const DWORD*)(a+off);
+        if(!readable_span(words,256u))break;
+        for(unsigned i=0;i<64u;i++){
+            DWORD w=words[i];
+            if(w==0x0046D752u || w==0x0046D757u ||
+               w==0x0046D75Cu)return w;
+        }
+    }
+    return 0u;
+}
 static void sample_game_global_50dcd0(const char *phase){
-    if(!g_log || g_game_50dcd0_reports>=96u ||
-       !game_global_probe_supported() ||
+    if(!g_log || !game_global_probe_supported() ||
        !readable_span((const void*)0x0050DCC0u,0x14u))return;
     const volatile DWORD *globals=(const volatile DWORD*)0x0050DCC0u;
     DWORD counter=globals[0],ptr=globals[4];
@@ -835,8 +871,26 @@ static void sample_game_global_50dcd0(const char *phase){
         g_smack_last_frames=frames;
         g_smack_last_nonnull_frame=g_frames;
     }else if(changed && !ptr)g_smack_last_null_frame=g_frames;
-    if(!changed && !format_changed && !counter_restarted &&
-       (g_frames%120u!=0u || counter==g_game_50dcc0_last))return;
+    BOOL important=changed||format_changed||counter_restarted;
+    if(!important && (g_game_50dcd0_reports>=96u ||
+       (g_frames%120u!=0u || counter==g_game_50dcc0_last)))return;
+    if(important && g_smack_important_transitions>=256u){
+        g_game_50dcd0_last=ptr;
+        g_game_50dcc0_last=counter;
+        return;
+    }
+    if(changed && !ptr && g_smack_callback_pending_tick){
+        g_smack_pending_close_reports++;
+        char msg[270];DWORD n=0;
+        putstr(msg,&n,"SMACK_CLOSE_WITH_PENDING_TICK frame=");
+        putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," phase=");putstr(msg,&n,phase);
+        putstr(msg,&n," candidate=");puthex(msg,&n,g_smack_callback_pending_tick);
+        putstr(msg,&n," callback_depth=");
+        putunsigned(msg,&n,g_guest_callback_depth);
+        putstr(msg,&n," counter=");putunsigned(msg,&n,counter);
+        msg[n]=0;logtext(msg);
+    }
     char info[480];DWORD k=0;
     putstr(info,&k,"GAME_GLOBAL_50DCD0 phase=");
     putstr(info,&k,phase);
@@ -862,6 +916,7 @@ static void sample_game_global_50dcd0(const char *phase){
     g_game_50dcd0_last=ptr;
     g_game_50dcc0_last=counter;
     g_game_50dcd0_reports++;
+    if(important)g_smack_important_transitions++;
 }
 static void loginit(LONG w,LONG h,LONG planes,BOOL z,BOOL dbg){
   char buf[940];DWORD p=0;putstr(buf,&p,"msiInit width=");putunsigned(buf,&p,(unsigned)w);
@@ -1104,10 +1159,49 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
             trace->lparam=(DWORD)lparam;
             g_action_history_next++;
         }
+        /* A callback may close an active Smacker movie while the
+         * playback tick is suspended in a rendering call. */
+        DWORD stack_anchor=0u;
+        DWORD previous_pending_tick=g_smack_callback_pending_tick;
+        DWORD candidate=find_pending_smack_tick(&stack_anchor);
+        DWORD before=0xffffffffu;
+        if(g_log && game_global_probe_supported() &&
+           readable_span((const void*)0x0050DCD0u,4u))
+            before=*(const volatile DWORD*)0x0050DCD0u;
+        g_smack_callback_pending_tick=candidate;
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
         sample_game_global_50dcd0("post_callback");
+        if(g_log && (candidate || before!=0xffffffffu)){
+            DWORD after=0xffffffffu;
+            if(readable_span((const void*)0x0050DCD0u,4u))
+                after=*(const volatile DWORD*)0x0050DCD0u;
+            BOOL closed=before!=0u && before!=0xffffffffu && after==0u;
+            BOOL action=msg==WM_KEYDOWN||msg==WM_KEYUP||
+                        msg==WM_CHAR||msg==WM_LBUTTONDOWN||
+                        msg==WM_LBUTTONUP||msg==WM_RBUTTONDOWN||
+                        msg==WM_RBUTTONUP;
+            if(closed)g_smack_callback_close_reports++;
+            if((closed || (candidate && action)) &&
+               g_smack_pending_reports<64u){
+                char msgbuf[350];DWORD n=0;
+                putstr(msgbuf,&n,closed?
+                    "SMACK_CALLBACK_CLOSED_VIDEO":
+                    "SMACK_CALLBACK_PENDING_TICK");
+                putstr(msgbuf,&n," frame=");putunsigned(msgbuf,&n,g_frames);
+                putstr(msgbuf,&n," input=");puthex(msgbuf,&n,msg);
+                putstr(msgbuf,&n," key=");puthex(msgbuf,&n,(DWORD)wparam);
+                putstr(msgbuf,&n," render_depth=");
+                putunsigned(msgbuf,&n,g_endframe_depth);
+                putstr(msgbuf,&n," candidate=");puthex(msgbuf,&n,candidate);
+                putstr(msgbuf,&n," before=");puthex(msgbuf,&n,before);
+                putstr(msgbuf,&n," after=");puthex(msgbuf,&n,after);
+                msgbuf[n]=0;logtext(msgbuf);
+                g_smack_pending_reports++;
+            }
+        }
         g_guest_callback_depth--;
+        g_smack_callback_pending_tick=previous_pending_tick;
         return result;
     }
     return DefWindowProcA(hwnd,msg,wparam,lparam);
@@ -1637,6 +1731,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
     logtext("MATROX_INDEX1_OPAQUE_PREVIEW enabled=1 scope=world_8bpp_128x128_black_rgb565_key; ONLY experimental stacked PR");
     logtext("SMACK_LIFECYCLE_PROBE enabled=1 read_only=1 known_oem_mov_and_cmp_signatures=1");
+    logtext("SMACK_PENDING_TICK_PROBE enabled=1 return_candidates=0x0046D752,0x0046D757,0x0046D75C read_only=1");
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
