@@ -282,9 +282,9 @@ mod tests{
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=60\nfpslimit=30").is_err());
-        assert_eq!(parse(b"[Matrox]\\nSmoothScaling=1").unwrap().0.smooth_scaling,true);
-        assert!(parse(b"[Matrox]\\nSmoothScaling=2").is_err());
-        assert!(parse(b"[Matrox]\\nSmoothScaling=0\\nsmoothscaling=1").is_err());
+        assert_eq!(parse(b"[Matrox]\nSmoothScaling=1").unwrap().0.smooth_scaling,true);
+        assert!(parse(b"[Matrox]\nSmoothScaling=2").is_err());
+        assert!(parse(b"[Matrox]\nSmoothScaling=0\nsmoothscaling=1").is_err());
         assert!(parse(b"[Cheats]\nUnlimitedFuel=2").is_err());
         assert!(parse(b"[Cheats]\nUnlimitedFuel=1\nUnlimitedFuel=0").is_err());
         assert!(parse(b"[Cheats]\nALIAH=2").is_err());
