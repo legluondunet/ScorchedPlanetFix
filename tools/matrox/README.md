@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`84f7ecf24720a2caa5d288711f64ec9fa2c9c7aeb29193bdcde9c2cba23c6ee0`
+`b1818e6d6048c1b707074df2b06ca95e267ce8ab47027da5fac6c97f5e9dc796`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -69,6 +69,39 @@ application icon is the fallback. No icon asset is bundled, the game EXE is
 not modified, and the original game window callback does not receive the
 renderer-only `WM_SETICON` messages. Debug logs include
 `PREVIEW_WINDOW_ICON OEM_group=101 big_present=... small_present=...`.
+
+## F12 sprite-atlas provenance diagnostics (2026-11-21)
+
+For the unresolved black rectangles around menu portraits, patchy dark
+regions and apparently incomplete menu frames, the game now records **three**
+matching, numbered F12 bitmaps in `game/`: `*_frame.bmp`,
+`*_coverage.bmp`, and **`*_atlas.bmp`**. The third bitmap is
+*diagnostic only*. It tracks the **last attempted sparse Z-plane atlas texel**
+at each framebuffer pixel; it is **not** a mask of proven missing game art.
+Colors:
+
+- **Green**: texture cache page marked uploaded, nonzero texel
+- **Cyan**: marked uploaded, zero texel/index (potentially a valid palette color)
+- **Magenta**: unmarked cache page but texel nonzero (direct CPU cache write)
+- **Red**: unmarked page and raw zero, discarded by the existing sparse-atlas
+  heuristic (could be a legitimate zero palette index; **not proof of absence**)
+- **Yellow**: color-key transparency discarded from the large Z-plane atlas
+- **Black**: no large Z-plane atlas sample attempted at that pixel
+
+On F12, the standalone MSI95 log emits `ATLAS_CAPTURE` category totals
+and `ATLAS_TILE` diagnostics on a 4x4 screen grid. These are generated
+from the same rendered frame as the original `*_frame.bmp` and
+`*_coverage.bmp`. The overlay is **never shown to the player** or used
+as a rasterizer input. There is no automatic screenshot generation; regular
+frames do not record per-pixel provenance. No INI option or gameplay
+setting changes are needed; enable `[Debug] Log=1` to keep the counters.
+
+**Testing:** capture the same menu in the clean-room renderer and the
+original-driver VM for comparison. Send all three F12 BMPs from the
+clean-room build plus the runtime log. First inspect the red and yellow
+areas against the portrait/corner holes; then decide whether palette-index
+residency and keying actually need code changes. Existing pixels and the
+3dfx backend are untouched.
 
 ## Repeatable F12 diagnostics (2026-11-20)
 
