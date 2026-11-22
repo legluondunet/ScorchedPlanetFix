@@ -30,6 +30,8 @@ const THREAD_SET_CONTEXT: u32 = 0x0010;
 const THREAD_SUSPEND_RESUME: u32 = 0x0002;
 const EXIT_INSN: u32 = 0x0041_6cec;
 const PEEK_RETURN_INSN: u32 = 0x0041_6a79;
+const CRT_WINMAIN_RESULT_INSN: u32 = 0x004a_7130; // push eax after original call WinMain
+const CRT_EXITPROCESS_ARGUMENT_INSN: u32 = 0x004a_c416; // push esi just before imported ExitProcess
 const QUIT_FLAG_ADDR: u32 = 0x0069_1b28;
 
 // 32-bit Windows CONTEXT, with its documented 112-byte FLOATING_SAVE_AREA.
@@ -110,14 +112,21 @@ fn context(thread:Handle)->Option<X86Context>{
     c.flags=CONTEXT_FLAGS;
     if unsafe{GetThreadContext(thread,&mut c)}!=0{Some(c)}else{None}
 }
-fn configure_thread(tid:u32,with_peeks:bool,enable:bool)->bool{
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum TraceStage { WinMain, CrtExit, ProcessExit }
+fn configure_thread(tid:u32,with_peeks:bool,stage:TraceStage)->bool{
     let handle=unsafe{OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_SUSPEND_RESUME,0,tid)};
     if handle.is_null(){return false;}
     let success=if let Some(mut c)=context(handle){
-        c.dr0=if enable{EXIT_INSN}else{0};
-        c.dr1=if enable&&with_peeks{PEEK_RETURN_INSN}else{0};
+        let (bp0,bp1)=match stage {
+            TraceStage::WinMain=>(EXIT_INSN,if with_peeks{PEEK_RETURN_INSN}else{0}),
+            TraceStage::CrtExit=>(CRT_WINMAIN_RESULT_INSN,CRT_EXITPROCESS_ARGUMENT_INSN),
+            TraceStage::ProcessExit=>(0,0)
+        };
+        c.dr0=bp0;
+        c.dr1=bp1;
         c.dr6=0;
-        c.dr7=if !enable{0}else if with_peeks{0x5}else{0x1};
+        c.dr7=if bp1!=0 {0x5} else if bp0!=0 {0x1} else {0};
         unsafe{SetThreadContext(handle,&c)!=0}
     }else{false};
     unsafe{CloseHandle(handle);}
@@ -130,6 +139,8 @@ fn signatures(process:Handle)->bool{
        (0x0041_6a79u32,&[0x85,0xc0,0x74,0x1d][..]),
        (0x0041_6cb6u32,&[0xa1,0x28,0x1b,0x69,0x00][..]),
        (0x0041_6cecu32,&[0x8b,0x44,0x24,0x24][..]),
+       (CRT_WINMAIN_RESULT_INSN,&[0x50,0xe8,0xfa,0x51,0x00,0x00][..]),
+       (CRT_EXITPROCESS_ARGUMENT_INSN,&[0x56,0xff,0x15,0x80,0x53,0x6a,0x00][..]),
     ]{
         let mut b=vec![0u8;want.len()];
         if !read_bytes(process,addr,&mut b)||b!=want{return false;}
@@ -240,25 +251,37 @@ fn main(){
     let mut threads=BTreeMap::<u32,bool>::new();
     let mut last=VecDeque::<Seen>::new();
     let mut captured=false;
+    let mut crt_result_seen=false;
+    let mut crt_exit_seen=false;
+    let mut stage=TraceStage::WinMain;
     let mut ended=false;
+    let mut timeout_reported=false;
     loop {
         let mut ev:DebugEvent=unsafe{zeroed()};
         if unsafe{WaitForDebugEvent(&mut ev,30000)}==0{
-            eprintln!("WaitForDebugEvent failed/timeout (error {})",unsafe{GetLastError()});
-            // Avoid abandoning active hardware breakpoints on an unknown state.
-            continue;
+            let err=unsafe{GetLastError()};
+            if err==121 { // ERROR_SEM_TIMEOUT: expected when the game is still running.
+                if !timeout_reported {
+                    println!("WAITING_FOR_GAME_QUIT debugger wait timeout is normal while game runs.");
+                    timeout_reported=true;
+                }
+                continue;
+            }
+            eprintln!("WaitForDebugEvent failed (Win32 error {}); detaching safely.",err);
+            break;
         }
+        timeout_reported=false;
         let mut disposition=DBG_CONTINUE;
         match ev.kind {
             CREATE_THREAD_DEBUG_EVENT|CREATE_PROCESS_DEBUG_EVENT=>{
-                let ok=configure_thread(ev.tid,with_peeks,true);
+                let ok=configure_thread(ev.tid,with_peeks,stage);
                 threads.insert(ev.tid,ok);
                 if !ok{eprintln!("WARN: unable to set hardware breakpoints for thread {}.",ev.tid);}
             }
             EXIT_THREAD_DEBUG_EVENT=>{threads.remove(&ev.tid);}
             EXIT_PROCESS_DEBUG_EVENT=>{
                 let code=u32::from_le_bytes(ev.payload[0..4].try_into().unwrap());
-                println!("PROCESS_EXIT raw_code={} (0x{:08x}) captured_winmain={}",code,code,captured);
+                println!("PROCESS_EXIT raw_code={} (0x{:08x}) captured_winmain={} crt_result_seen={} crt_exit_seen={}",code,code,captured,crt_result_seen,crt_exit_seen);
                 ended=true;
             }
             EXCEPTION_DEBUG_EVENT=>{
@@ -268,7 +291,7 @@ fn main(){
                     let c=if h.is_null(){None}else{context(h)};
                     if !h.is_null(){unsafe{CloseHandle(h);}}
                     match c {
-                      Some(c) if c.eip==PEEK_RETURN_INSN && with_peeks=>{
+                      Some(c) if stage==TraceStage::WinMain && c.eip==PEEK_RETURN_INSN && with_peeks=>{
                         if c.eax!=0 {
                             if let Some(m)=read_msg(proc_handle,c.esp){
                                 if last.len()==12{last.pop_front();}
@@ -276,7 +299,7 @@ fn main(){
                             }
                         }
                       }
-                      Some(c) if c.eip==EXIT_INSN=>{
+                      Some(c) if stage==TraceStage::WinMain && c.eip==EXIT_INSN=>{
                         captured=true;
                         println!("WINMAIN_RETURN pid={} tid={} at 0x{:08x} current quit_flag={:?}",
                             pid,ev.tid,c.eip,read_u32(proc_handle,QUIT_FLAG_ADDR));
@@ -292,14 +315,29 @@ fn main(){
                                 }
                             }
                         }else{eprintln!("FAILED: cannot read WinMain MSG local stack.");}
-                        // Remove CPU breakpoints in *all* known game threads
-                        // while this debug event has stopped the process.
-                        for (&tid,_) in &threads{
-                            if !configure_thread(tid,with_peeks,false){
-                                eprintln!("WARN: failed to clear DR0/DR1 on thread {}",tid);
+                        // Follow the real CRT/Win32 exit path, rather than
+                        // predicting the process code and detaching early.
+                        stage=TraceStage::CrtExit;
+                        for (&tid,_) in &threads {
+                            if !configure_thread(tid,with_peeks,stage) {
+                                eprintln!("WARN: could not arm CRT breakpoints for thread {}",tid);
                             }
                         }
-                    }
+                      }
+                      Some(c) if stage==TraceStage::CrtExit && c.eip==CRT_WINMAIN_RESULT_INSN=>{
+                        crt_result_seen=true;
+                        println!("CRT_WINMAIN_RESULT tid={} eax={} (0x{:08x}); original CRT about to push WinMain return",ev.tid,c.eax,c.eax);
+                      }
+                      Some(c) if stage==TraceStage::CrtExit && c.eip==CRT_EXITPROCESS_ARGUMENT_INSN=>{
+                        crt_exit_seen=true;
+                        println!("CRT_EXITPROCESS_ARGUMENT tid={} esi={} (0x{:08x}) before push esi / imported ExitProcess",ev.tid,c.esi,c.esi);
+                        stage=TraceStage::ProcessExit;
+                        for (&tid,_) in &threads {
+                            if !configure_thread(tid,with_peeks,stage) {
+                                eprintln!("WARN: could not clear exit breakpoints for thread {}",tid);
+                            }
+                        }
+                      }
                       _=>{disposition=DBG_EXCEPTION_NOT_HANDLED;}
                     }
                 }else if exception==EXCEPTION_BREAKPOINT{
@@ -312,9 +350,15 @@ fn main(){
             _=>{}
         }
         unsafe{ContinueDebugEvent(ev.pid,ev.tid,disposition);}
-        if ended||captured{break;}
+        if ended{break;}
     }
     if !ended {
+        // On any unexpected debugger failure, clear DR0/DR1 before detach.
+        for (&tid,_) in &threads {
+            if !configure_thread(tid,with_peeks,TraceStage::ProcessExit) {
+                eprintln!("WARN: cannot clear hardware breakpoints for thread {}",tid);
+            }
+        }
         if unsafe{DebugActiveProcessStop(pid)}==0{
             eprintln!("WARN: debugger detach failed; game process may have already ended.");
         }else{println!("DETACHED (game continues with its original code and exit path).");}
