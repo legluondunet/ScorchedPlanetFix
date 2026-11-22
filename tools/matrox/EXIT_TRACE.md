@@ -53,19 +53,30 @@ the original WinMain return is captured.
    make OpenProcess fail with ERROR_INVALID_PARAMETER (87). The tracer
    now uses its unique verified OEM Windows PID automatically if possible.
 3. Return to the game and select the normal Quit menu. Save console output
-   and installer log. The trace prints WINMAIN_RETURN, the exact message ID
-   and name, wParam, lParam, game quit flag, predicted WinMain exit code,
-   and up to twelve successfully retrieved recent messages.
+   and installer log. The trace now follows three confirmed original OEM
+   stages without touching game code: WINMAIN_RETURN reads the actual last
+   MSG.wParam, CRT_WINMAIN_RESULT reads EAX after WinMain has returned,
+   and CRT_EXITPROCESS_ARGUMENT reads ESI immediately before the CRT passes
+   it to the imported ExitProcess. Finally, the debugger observes the real
+   PROCESS_EXIT event and its actual raw status. Only then does the tracer
+   exit itself. These values distinguish "WinMain returned 1" from "the CRT
+   received 0 but process exited differently". Optional --messages shows
+   the last twelve successfully retrieved PeekMessageA messages.
 
 The optional --messages mode traps every PeekMessageA return, which can
-reduce game performance. The default (without --messages) observes only
-WinMain return, with much less overhead.
+reduce game performance. The default (without --messages) observes the WinMain return, the two
+original CRT handoff stages and the final exit event, with much less overhead.
 
 **Limits:** External Windows debugger / CPU hardware breakpoints might not
 work under all Wine versions. This has been compiled and unit-tested in CI,
 not yet executed attached to a real Matrox game. Do not run two debuggers
 at once. Do not kill the tracer while the game is running: hardware
-breakpoints could remain armed in game threads. Prefer a short run and Quit.
+breakpoints could remain armed in game threads. The old tracer detached
+immediately after WinMain and only predicted the process code; the new
+trace stays attached until EXIT_PROCESS_DEBUG_EVENT and prints the observed
+code. ERROR_SEM_TIMEOUT (121) from WaitForDebugEvent after 30 seconds is
+normal while the game remains open, not a game error. Prefer a short run
+and Quit.
 This does not investigate the separate Smacker crash 0xC0000005 at
 0x0046D76D tracked in issue #41.
 
