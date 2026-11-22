@@ -18,8 +18,9 @@ SHA-256: 1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894
 - 0x00416CB6 reads the game's own quit flag at 0x00691B28,
   allowing exit without WM_QUIT.
 - 0x00416CEC reads [esp+0x24], exactly MSG.wParam (MSG at +0x1C, wParam at +8).
-- 0x00416CFA returns this EAX from WinMain; original CRT startup
-  passes WinMain's returned value into process exit processing.
+- 0x00416CFA returns this EAX from WinMain; the original CRT
+  calls WinMain at 0x004A712B, then passes EAX at 0x004A7130
+  into its process exit routine.
 
 This demonstrates the return **mechanism**, not the actual message that had
 wParam=1 during a user's observed session. Possibilities include key flags
