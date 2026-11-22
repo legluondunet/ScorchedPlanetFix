@@ -113,7 +113,7 @@ fn context(thread:Handle)->Option<X86Context>{
     if unsafe{GetThreadContext(thread,&mut c)}!=0{Some(c)}else{None}
 }
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum TraceStage { WinMain, CrtExit, ProcessExit }
+enum TraceStage { WinMain, CrtExit, CrtExitArgument, ProcessExit }
 fn configure_thread(tid:u32,with_peeks:bool,stage:TraceStage)->bool{
     let handle=unsafe{OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_SUSPEND_RESUME,0,tid)};
     if handle.is_null(){return false;}
@@ -121,6 +121,7 @@ fn configure_thread(tid:u32,with_peeks:bool,stage:TraceStage)->bool{
         let (bp0,bp1)=match stage {
             TraceStage::WinMain=>(EXIT_INSN,if with_peeks{PEEK_RETURN_INSN}else{0}),
             TraceStage::CrtExit=>(CRT_WINMAIN_RESULT_INSN,CRT_EXITPROCESS_ARGUMENT_INSN),
+            TraceStage::CrtExitArgument=>(CRT_EXITPROCESS_ARGUMENT_INSN,0),
             TraceStage::ProcessExit=>(0,0)
         };
         c.dr0=bp0;
@@ -327,8 +328,16 @@ fn main(){
                       Some(c) if stage==TraceStage::CrtExit && c.eip==CRT_WINMAIN_RESULT_INSN=>{
                         crt_result_seen=true;
                         println!("CRT_WINMAIN_RESULT tid={} eax={} (0x{:08x}); original CRT about to push WinMain return",ev.tid,c.eax,c.eax);
+                        // The breakpoint is on the *next* instruction to execute.
+                        // Remove it before continuing to avoid immediate retrigger.
+                        stage=TraceStage::CrtExitArgument;
+                        for (&tid,_) in &threads {
+                            if !configure_thread(tid,with_peeks,stage) {
+                                eprintln!("WARN: could not arm ExitProcess-argument breakpoint for thread {}",tid);
+                            }
+                        }
                       }
-                      Some(c) if stage==TraceStage::CrtExit && c.eip==CRT_EXITPROCESS_ARGUMENT_INSN=>{
+                      Some(c) if (stage==TraceStage::CrtExit || stage==TraceStage::CrtExitArgument) && c.eip==CRT_EXITPROCESS_ARGUMENT_INSN=>{
                         crt_exit_seen=true;
                         println!("CRT_EXITPROCESS_ARGUMENT tid={} esi={} (0x{:08x}) before push esi / imported ExitProcess",ev.tid,c.esi,c.esi);
                         stage=TraceStage::ProcessExit;
