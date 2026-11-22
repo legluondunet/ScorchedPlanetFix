@@ -24,6 +24,7 @@ const DBG_CONTINUE: u32 = 0x0001_0002;
 const DBG_EXCEPTION_NOT_HANDLED: u32 = 0x8001_0001;
 const PROCESS_VM_READ: u32 = 0x10;
 const PROCESS_QUERY_INFORMATION: u32 = 0x400;
+const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
 const THREAD_GET_CONTEXT: u32 = 0x0008;
 const THREAD_SET_CONTEXT: u32 = 0x0010;
 const THREAD_SUSPEND_RESUME: u32 = 0x0002;
@@ -46,6 +47,13 @@ struct X86Context {
 // 32-bit DEBUG_EVENT. Header is 12 bytes; union begins immediately after.
 #[repr(C)]
 struct DebugEvent { kind:u32, pid:u32, tid:u32, payload:[u8;160] }
+// PROCESSENTRY32W, fixed 556-byte x86 layout. Windows process IDs, not Unix PIDs.
+#[repr(C)]
+struct ProcessEntry32W {
+    size:u32, usage:u32, pid:u32, default_heap_id:u32,
+    module_id:u32, threads:u32, parent_pid:u32, base_priority:i32,
+    flags:u32, image_name:[u16;260],
+}
 #[derive(Clone,Copy)]
 struct WinMsg { hwnd:u32, message:u32, wparam:u32, lparam:u32, time:u32, x:i32, y:i32 }
 #[derive(Clone,Copy)]
@@ -53,6 +61,9 @@ struct Seen { msg:WinMsg, tid:u32, peek_eax:u32 }
 
 #[link(name="kernel32")]
 extern "system" {
+    fn CreateToolhelp32Snapshot(flags:u32, pid:u32)->Handle;
+    fn Process32FirstW(snapshot:Handle, entry:*mut ProcessEntry32W)->i32;
+    fn Process32NextW(snapshot:Handle, entry:*mut ProcessEntry32W)->i32;
     fn DebugActiveProcess(pid:u32)->i32;
     fn DebugActiveProcessStop(pid:u32)->i32;
     fn DebugSetProcessKillOnExit(kill:i32)->i32;
@@ -130,9 +141,36 @@ fn dump(msg:WinMsg){
        msg.message,name(msg.message),msg.hwnd,msg.wparam,msg.wparam,
        msg.lparam,msg.time,msg.x,msg.y);
 }
+fn find_oem_games()->Vec<u32>{
+    let snapshot=unsafe{CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0)};
+    if snapshot.is_null() || snapshot as isize == -1 {
+        eprintln!("Cannot enumerate Windows processes (Win32 error {})", unsafe{GetLastError()});
+        return Vec::new();
+    }
+    let mut entry:ProcessEntry32W=unsafe{zeroed()};
+    entry.size=size_of::<ProcessEntry32W>() as u32;
+    let mut ids=Vec::new();
+    let mut ok=unsafe{Process32FirstW(snapshot,&mut entry)};
+    while ok!=0 {
+        let end=entry.image_name.iter().position(|x|*x==0).unwrap_or(entry.image_name.len());
+        let name=String::from_utf16_lossy(&entry.image_name[..end]);
+        if name.eq_ignore_ascii_case("splanetw.exe") {
+            // Do not attach to another similarly-named app; game code signature must match.
+            let handle=unsafe{OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,0,entry.pid)};
+            if !handle.is_null(){
+                if signatures(handle){ids.push(entry.pid);}
+                unsafe{CloseHandle(handle);}
+            }
+        }
+        ok=unsafe{Process32NextW(snapshot,&mut entry)};
+    }
+    unsafe{CloseHandle(snapshot);}
+    ids
+}
 fn main(){
     if size_of::<X86Context>()!=716||offset_of!(X86Context,eip)!=184||
-       offset_of!(X86Context,esp)!=196||size_of::<DebugEvent>()<96 {
+       offset_of!(X86Context,esp)!=196||size_of::<DebugEvent>()<96 ||
+       size_of::<ProcessEntry32W>()!=556 {
        eprintln!("Unsupported x86 Windows debug structures; refusing to attach.");
        process::exit(2);
     }
@@ -144,19 +182,42 @@ fn main(){
         println!("MATROX_EXIT_TRACE_LAYOUT_OK context=716 EIP=184 ESP=196");
         return;
     }
-    if !(args.len()==1||args.len()==2) {
-        eprintln!("Usage: MatroxExitTrace.exe <game_pid> [--messages]");
-        eprintln!("Start the installed Matrox game normally; while it is in the menu,");
-        eprintln!("run this tracer in a second terminal, then quit via the game menu.");
-        eprintln!("No original executable or game memory is patched.");
+    if args.len()>2 || (args.len()==2 && args[1]!="--messages") {
+        eprintln!("Usage: MatroxExitTrace.exe [Windows_game_PID] [--messages]");
+        eprintln!("Start OEM Matrox game first; no PID needed if one matching game is running.");
+        eprintln!("With Wine use a Windows PID, NOT a Linux/Unix PID.");
         process::exit(2);
     }
-    let with_peeks=args.len()==2&&args[1]=="--messages";
-    if args.len()==2&&!with_peeks{eprintln!("Unknown option");process::exit(2);}
-    let pid:u32=match args[0].parse(){Ok(p) if p!=0=>p,_=>{eprintln!("Invalid game PID");process::exit(2)}};
+    let with_peeks=args.iter().any(|a|a=="--messages");
+    let supplied=if args.first().map(|a|a.as_str())!=Some("--messages") && !args.is_empty(){
+        match args[0].parse::<u32>(){Ok(p) if p!=0=>Some(p),_=>{
+            eprintln!("Invalid Windows PID: {}",args[0]);process::exit(2)
+        }}
+    }else{None};
+    let games=find_oem_games();
+    let pid=match supplied {
+        Some(id) if games.contains(&id)=>id,
+        Some(id) if games.len()==1=>{
+            eprintln!("PID {} is not an active OEM Matrox Windows PID. Using uniquely detected Windows PID {}.",id,games[0]);
+            games[0]
+        },
+        Some(id)=>{
+            eprintln!("PID {} is not an active OEM Matrox Windows PID.",id);
+            eprintln!("Matching OEM Matrox Windows PIDs: {:?}. Under Wine, host Linux PIDs differ.",games);
+            process::exit(1)
+        },
+        None if games.len()==1=>{
+            println!("AUTO_DETECTED Matrox OEM Windows PID={}",games[0]);games[0]
+        },
+        None=>{
+            eprintln!("Expected exactly one running original Matrox OEM game; matches: {:?}.",games);
+            eprintln!("Start the game first in the same Windows session/Wine prefix.");
+            process::exit(1)
+        }
+    };
     let proc_handle=unsafe{OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,0,pid)};
     if proc_handle.is_null() {
-        eprintln!("Cannot open PID {} (Win32 error {})",pid,unsafe{GetLastError()});
+        eprintln!("Cannot open Windows PID {} (Win32 error {}). Is the OEM game still running in the same Windows session/Wine prefix?",pid,unsafe{GetLastError()});
         process::exit(1);
     }
     if !signatures(proc_handle){
