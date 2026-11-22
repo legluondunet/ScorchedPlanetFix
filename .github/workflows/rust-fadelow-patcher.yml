@@ -41,6 +41,24 @@ jobs:
         with:
           targets: i686-pc-windows-msvc, x86_64-pc-windows-msvc
 
+      - name: Build opt-in original Matrox WinMain exit tracer (Windows x86)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path 'target/matrox-exit-trace' -Force | Out-Null
+          rustc --edition=2021 --target i686-pc-windows-msvc -C opt-level=2 tools/matrox/trace_oem_exit.rs -o target/matrox-exit-trace/MatroxExitTrace.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile standalone Matrox exit tracer' }
+          & 'target/matrox-exit-trace/MatroxExitTrace.exe' --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox exit tracer x86 structure/self-test failed' }
+
+      - name: Upload optional diagnostic Matrox exit tracer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MatroxExitTrace-Windows-x86
+          path: target/matrox-exit-trace/MatroxExitTrace.exe
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2
 
