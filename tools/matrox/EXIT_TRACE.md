@@ -39,13 +39,20 @@ the original WinMain return is captured.
 
 1. Start the installed Matrox edition with the normal ScorchedPlanetFix.exe,
    wait for the game menu.
-2. Find the PID in ScorchedPlanetFix_installer.log beside the launcher,
-   e.g. "CLI: Matrox game started, PID 320." (illustrative only).
-3. Start a second Windows or Wine terminal and execute, with the real PID:
+2. In a second Windows or Wine terminal running in the **same Wine prefix**
+   as the game, simply execute:
 
-       MatroxExitTrace.exe 320 --messages
+       MatroxExitTrace.exe
 
-4. Return to the game and select the normal Quit menu. Save console output
+   The tracer enumerates **Windows** processes, finds exactly one original
+   SPLANETW.EXE, authenticates the known WinMain bytes and prints
+   AUTO_DETECTED Matrox OEM Windows PID=... . For a more detailed history,
+   optionally run MatroxExitTrace.exe --messages (slower).
+   Supplying a PID is still supported, but Unix/Linux host PIDs under Wine
+   are **not Windows process IDs**. Passing a Unix PID such as 35798 can
+   make OpenProcess fail with ERROR_INVALID_PARAMETER (87). The tracer
+   now uses its unique verified OEM Windows PID automatically if possible.
+3. Return to the game and select the normal Quit menu. Save console output
    and installer log. The trace prints WINMAIN_RETURN, the exact message ID
    and name, wParam, lParam, game quit flag, predicted WinMain exit code,
    and up to twelve successfully retrieved recent messages.
