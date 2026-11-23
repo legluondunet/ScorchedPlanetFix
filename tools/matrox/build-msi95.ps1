@@ -1,5 +1,8 @@
 # Clean-room Matrox MSI95 v0.36 build for Windows x86.
 # No proprietary Matrox driver source or binaries are used.
+# BenchmarkUvReference makes a *temporary* source copy to compile the old
+# u-floor(u) behavior, never included in game/installer artifacts.
+param([switch]$BenchmarkUvReference)
 $ErrorActionPreference = "Stop"
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = (Resolve-Path (Join-Path $sourceRoot "../..")).Path
@@ -11,6 +14,19 @@ $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
 $expectedSourceHash = "f43f765db9cc7914902abb7484204f9399acb3f4dc77348c65c13b694bcec529"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
+if ($BenchmarkUvReference) {
+    # One auditable replacement after verifying the pristine production source.
+    # This creates a reference renderer with identical C flags/link settings.
+    $raw = [IO.File]::ReadAllText($source)
+    $needle = '    if(u>=0.0f && u<1.0f)return u;'
+    if ([regex]::Matches($raw,[regex]::Escape($needle)).Count -ne 1) {
+        throw 'MSI95 UV reference benchmark source anchor mismatch'
+    }
+    $raw = $raw.Replace($needle,
+        '    /* Benchmark reference: execute original floor wrap unconditionally. */')
+    $source = Join-Path $build 'msi95_uv_reference.c'
+    [IO.File]::WriteAllText($source,$raw,[System.Text.UTF8Encoding]::new($false))
+}
 
 foreach ($lib in @("kernel32", "user32", "gdi32")) {
     $def = (Resolve-Path (Join-Path $sourceRoot "$lib.def")).Path
@@ -19,12 +35,12 @@ foreach ($lib in @("kernel32", "user32", "gdi32")) {
     if ($LASTEXITCODE -ne 0) { throw "lld-link import library failed: $lib" }
 }
 
-$obj = Join-Path $build "msi95_probe.obj"
+$obj = Join-Path $build $(if ($BenchmarkUvReference) { "msi95_uv_reference.obj" } else { "msi95_probe.obj" })
 & clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -c $source -o $obj
 if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 
 $def = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.def")).Path
-$dll = Join-Path $build "msi95.dll"
+$dll = Join-Path $build $(if ($BenchmarkUvReference) { "msi95_uv_reference.dll" } else { "msi95.dll" })
 $arguments = @(
     "/DLL", "/MACHINE:X86", "/NODEFAULTLIB", "/ENTRY:DllMain@12",
     "/OUT:$dll", "/DEF:$def", $obj,
@@ -58,3 +74,6 @@ $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Host "MATROX_SOURCE_SHA256=$sourceHash"
 Write-Host "MATROX_MSI95_DLL_SHA256=$hash"
 Write-Host "MATROX_MSI95_DLL=$dll"
+if ($BenchmarkUvReference) {
+    Write-Host "MATROX_UV_BENCHMARK_REFERENCE=1; benchmark-only DLL, NEVER package"
+}
