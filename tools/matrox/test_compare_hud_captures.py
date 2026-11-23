@@ -58,11 +58,11 @@ class HudComparisonTests(unittest.TestCase):
             self.assertEqual(row['hud_mask_symmetric_difference'], 0)
             self.assertEqual(row['common_hud_pixels'], 6)
             self.assertEqual(row['rgb565_color_diffs_on_common_hud_pixels'], 1)
-            self.assertEqual(result['per_capture']['frame05'][
+            self.assertEqual(result['per_capture'][str(first)][
                 'atlas_last_zero_skip_over_hud_write'], 1)
-            self.assertEqual(result['per_capture']['frame05'][
+            self.assertEqual(result['per_capture'][str(first)][
                 'atlas_last_zero_skip_without_hud_write'], 1)
-            self.assertEqual(result['per_capture']['frame05'][
+            self.assertEqual(result['per_capture'][str(first)][
                 'hud_black_final_pixels'], 1)
             self.assertEqual(analyze([first, second], '0,0,4,2')[
                 'comparisons'][0]['common_hud_pixels'], 4)
@@ -86,7 +86,7 @@ class HudComparisonTests(unittest.TestCase):
             self.assertEqual(row['baseline_only_hud_pixels'], 1)
             self.assertEqual(row['compared_only_hud_pixels'], 1)
             self.assertEqual(row['common_hud_pixels'], 1)
-            self.assertEqual(report['per_capture']['base'][
+            self.assertEqual(report['per_capture'][str(a)][
                 'missing_texel_last_ownership'], 1)
 
     def test_dimension_ambiguity_and_invalid_rois(self):
@@ -104,6 +104,22 @@ class HudComparisonTests(unittest.TestCase):
                 analyze([a,c])
             with self.assertRaisesRegex(ValueError,'contained'):
                 analyze([a,b],'1,0,10,4')
+
+    def test_same_serial_from_two_sessions_has_unique_report_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            a_dir, b_dir = root / 'wine', root / 'native'
+            a_dir.mkdir()
+            b_dir.mkdir()
+            a = self.create_capture(a_dir,'matrox_capture_0001',
+                                    [1]*24,[0xffff]*24,[0]*24)
+            b = self.create_capture(b_dir,'matrox_capture_0001',
+                                    [1]*24,[0xfffe]*24,[0]*24)
+            report = analyze([a,b])
+            self.assertEqual(len(report['per_capture']), 2)
+            self.assertIn(str(a), report['per_capture'])
+            self.assertIn(str(b), report['per_capture'])
+            self.assertEqual(report['comparisons'][0]['compared_capture'],str(b))
 
     def test_one_quartet_cannot_mix_different_layer_sizes(self):
         with tempfile.TemporaryDirectory() as folder:
