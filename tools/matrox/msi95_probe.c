@@ -2302,6 +2302,15 @@ static BOOL cache_accessible(unsigned off,unsigned size){
     return FALSE;
 }
 static int floor_clipped(float x){int i=(int)x;return ((float)i>x)?i-1:i;}
+/* Most 3D interpolated UV coordinates are already in [0,1).
+ * The original wrap expression is exactly u - floor(u); in that interval
+ * floor(u) is zero, so avoid float->int->float conversion per fragment.
+ * All negative, tiled, exact-1.0 and out-of-range values still run the
+ * original floor_clipped() code. Never clamp a wrapped coordinate. */
+static float wrap_unit_texture_uv(float u){
+    if(u>=0.0f && u<1.0f)return u;
+    return u-(float)floor_clipped(u);
+}
 static unsigned clamp_u8(float x){
     if(!(x>=0.0f))return 0;
     if(x<=1.0f)x*=255.0f;
@@ -2645,9 +2654,9 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     }
                 }
                 if(g_state.msiTexture.Clamp_u){if(u<0)u=0;if(u>1)u=1;}
-                else {u=u-(float)floor_clipped(u);}
+                else {u=wrap_unit_texture_uv(u);}
                 if(g_state.msiTexture.Clamp_v){if(v<0)v=0;if(v>1)v=1;}
-                else {v=v-(float)floor_clipped(v);}
+                else {v=wrap_unit_texture_uv(v);}
                 unsigned tx=(unsigned)(u*(float)texW),ty=(unsigned)(v*(float)texH);
                 if(tx>=texW)tx=texW-1;if(ty>=texH)ty=texH-1;
                 unsigned pos=ty*texW+tx;
