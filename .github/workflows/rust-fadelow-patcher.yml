@@ -45,6 +45,15 @@ jobs:
           python -m py_compile tools/matrox/analyze_f12_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 cross-layer triage syntax check failed' }
 
+      - name: Test original-format Matrox TITLEM atlas inspector (synthetic fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_inspect_titlem_atlases.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox TITLEM synthetic atlas tests failed' }
+          python -m py_compile tools/matrox/inspect_titlem_atlases.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox TITLEM atlas script syntax failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
