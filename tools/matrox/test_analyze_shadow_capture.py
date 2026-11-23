@@ -74,6 +74,22 @@ class ShadowF12Tests(unittest.TestCase):
             self.assertEqual(result['shadow_final_write_counts'][
                 'other_final_msi_write'],24)
 
+    def test_final_rgb565_black_is_reported_without_guessing_missing_art(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary)
+            shadow=[0]*24
+            shadow[11]=1
+            coverage=[1]*24
+            coverage[11]=4  # Final untextured world pixel is RGB565 black.
+            prefix=fixture(folder,'blackshadow',shadow=shadow,coverage=coverage)
+            frame=[0xffff]*24
+            frame[11]=0
+            create_bmp(folder/'blackshadow_frame.bmp',frame,w=6,h=4)
+            report=analyze(prefix)
+            self.assertEqual(report['shadow_final_rgb565_black'],1)
+            self.assertEqual(report['shadow_final_write_counts'][
+                'blended_with_textured_world_underlay'],1)
+
     def test_reject_falsely_claimed_shadow_on_zplane(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder=Path(temporary)
