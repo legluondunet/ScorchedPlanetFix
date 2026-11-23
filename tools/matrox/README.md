@@ -1028,3 +1028,47 @@ logged over 350k triangles in 900 frames without bilinear), but actual gains
 must be confirmed on Windows with matching scenes. This is not a cure for
 missing Matrox image regions, transparency, slow per-pixel CPU rasterization or
 intermittent original Smacker faults. Keep this PR draft until runtime tested.
+
+## F12 spatial-region triage (experimental offline diagnostic, PR #64)
+
+The existing `analyze_f12_capture.py` now supports **`--regions`** to
+identify connected groups of *candidate* problem pixels in a same-serial F12
+quartet. It does **not** modify the game, MSI95.dll, textures, keying,
+framebuffer, screenshots, or reference images. This extension adds an optional
+report alongside the unchanged aggregate counts.
+
+```text
+python tools/matrox/analyze_f12_capture.py "captures/matrox_capture_0003" --regions --json
+python tools/matrox/analyze_f12_capture.py "captures/matrox_capture_0003" --roi 184,71,455,352 --regions --min-region-pixels 8 --max-regions 8 --json
+```
+
+Each class reports the **number of candidate pixels inside the ROI** and the
+largest four-connected clusters with area and end-exclusive native 640×400
+bounding boxes. Four-connected intentionally keeps diagonal-only touches
+separate. Output is bounded to at most 32 regions per category. Categories
+are intersections of raw framebuffer color, last *MSI write* and last
+*attempted* world/atlas source, rather than just a black-pixel threshold:
+
+- `visible_world_index1_black_preview`: an actual index1 opaque **black
+  world write** (known portrait silhouette, not a missing image)
+- `world_index241_keyed_only`, `world_index1_keyed_only`,
+  `world_other_rgb_keyed_only`: last world sample of a source-index
+  category was discarded by a black RGB565 key, and no later MSI write
+- `zplane_unmarked_zero_black_unowned`: last attempt sampled unmapped zero
+  in a large Z-plane atlas, screen pixel is black, no later MSI write
+- `black_without_final_msi_write`: black pixel with no final MSI write,
+  which may simply be intentional background
+
+**Crucial:** none of these classifications proves a missing graphic. The
+game may write directly to the framebuffer, a last attempted sample may come
+from a different draw from the last visible pixel, and an intended
+transparent region might legitimately reveal black. `--regions` is a
+*triage aid* to find spatial evidence against a matching original Mystique
+screenshot; no automated art restoration or source-index key change is
+authorized by these clusters alone.
+
+Run on the **already captured** owner F12 quartets first. Existing original
+TITLEM.RWB `icon01` fingerprint and same-scene index241 A/B analysis
+remain the strongest confirmed title-asset attribution; the larger
+1024×1024 Z-plane atlas has previously been ruled out for the portrait
+menu scene. No new user screenshot is needed just to exercise the tool.
