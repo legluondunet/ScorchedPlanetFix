@@ -103,6 +103,16 @@ jobs:
           python tools/gameframe/audit_exports.py $dll 'third_party/game-frame/wrappers/glide/glide2x.def'
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame Glide ABI audit failed' }
 
+      - name: Verify OEM null-scene input-queue hold (synthetic C cases)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'MatroxSceneTransitionGuardSmoke.exe'
+          clang -O2 -Wall -Wextra -Werror tools/matrox/test_transition_hold.c -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile synthetic Matrox scene-transition guard tests' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox transition guard predicate regression failed' }
+
       - name: Compile clean-room MSI95 x86 from pinned source
         shell: pwsh
         run: |
