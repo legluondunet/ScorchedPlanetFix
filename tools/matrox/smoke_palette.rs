@@ -263,10 +263,11 @@ fn main() {
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
         }
-        // Additional smoke: the ACTUAL DLL should interpolate only opaque
-        // triangles with varying invW. The same 128x128 indices/palette
-        // must be pixel-identical on title-like constant-invW geometry and
-        // on all transparent icon/sprite textures. No original game data.
+        // Real x86 MSI95 smoke: interpolate only four fully opaque texels,
+        // even if the GAME sets Texture.Transparency=1 globally. Keep
+        // source-key neighbors fully crisp (never blend RGB565 key-black
+        // into terrain colors). Constant-invW menus remain nearest.
+        // All fixtures synthetic; no original game texture bytes.
         for filter_on in [false, true] {
             std::env::set_var("MATROX_MSI_WORLD_BILINEAR", if filter_on {"1"} else {"0"});
             std::env::set_var("MATROX_MSI_ICON01_OPAQUE", "0");
@@ -278,6 +279,7 @@ fn main() {
             for planes in [8usize,16usize] {
                 for transparency in [false,true] {
                     for varying in [false,true] {
+                    for keyed_neighbor in [false,true] {
                         assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
                         framebuffer.fill(GREEN);
                         let mut texture=vec![0u8;128*128*(planes/8)];
@@ -295,6 +297,16 @@ fn main() {
                                     texture[2*pos]=(color&255) as u8;
                                     texture[2*pos+1]=(color>>8) as u8;
                                 }
+                            }
+                        }
+                        if keyed_neighbor {
+                            // At U=0.5 the left bilinear tap x=63
+                            // becomes key-black; the selected NEAREST
+                            // center texel x=64 is still opaque blue.
+                            for y in [63usize,64usize] {
+                                let pos=y*128+63;
+                                if planes==8{texture[pos]=1;}
+                                else{texture[2*pos]=0;texture[2*pos+1]=0;}
                             }
                         }
                         let params=Params{
@@ -323,18 +335,25 @@ fn main() {
                         if varying {vertices[1].inv_w=0.5;}
                         assert_ne!(render(&vertices[0],&vertices[1],&vertices[2],100),0);
                         let actual=framebuffer[50*pitch/2+50];
-                        let expected=if filter_on&&varying&&!transparency{
-                            0x8010 // mid-point 5:6:5 red/blue bilinear
+                        let expected=if filter_on && varying {
+                            if keyed_neighbor && transparency {
+                                BLUE // color-keyed neighbor: original nearest
+                            } else if keyed_neighbor {
+                                0x0010 // opaque neighbor RGB565 black + blue
+                            } else {
+                                0x8010 // all four opaque: red + blue midpoint
+                            }
                         }else{BLUE};
                         assert_eq!(actual,expected,
-                            "WorldBilinear={} bpp={} transparency={} varying_invw={} expected {:#06x} got {:#06x}",
-                            filter_on,planes,transparency,varying,expected,actual);
+                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} expected {:#06x} got {:#06x}",
+                            filter_on,planes,transparency,varying,keyed_neighbor,expected,actual);
+                    }
                     }
                 }
             }
             assert_ne!(exit(),0);
         }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + sixteen real 3D bilinear raster assertions");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + thirty-two real 3D color-key-safe bilinear raster assertions");
     }
 }
