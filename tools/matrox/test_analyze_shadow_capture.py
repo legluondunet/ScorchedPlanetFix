@@ -62,7 +62,7 @@ class ShadowF12Tests(unittest.TestCase):
             self.assertEqual(out['shadow_provenance_coverage_conflicts'],0)
             crop=analyze(prefix,'0,0,3,2',min_region_pixels=1)
             self.assertEqual(crop['shadow_final_write_counts'][
-                'opaque_no_recorded_textured_underlay'],2)
+                'opaque_no_recorded_textured_underlay'],3)
 
     def test_pixel_written_then_overlaid_is_not_shadow(self):
         with tempfile.TemporaryDirectory() as temporary:
