@@ -148,6 +148,7 @@ struct Case {
     index: u8,
     transparency: bool,
     expected: u16,
+    synthetic_icon01: bool,
 }
 const GREEN: u16 = 0x07e0;
 const RED: u16 = 0xf800;
@@ -167,6 +168,8 @@ fn main() {
         let render: Triangle = require(module, b"msiRenderTriangle\0");
         let exit: Exit = require(module, b"msiExit\0");
 
+        for enabled in [false,true] {
+        std::env::set_var("MATROX_MSI_ICON01_OPAQUE", if enabled {"1"}else{"0"});
         let info = init(640, 400, 16, 0, 0, guest_wndproc);
         assert!(!info.is_null(), "MSI95 failed to allocate framebuffer");
         assert_eq!((*info).color.bytes_per_pixel, 2);
@@ -182,13 +185,15 @@ fn main() {
         ];
 
         let cases = [
-            Case { label: "128 indexed-1 black becomes opaque", width: 128, planes: 8, index: 1, transparency: true, expected: 0 },
-            Case { label: "128 indexed-241 black stays keyed", width: 128, planes: 8, index: 241, transparency: true, expected: GREEN },
-            Case { label: "128 indexed-0 black stays keyed", width: 128, planes: 8, index: 0, transparency: true, expected: GREEN },
-            Case { label: "128 indexed-5 red stays opaque", width: 128, planes: 8, index: 5, transparency: true, expected: RED },
-            Case { label: "64 indexed-1 black stays keyed", width: 64, planes: 8, index: 1, transparency: true, expected: GREEN },
-            Case { label: "128 indexed-1 without transparency draws black", width: 128, planes: 8, index: 1, transparency: false, expected: 0 },
-            Case { label: "128 16bit black stays keyed", width: 128, planes: 16, index: 1, transparency: true, expected: GREEN },
+            Case { label: "128 indexed-1 black becomes opaque", width: 128, planes: 8, index: 1, transparency: true, expected: 0, synthetic_icon01: false },
+            Case { label: "128 indexed-241 black stays keyed", width: 128, planes: 8, index: 241, transparency: true, expected: GREEN, synthetic_icon01: false },
+            Case { label: "128 indexed-0 black stays keyed", width: 128, planes: 8, index: 0, transparency: true, expected: GREEN, synthetic_icon01: false },
+            Case { label: "128 indexed-5 red stays opaque", width: 128, planes: 8, index: 5, transparency: true, expected: RED, synthetic_icon01: false },
+            Case { label: "64 indexed-1 black stays keyed", width: 64, planes: 8, index: 1, transparency: true, expected: GREEN, synthetic_icon01: false },
+            Case { label: "128 indexed-1 without transparency draws black", width: 128, planes: 8, index: 1, transparency: false, expected: 0, synthetic_icon01: false },
+            Case { label: "128 16bit black stays keyed", width: 128, planes: 16, index: 1, transparency: true, expected: GREEN, synthetic_icon01: false },
+            Case { label: "synthetic icon01 source fingerprint (not original game data)", width: 128, planes: 8, index: 241, transparency: true, expected: GREEN, synthetic_icon01: true },
+            Case { label: "cache-overwrite clears icon01 match", width: 128, planes: 8, index: 241, transparency: true, expected: GREEN, synthetic_icon01: false },
         ];
 
         for (i, case) in cases.iter().enumerate() {
@@ -200,6 +205,25 @@ fn main() {
             } else {
                 vec![case.index; count]
             };
+            if case.synthetic_icon01{
+                // A synthetic FNV32 *collision* with source-index counts
+                // identical to icon01, but wholly different raster bytes.
+                // No 1996 game bytes are committed. This exercises the real
+                // DLL identity gate and proves index241 is opaque only when
+                // it recognizes the intended atlas, even with cache reuse.
+                texture.fill(5);
+                texture[..6992].fill(241);
+                texture[8256]=241; // sample position at UV=(0.5,0.5)
+                texture[6995]=3;
+                texture[16380..].copy_from_slice(&[248,167,175,41]);
+                assert_eq!(texture.iter().filter(|&&b|b==241).count(),6993);
+                assert!(!texture.contains(&0) && !texture.contains(&1));
+                let mut hash:u32=2166136261;
+                for &b in &texture{
+                    hash=(hash^u32::from(b)).wrapping_mul(16777619);
+                }
+                assert_eq!(hash,0x35107cba);
+            }
             let mut lut = vec![0u8; 512];
             // Both palette entries 1 and 241 intentionally resolve to
             // RGB565 0x0000. Entry 5 is opaque red.
@@ -232,12 +256,14 @@ fn main() {
             assert_ne!(render(&vertices[0], &vertices[1], &vertices[2], 100), 0,
                 "msiRenderTriangle failed for {}", case.label);
             let pixel = framebuffer[50 * pitch / 2 + 50];
-            assert_eq!(pixel, case.expected,
-                "Case {}: {} expected RGB565 {:#06x}, got {:#06x}",
-                i, case.label, case.expected, pixel);
+            let expected=if case.synthetic_icon01 && enabled {0}else{case.expected};
+            assert_eq!(pixel, expected,
+                "Experimental icon01={} case {}: {} expected RGB565 {:#06x}, got {:#06x}",
+                enabled, i, case.label, expected, pixel);
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
+        }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS seven real rasterized palette/keying cases");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen real rasterized baseline/icon01-scoped keying cases");
     }
 }
