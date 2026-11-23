@@ -68,6 +68,9 @@ def analyze(path: Path, min_frames: int = 60) -> dict:
         raise ValueError("min_frames must be positive")
     latest: dict[str, int] = {}
     snapshots: list[dict] = []
+    # MSI95 writes PERF_WALL, then PERF_COST(render), then PERF_COST(state)
+    # for the SAME frame. Finish the snapshot only after those costs arrive.
+    pending_wall: dict[str, int] | None = None
     exit_frames = None
     session_ms = None
     with path.open("r", encoding="utf-8", errors="replace") as stream:
@@ -75,8 +78,8 @@ def analyze(path: Path, min_frames: int = 60) -> dict:
             if line.startswith("PERF_WALL elapsed_ms="):
                 sample = fields(line)
                 if "elapsed_ms" in sample and "frames" in sample:
-                    snapshots.append({**latest, "elapsed_ms": sample["elapsed_ms"],
-                                      "frames": sample["frames"]})
+                    pending_wall = {"elapsed_ms": sample["elapsed_ms"],
+                                    "frames": sample["frames"]}
             elif line.startswith("msiExit total_frames="):
                 exit_frames = fields(line).get("total_frames")
             elif line.startswith("SESSION_TIMING elapsed_ms="):
@@ -88,6 +91,9 @@ def analyze(path: Path, min_frames: int = 60) -> dict:
                         for name in names:
                             if name in data:
                                 latest[name] = data[name]
+                        if prefix == "PERF_COST state_ms=" and pending_wall is not None:
+                            snapshots.append({**latest, **pending_wall})
+                            pending_wall = None
                         break
     intervals = []
     for before, after in zip(snapshots, snapshots[1:]):
