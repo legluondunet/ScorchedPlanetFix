@@ -1319,3 +1319,127 @@ The previous owner's run is already a successful
 functional validation of the unmodified renderer and narrowed
 input guard; it is **not** a demonstration that the original
 Smacker AV can never recur.
+
+## Experimental original Smacker exact-null-AV recovery (2026-11-23)
+
+**Draft successor to #47, opt-in, default OFF and not yet user-validated.**
+The owner's native Windows full exception minidump
+`splanetw.exe.15092.dmp` exposed an original-game NULL handle
+dereference at `splanetw.exe!0x0046D578` reading `NULL+0x68`.
+An earlier, independently diagnosed Wine crash at original
+`0x0046D76D` reads `NULL+0x0C`. These two instructions are in the
+same **original** Smacker video-tick function beginning at
+`0x0046D540`. Direct read-only disassembly of the owner's
+**original OEM ISO** confirms the only valid function epilogue
+at `0x0046D7D2` pops EBP/EDI/ESI/EBX, discards 0x18 local-stack
+bytes and returns. Its original OEM EXE SHA256 is
+`1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894`.
+Original game, DLL and ISO bytes remain private and unchanged.
+
+```asm
+0046D540  sub esp,18h             ; function prologue
+0046D572  mov ecx,[0050DCD0]     ; reload video handle AFTER SmackDoFrame
+0046D578  mov eax,[ecx+68h]      ; observed Windows AV if ECX=0
+...
+0046D761  mov edx,[0050DCD0]
+0046D767  inc eax
+0046D768  mov [0050DCC0],eax     ; video FRAME INDEX
+0046D76D  cmp [edx+0Ch],eax      ; observed Wine AV if EDX=0
+...
+0046D7D2  pop ebp; pop edi; pop esi; pop ebx
+0046D7D6  add esp,18h; ret
+```
+
+The code now offers `[Matrox] SmackerCancelGuard=1`
+(default `0`) for a **new experiment, distinct from the older
+unmerged #47 trampoline**: it uses the project's **already existing
+Vectored Exception Handler**, not a binary detour. No executable bytes
+are modified **on disk or in process memory** and `smackw32.dll`
+itself is neither wrapped nor altered. On every **healthy** video
+frame, execution is identical to the reference game.
+
+When explicitly enabled, MSI95 arms this recovery only if:
+- 32-bit original OEM executable has the expected `0x00400000`
+  image base and all **four exact original code signatures**
+  at the full video-tick prologue, the two failing instruction
+  regions and the function epilogue are **byte-for-byte correct**;
+  otherwise the requested startup refuses the guard instead of
+  silently claiming it is installed;
+- the existing VEH is registered, including with `[Debug] Log=0`
+  (previously the diagnostic VEH only existed with logging);
+- a genuine first-chance `0xC0000005` is specifically a **READ**
+  at exactly original EIP `0x0046D578` of address `0x68` with
+  original ECX=0 **or** original EIP `0x0046D76D`, address
+  `0x0C`, original EDX=0;
+- the exception and CONTEXT agree on the instruction pointer,
+  the game's original video-global `[0050DCD0]` is **NULL**,
+  the return stack is readable through the original full epilogue
+  and the exception is continuable;
+- no more than **16** exact original null-video-tick recoveries
+  have occurred in the current session. The cap prevents
+  an infinite movie restart from being silently hidden.
+
+Only then does the VEH change **the saved x86 CONTEXT.Eip** to
+the *original function's own, byte-verified epilogue*
+`0x0046D7D2`, return `EXCEPTION_CONTINUE_EXECUTION`, and record
+the exact original fault site in `SMACK_EXACT_AV_RECOVERED`.
+No CPU registers, original video globals, import table,
+heap ownership, game bytes, keyboard messages, callback behavior
+or graphics are modified. To avoid **confounding** the owner trial,
+enabling this new exact-AV guard also **bypasses the older PR #56
+input-queue HOLD predicate** for this session: no transition messages
+are delayed by that separate experimental strategy. With
+`SmackerCancelGuard=0`, the parent PR #56 behavior is unchanged.
+Other exceptions continue through the
+existing passive diagnostic logger and normal Windows error
+handling, unchanged. The skipped Smacker tick is never interpreted
+as having decoded a valid image.
+
+Useful messages:
+```text
+SMACK_EXACT_AV_GUARD_ARMED opt_in=1 no_exe_patch=1 ...
+SMACK_EXACT_AV_RECOVERED site=0x0046D578 read_address=0x00000068 resume_epilogue=0x0046D7D2 ...
+SMACK_EXACT_AV_GUARD palette_0x68_recoveries=N frame_0x0C_recoveries=N
+```
+If `SmackerCancelGuard=0`, code is not armed and the game retains
+its original exception semantics. The launcher clears any inherited
+`MATROX_MSI_SMACK_GUARD` variable and sets the value only for the
+Matrox edition. The same `ScorchedPlanetFix.ini` is used on
+Windows and Wine; the retail 3dfx/GameFrame path is unaffected.
+
+### Verification and limitations
+
+- `test_smack_av_recover.c`: **18** strict synthetic predicate
+  cases for both original sites and rejection of wrong EIPs,
+  other exceptions, writes/execute AVs, non-NULL original
+  registers/handle, and wrong memory offsets.
+- `smoke_smack_av_x86.c`: **actual native Windows x86**
+  synthetic functions with the original stack prologue, failing
+  3-byte instructions `mov eax,[ecx+68h]` and
+  `cmp [edx+0Ch],eax`, and original 8-byte epilogue.
+  Deliberately triggers each synthetic access violation and
+  confirms the Windows VEH can resume at the correct epilogue,
+  preserving original EAX return and call stack, repeatedly.
+  These fixtures contain no game bytes or licensed game assets.
+- Existing 23 Smacker lifecycle, 12 video-input predicate,
+  146 real MSI95 x86 raster/CLUT/icon tests, heap, nested input
+  and Windows launcher must also pass in CI.
+
+**This is a defensive hypothesis, not proof that the real
+intermittent game AV is permanently fixed.** In particular,
+skipping the original function's epilogue may prevent a crash
+but it does not repair an earlier Smacker object-lifetime
+error, and no solution is proven for unrelated Matrox
+scene-list AV sites. An unattended or repeated natural crash
+may require another strategy. Do NOT merge without owner
+native-Windows gameplay confirmation.
+
+**Single test after green CI:** set
+`[Matrox] SmackerCancelGuard=1`,
+`[Debug] Log=1`, launch the native Matrox game normally,
+skip the intro with Enter, play briefly and quit; send
+the runtime log. Check `SMACK_EXACT_AV_GUARD_ARMED`,
+`SMACK_EXACT_AV_RECOVERED` (may be absent because crash is
+intermittent), and the exit summary counters. An all-zero
+recovery count proves only that no protected fault occurred.
+Do not repeatedly force an AV to satisfy this test.

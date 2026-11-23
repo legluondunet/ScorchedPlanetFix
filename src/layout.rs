@@ -30,6 +30,9 @@ Icon01Opaque=0\r\n\
 ; Optional smoother 3D-only textures; original 1996 Mystique used nearest sampling\r\n\
 ; 0=nearest / original (default), 1=bilinear on opaque varying-depth world only\r\n\
 WorldBilinear=0\r\n\
+; Experimental exact original OEM Smacker null video-tick AV recovery\r\n\
+; 0=off (default), 1=opt-in; never patches the original game EXE\r\n\
+SmackerCancelGuard=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\

@@ -7,6 +7,7 @@
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_transition_hold.h"
 #include "msi_smack_lifecycle.h"
+#include "msi_smack_av_recover.h"
 #include "msi_world_bilinear.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -35,6 +36,7 @@ typedef unsigned long SIZE_T;
 #define PAGE_READWRITE 4U
 #define INVALID_HANDLE_VALUE ((HANDLE)(-1))
 #define EXCEPTION_CONTINUE_SEARCH 0
+#define EXCEPTION_CONTINUE_EXECUTION (-1)
 #define EXCEPTION_ACCESS_VIOLATION 0xC0000005u
 #define PAGE_NOACCESS 0x01u
 #define PAGE_GUARD 0x100u
@@ -353,6 +355,13 @@ static unsigned g_snapshot_mask = 0;
 static int g_log_attempted = 0;
 static int g_veh_registered = 0;
 static volatile unsigned g_veh_count = 0;
+/* OFF by default, no on-disk OR in-memory patching of original EXE.
+ * If requested and signature-validated, the existing first-chance VEH
+ * may bypass ONLY the two precisely identified OEM Smacker null AVs.
+ * Other exceptions retain the exact previous original reporting path. */
+static int g_smack_exact_av_guard_armed=0;
+static volatile unsigned g_smack_exact_av_palette_recovered=0;
+static volatile unsigned g_smack_exact_av_frames_recovered=0;
 static HWND g_preview = NULL;
 static WINWNDPROC g_guest_window_proc = NULL;
 static unsigned g_guest_messages = 0;
@@ -574,15 +583,89 @@ static void log_runtime_host(void){
     }
 }
 
-/* Observe first-chance access violations only; never alter exception handling.
- * A first-chance AV can be handled and is not automatically the fatal crash.
- * Cap output to prevent excessive noise or recursive exceptions during logging. */
+/* Authenticate multiple *original* instruction sites. The source EXE
+ * originally extracted from the owner's ISO is SHA256
+ * 1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894.
+ * The launcher authenticates the OEM game; runtime also verifies that
+ * these exact bytes and x86 module base are unchanged before arming.
+ * No original file or code bytes are modified by this feature. */
+static BOOL smack_exact_av_original_signature(void){
+    static const BYTE decode[12]={
+        0x8b,0x0d,0xd0,0xdc,0x50,0x00,0x8b,0x41,0x68,
+        0x85,0xc0,0x74};
+    static const BYTE frame[18]={
+        0x8b,0x15,0xd0,0xdc,0x50,0x00,0x40,0xa3,0xc0,
+        0xdc,0x50,0x00,0x39,0x42,0x0c,0x72,0x30,0x52};
+    static const BYTE epilogue[8]={0x5d,0x5f,0x5e,0x5b,0x83,0xc4,0x18,0xc3};
+    static const BYTE prologue[16]={
+        0x83,0xec,0x18,0xa1,0xc0,0xdc,0x50,0x00,
+        0x83,0xf8,0x01,0x90,0x53,0x56,0x57,0x55};
+    if((DWORD)GetModuleHandleA(NULL)!=0x00400000u)return FALSE;
+    const BYTE*addrs[4]={
+        (const BYTE*)0x0046D572u,(const BYTE*)0x0046D761u,
+        (const BYTE*)0x0046D7D2u,(const BYTE*)0x0046D540u};
+    const BYTE*signatures[4]={decode,frame,epilogue,prologue};
+    const unsigned sizes[4]={12u,18u,8u,16u};
+    for(unsigned i=0;i<4u;i++){
+        if(!readable_span(addrs[i],sizes[i]))return FALSE;
+        for(unsigned j=0;j<sizes[i];j++)
+            if(addrs[i][j]!=signatures[i][j])return FALSE;
+    }
+    return TRUE;
+}
+/* Passive first-chance diagnostics remain in effect for everything else.
+ * With explicit owner opt-in, the original function's own epilogue is
+ * entered only for the TWO authentic null-Smacker read exceptions.
+ * A healthy video draw never takes this branch and is bit-identical. */
 static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
-    if(!g_log || !e || !e->ExceptionRecord ||
-       e->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION ||
-       g_veh_count>=8) return EXCEPTION_CONTINUE_SEARCH;
-    g_veh_count++;
+    if(!e || !e->ExceptionRecord ||
+       e->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION)
+        return EXCEPTION_CONTINUE_SEARCH;
     EXCEPTION_RECORD_MIN *r=e->ExceptionRecord;
+    if(g_smack_exact_av_guard_armed && e->ContextRecord &&
+       r->NumberParameters>=2u && !(r->ExceptionFlags&1u) &&
+       readable_span(e->ContextRecord,sizeof(CONTEXT32_MIN)) &&
+       readable_span((const void*)0x0050DCD0u,sizeof(DWORD))){
+        CONTEXT32_MIN *ctx=(CONTEXT32_MIN*)e->ContextRecord;
+        unsigned ip=ctx->Eip;
+        unsigned count=g_smack_exact_av_palette_recovered+
+                       g_smack_exact_av_frames_recovered;
+        if(count<MSI_SMACK_AV_MAX_RECOVERIES &&
+           (DWORD)r->ExceptionAddress==ip &&
+           readable_span((const void*)ctx->Esp,0x2cu) &&
+           msi_smack_is_recoverable_av(1u,1u,r->ExceptionCode,
+               ip,r->ExceptionInformation[0],r->ExceptionInformation[1],
+               ctx->Ecx,ctx->Edx,
+               *(const volatile DWORD*)0x0050DCD0u)){
+            /* The original 0046D540 prologue has sub esp,18 and pushed
+             * ebx/esi/edi/ebp. Its authentic 0046D7D2 epilogue restores
+             * those four registers and the 0x18 local stack bytes.
+             * Never change EAX, EDX, guest global memory, or Smack DLL. */
+            if(ip==MSI_SMACK_ORIGINAL_AV_PALETTE)
+                g_smack_exact_av_palette_recovered++;
+            else
+                g_smack_exact_av_frames_recovered++;
+            if(g_log){
+                char info[240];DWORD k=0,wr=0;
+                putstr(info,&k,"SMACK_EXACT_AV_RECOVERED site=");
+                puthex(info,&k,ip);
+                putstr(info,&k," read_address=");
+                puthex(info,&k,r->ExceptionInformation[1]);
+                putstr(info,&k," resume_epilogue=");
+                puthex(info,&k,MSI_SMACK_ORIGINAL_EPILOGUE);
+                putstr(info,&k," total_skips=");
+                putunsigned(info,&k,g_smack_exact_av_palette_recovered+
+                                     g_smack_exact_av_frames_recovered);
+                info[k]=0;
+                WriteFile(g_log,info,k,&wr,NULL);
+                WriteFile(g_log,"\r\n",2,&wr,NULL);
+            }
+            ctx->Eip=MSI_SMACK_ORIGINAL_EPILOGUE;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    if(!g_log || g_veh_count>=8)return EXCEPTION_CONTINUE_SEARCH;
+    g_veh_count++;
     char buf[940];DWORD n=0;
     putstr(buf,&n,"FIRST_CHANCE_AV #");putunsigned(buf,&n,g_veh_count);
     putstr(buf,&n," code=");puthex(buf,&n,r->ExceptionCode);
@@ -787,6 +870,10 @@ static BOOL game_transition_input_signature_supported(void){
     return TRUE;
 }
 static int transition_input_hold_now(void){
+    /* The new no-patch, exact-AV experiment must NOT be confounded by
+     * the older PR #56 timing/keyboard queue intervention. Its normal
+     * baseline remains unchanged when SmackerCancelGuard=0. */
+    if(g_smack_exact_av_guard_armed)return 0;
     if(!g_initialized || !g_heap_count || !g_last_heap_alloc_tick ||
        !game_transition_input_signature_supported() ||
        !readable_span((const void*)0x0050DCC0u,0x14u))return 0;
@@ -1763,6 +1850,25 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     if(g_initialized)clean();
     g_boot_tick=GetTickCount();
     g_raster_ms=g_preview_ms=g_state_ms=0;
+    g_smack_exact_av_guard_armed=0;
+    g_smack_exact_av_palette_recovered=g_smack_exact_av_frames_recovered=0;
+    {char enabled[8]={0};
+     DWORD n=GetEnvironmentVariableA("MATROX_MSI_SMACK_GUARD",enabled,sizeof(enabled));
+     if(n==1u && enabled[0]=='1'){
+         if(!smack_exact_av_original_signature()){
+             logtext("SMACK_EXACT_AV_GUARD_REFUSED reason=original_OEM_code_signature_mismatch");
+             return NULL;
+         }
+         if(!g_veh_registered)
+             g_veh_registered=AddVectoredExceptionHandler(1,(void*)probe_exception)!=NULL;
+         if(!g_veh_registered){
+             logtext("SMACK_EXACT_AV_GUARD_REFUSED reason=cannot_register_exception_handler");
+             return NULL;
+         }
+         g_smack_exact_av_guard_armed=1;
+         logtext("SMACK_EXACT_AV_GUARD_ARMED opt_in=1 no_exe_patch=1 legacy_input_hold_bypassed=1 sites=0x0046D578,0x0046D76D epilogue=0x0046D7D2 limit=16");
+     }else logtext("SMACK_EXACT_AV_GUARD disabled_default=1");
+    }
     g_last_triangle_tick=g_boot_tick;
     g_last_triangle_frame=0;g_no_geometry_logged=0;
     g_shutdown_started=0;
@@ -1967,6 +2073,9 @@ BOOL __cdecl msiExit(void){
            " state1_null_transitions=",g_smack_state1_null);
     lognum("SMACK_LIFECYCLE emitted_reports=",g_smack_trace_reports,
            " iat_resolved=",g_smack_iat_reported);
+    lognum("SMACK_EXACT_AV_GUARD palette_0x68_recoveries=",g_smack_exact_av_palette_recovered,
+           " frame_0x0C_recoveries=",g_smack_exact_av_frames_recovered);
+    g_smack_exact_av_guard_armed=0;
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     clean();

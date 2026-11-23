@@ -16,3 +16,6 @@ EXPORTS
  VirtualFree
  AddVectoredExceptionHandler
  VirtualQuery
+ FlushInstructionCache
+ GetCurrentProcess
+ ExitProcess

@@ -367,7 +367,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     let controlled=[
         "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
         "MATROX_MSI_INDEXED_KEY","MATROX_MSI_ICON01_OPAQUE","MATROX_MSI_WORLD_BILINEAR","MATROX_MSI_SHADOW_ONCE",
-        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
+        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG","MATROX_MSI_SMACK_GUARD",
         "MATROX_MSI_SHADOW_BLEND","MATROX_MSI_SHADOW_UNDERLAY",
         "MATROX_MSI_WORLD_BLUE_KEY",
     ];
@@ -381,6 +381,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
     command.env("MATROX_MSI_ICON01_OPAQUE",if configured.icon01_opaque{"1"}else{"0"});
     command.env("MATROX_MSI_WORLD_BILINEAR",if configured.world_bilinear{"1"}else{"0"});
+    command.env("MATROX_MSI_SMACK_GUARD",if configured.smacker_cancel_guard{"1"}else{"0"});
     command.env("MATROX_MSI_LOG",if configured.log || force_first_log{"1"}else{"0"});
     Ok(())
 }
@@ -484,6 +485,23 @@ mod tests {
             v==Some(std::ffi::OsStr::new("1"))));
         configure(&mut c,&root,false).unwrap();
         assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_LOG" &&
+            v==Some(std::ffi::OsStr::new("0"))));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn matrox_smacker_guard_env_is_managed_only_from_root_ini(){
+        let root=std::env::temp_dir().join(format!("smacker-av-env-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let ini=root.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Matrox]\nSmackerCancelGuard=1\n").unwrap();
+        let mut c=Command::new("unused");
+        configure(&mut c,&root,false).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMACK_GUARD" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        fs::write(&ini,b"[Matrox]\nSmackerCancelGuard=0\n").unwrap();
+        configure(&mut c,&root,false).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMACK_GUARD" &&
             v==Some(std::ffi::OsStr::new("0"))));
         fs::remove_dir_all(&root).unwrap();
     }
