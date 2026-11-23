@@ -1072,3 +1072,74 @@ TITLEM.RWB `icon01` fingerprint and same-scene index241 A/B analysis
 remain the strongest confirmed title-asset attribution; the larger
 1024×1024 Z-plane atlas has previously been ruled out for the portrait
 menu scene. No new user screenshot is needed just to exercise the tool.
+
+## Comparison-crop geometry: 9.5% reference zoom (2026-11-23)
+
+This is an **offline** reanalysis of the owner's *previously uploaded*
+`Matrox_premier_correctif_comparaison.png` montage (three labeled
+640x400 crops: "Avant #553", "Après #554", "Capture de référence") and
+the owner's later real F12 `matrox_capture_0001_frame(3).bmp` difficulty
+menu. No screenshots or game artwork are committed.
+
+SIFT features + robust RANSAC affine *similarity* alignment reveal that
+the right-hand **reference** crop is approximately **1.0952× zoomed**
+relative to the middle **after #554** crop. Translation in reference
+crop coordinates is about **(+16.04,+0.41) px**, rotation about
+**−0.04°**. **441 of 459** feature matches agree with this transform
+for the later F12-vs-reference comparison. Comparing the after-#554
+montage crop to the later F12 frame at the same native coordinates
+gives only **917 / 256,000 different screenshot pixels**, due largely
+to pointer movement. That F12 frame is a valid candidate for
+correlating the montage to pixel ownership diagnostics.
+
+After resampling the reference into the same 640x400 candidate geometry,
+mean absolute per-channel image difference is **3.138 levels** over
+**208,050 mutually covered pixels** (8-bit BGR; scaling/interpolation
+and cursor motion included). **2.952%** of overlap pixels have any
+channel difference above 40. This is **not a native RGB565 bit-identical
+claim**. It is evidence that interpreting panel/frame dimensions from the
+unregistered side-by-side montage as missing renderer geometry was unsafe.
+
+For the rectangular central panel perimeter
+`[184,63,455,336)`, **12-pixel-wide border bands** have these
+post-registration any-channel>40 difference rates:
+top **3.659%**, left **1.740%**, right **0.201%**,
+bottom **0.953%**. The corresponding original F12 coverage categories:
+- top: **2,213** flat colored world pixels, **768** textured colored;
+  **271** pixels with no final MSI write but **all visibly colored**;
+- left: **2,988 final MSI writes**, no last-key-only pixels;
+- right: **2,988 final MSI writes**, no last-key-only pixels;
+- bottom: **3,121** final MSI writes, **131** no-MSI-write pixels,
+  but **all colored**.
+
+There are **zero black+no-MSI-write pixel holes**, **zero
+key-discard-only pixels**, and **zero Z-plane final writes** in all
+four bands. This **strongly weakens** a missing-triangle, rejected
+key, or sparse-atlas explanation for the central panel's outer
+borders **in this particular captured scene**. It does **not**
+prove that every other UI frame or 3D game scene matches native
+Mystique hardware; the screenshot reference may have been scaled by
+capture/presentation processing.
+
+The optional tool `align_reference_captures.py` is provided to
+prevent misleading comparisons from differently scaled screenshots.
+It requires `opencv-python-headless` and `numpy` **only for offline
+diagnostics** (neither is shipped to the game runtime):
+
+```text
+python -m pip install opencv-python-headless numpy
+python tools/matrox/align_reference_captures.py candidate.png comparison.png --reference-crop 1334,52,1974,452 --panel 184,63,455,336 --border-width 12 --json --overlay alignment.png
+python tools/matrox/test_align_reference_captures.py
+```
+
+The analyzer rejects featureless/dissimilar scenes and implausible
+scales/rotation, reports geometric evidence and border-band differences,
+and can emit a local comparison montage. It does not claim to recognize
+the original hardware, does not treat all black pixels as missing, and
+does not apply any correction to the game. Its five CI fixtures are
+synthetic; no owner's images are used in CI.
+
+**Disposition:** Do not change center panel raster edge rules on this
+montage alone. Instead, find an independently verified same-scene
+Mystique-vs-current capture showing a **specific, still discrepant
+border segment** and compare it after geometry normalization.
