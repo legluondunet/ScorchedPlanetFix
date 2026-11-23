@@ -211,10 +211,10 @@ def analyze(files: dict[str, Path], roi: str | None = None,
     for i in indices:
         c, a, src = coverage[i], atlas[i], world[i]
         if spatial_masks is not None:
-            black = frame[i] == 0
+            is_black = frame[i] == 0
             unowned = c in (0, 7, 8, 9)
             spatial_masks['visible_world_index1_black_preview'][i] = (
-                black and c == 2 and src == 12)
+                is_black and c == 2 and src == 12)
             spatial_masks['world_index241_keyed_only'][i] = (
                 c == 7 and src == 10)
             spatial_masks['world_index1_keyed_only'][i] = (
@@ -222,9 +222,9 @@ def analyze(files: dict[str, Path], roi: str | None = None,
             spatial_masks['world_other_rgb_keyed_only'][i] = (
                 c == 7 and src == 11)
             spatial_masks['zplane_unmarked_zero_black_unowned'][i] = (
-                black and unowned and a == 4)
+                is_black and unowned and a == 4)
             spatial_masks['black_without_final_msi_write'][i] = (
-                black and unowned)
+                is_black and unowned)
         cc[COVERAGE[c]] += 1
         ac[ATLAS[a]] += 1
         wc[WORLD[src]] += 1
