@@ -33,10 +33,11 @@ WORLD = {
     10: 'indexed8_index241_rgbkey_discard',
     11: 'indexed8_other_rgbkey_discard',
     12: 'indexed8_index1_opaque_preview',
+    13: 'indexed8_icon01_index241_opaque',
 }
 WORLD_RGB565 = [0x0000, 0x07E0, 0xAFE5, 0xFD20, 0x8010,
                 0xF800, 0x001F, 0x07FF, 0xF81F, 0xFFE0,
-                0xA01F, 0xFFFF, 0xFC00]
+                0xA01F, 0xFFFF, 0xFC00, 0x83E0]
 ATLAS = {
     0: 'not_sampled', 1: 'uploaded_nonzero', 2: 'uploaded_zero',
     3: 'unmarked_nonzero', 4: 'unmarked_zero_skip', 5: 'key_discard',
