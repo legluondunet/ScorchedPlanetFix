@@ -162,6 +162,9 @@ static void *g_module = NULL;
 static HANDLE g_log = NULL;
 static unsigned g_frames = 0, g_triangles = 0, g_zplanes = 0, g_params = 0;
 static unsigned g_zplane_draw_context=0, g_zplane_blue_key_skips=0;
+/* Number of Win32 region checks reused for additional triangle vertices.
+ * No caching across triangles/frames: every call still queries fresh memory. */
+static unsigned g_vertex_region_reuses=0, g_vertex_region_fallbacks=0;
 /* Large HUD atlases can be only partially populated. Older probes required
  * both extreme texture-cache pages to be uploaded, rejecting *all* pixels
  * of a 512x512 / 1024x1024 image when only a small region was resident.
@@ -1689,6 +1692,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_tex_uploads=g_palette_uploads=g_drawn_triangles=g_drawn_pixels=0;
     g_disabled_tex_uploads=g_disabled_lut_uploads=g_direct_cache_reads=0;
     g_missing_textures=g_rejected_triangles=0;
+    g_vertex_region_reuses=g_vertex_region_fallbacks=0;
     g_zplanes=0;g_drawn_zplanes=g_drawn_zpixels=g_rejected_zplanes=0;
     g_first_zplane_frame=0xFFFFFFFFu;
     g_cap_qpc_ready=0;
@@ -1932,6 +1936,8 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("CACHE_UPLOAD_WHILE_DISABLED textures=",g_disabled_tex_uploads,"palettes=",g_disabled_lut_uploads);
         lognum("CACHE_DIRECT_READS triangles=",g_direct_cache_reads,NULL,0);
         lognum("RENDER_REJECTED triangles=",g_rejected_triangles,"rasterized_pixels=",g_drawn_pixels);
+        lognum("VERTEX_REGION_CHECK reused_queries=",g_vertex_region_reuses,
+               "fallback_queries=",g_vertex_region_fallbacks);
         lognum("PERSPECTIVE_UV enabled=",(unsigned)g_perspective_enabled,"triangles=",g_perspective_triangles);
         lognum("PERSPECTIVE_UV adjusted_pixels=",g_perspective_pixels,"varying_invw_world_tris=",g_world_varying_invw);
         lognum("PERSPECTIVE_UV constant_invw_world_tris=",g_world_constant_invw,"invalid_invw_world_tris=",g_world_invalid_invw);
@@ -2221,16 +2227,46 @@ BOOL __cdecl msiSetParameters(T_msiParameters*p){
 }
 /* Pointer inspection is diagnostic-only. Never dereference the original game
  * supplied geometry unless its entire record is in committed memory. */
+/* Preserve the original readable_span protection and range semantics.
+ * A single VirtualQuery region can cover multiple independent pointers only
+ * if EVERY complete record fits in the same committed, readable region. */
+static BOOL span_in_region(const void *p,DWORD len,
+                           const MEMORY_BASIC_INFORMATION32*mem){
+    if(!p)return FALSE;
+    DWORD start=(DWORD)p;
+    if(start<65536u || start>0xffffffffu-len)return FALSE;
+    if(mem->State!=MEM_COMMIT || (mem->Protect & PAGE_GUARD) ||
+       (mem->Protect & 0xffu)==PAGE_NOACCESS)return FALSE;
+    DWORD base=(DWORD)mem->BaseAddress;
+    return start>=base && start-base<=mem->RegionSize &&
+           len<=mem->RegionSize-(start-base);
+}
 static BOOL readable_span(const void *p, DWORD len){
     if(!p)return FALSE;
     DWORD start=(DWORD)p;
     if(start<65536u || start>0xffffffffu-len)return FALSE;
     MEMORY_BASIC_INFORMATION32 mem;
     if(VirtualQuery(p,&mem,sizeof(mem))!=sizeof(mem))return FALSE;
-    if(mem.State!=MEM_COMMIT || (mem.Protect & PAGE_GUARD) ||
-       (mem.Protect & 0xffu)==PAGE_NOACCESS)return FALSE;
-    DWORD base=(DWORD)mem.BaseAddress;
-    return start>=base && start-base<=mem.RegionSize && len<=mem.RegionSize-(start-base);
+    return span_in_region(p,len,&mem);
+}
+/* Check the first vertex with one fresh VirtualQuery. Reuse its actual
+ * memory-region report only for other vertices fully contained there.
+ * Distinct/mixed/guarded regions fall back to original individual checks.
+ * This saves up to two kernel queries per game triangle without changing
+ * memory permissions, original game vertices, or rasterized pixels. */
+static BOOL readable_triangle_vertices(const T_msiVertex*a,
+                                       const T_msiVertex*b,
+                                       const T_msiVertex*c){
+    DWORD len=(DWORD)sizeof(*a);
+    if(!a || (DWORD)a<65536u || (DWORD)a>0xffffffffu-len)return FALSE;
+    MEMORY_BASIC_INFORMATION32 mem;
+    if(VirtualQuery(a,&mem,sizeof(mem))!=sizeof(mem))return FALSE;
+    if(!span_in_region(a,len,&mem))return FALSE;
+    if(span_in_region(b,len,&mem))g_vertex_region_reuses++;
+    else {g_vertex_region_fallbacks++;if(!readable_span(b,len))return FALSE;}
+    if(span_in_region(c,len,&mem))g_vertex_region_reuses++;
+    else {g_vertex_region_fallbacks++;if(!readable_span(c,len))return FALSE;}
+    return TRUE;
 }
 static void put_float_approx(char*buf,DWORD*n,float f){
     if(!(f>=-100000.0f && f<=100000.0f)){putstr(buf,n,"nan/out-of-range");return;}
@@ -3042,12 +3078,14 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
        lognum("GEOMETRY_RESUMED elapsed_ms=",g_last_triangle_tick-g_boot_tick,"frame=",g_frames);
        g_no_geometry_logged=0;
     }
+    /* Validate once, not again for sampled trace messages. */
+    BOOL vertices_ok=readable_triangle_vertices(a,b,c);
     if(g_triangles<=18 || g_triangles%1000==0){
         char buf[940];DWORD n=0;
         putstr(buf,&n,"MSI_TRIANGLE frame=");putunsigned(buf,&n,g_frames);
         putstr(buf,&n," count=");putunsigned(buf,&n,g_triangles);
         putstr(buf,&n," opacity=");putunsigned(buf,&n,(unsigned)opacity);
-        if(readable_span(a,sizeof(*a))&&readable_span(b,sizeof(*b))&&readable_span(c,sizeof(*c))){
+        if(vertices_ok){
             log_vertex(buf,&n," A",a);log_vertex(buf,&n," B",b);log_vertex(buf,&n," C",c);
         } else putstr(buf,&n," INVALID_VERTEX_POINTER");
         buf[n]=0;logtext(buf);
@@ -3071,7 +3109,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
         putstr(mbuf,&mn,",");put_float_approx(mbuf,&mn,c->mb);
         putstr(mbuf,&mn,")");mbuf[mn]=0;logtext(mbuf);g_fx_vertex_color_logs++;
     }
-    if(readable_span(a,sizeof(*a))&&readable_span(b,sizeof(*b))&&readable_span(c,sizeof(*c)))
+    if(vertices_ok)
         rasterize_triangle(a,b,c,opacity);
     else g_rejected_triangles++;
     return TRUE;
