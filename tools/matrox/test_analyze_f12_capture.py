@@ -57,7 +57,7 @@ class CaptureTests(unittest.TestCase):
                 'frame': [0, 0xF800, 0, 0x07E0],
                 'coverage': [COVERAGE_RGB565[x] for x in (2, 1, 9, 5)],
                 'atlas': [ATLAS_RGB565[x] for x in (0, 4, 4, 0)],
-                'world': [WORLD_RGB565[x] for x in (12, 2, 0, 10)],
+                'world': [WORLD_RGB565[x] for x in (12, 13, 0, 10)],
             }
             for kind, vals in d.items():
                 name = Path(str(root) + '_' + kind +
@@ -67,6 +67,7 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(result['frame'], {
                 'black': 2, 'colored': 2, 'black_without_final_msi_write': 1})
             self.assertEqual(result['world_last_attempt']['indexed8_index1_opaque_preview'], 1)
+            self.assertEqual(result['world_last_attempt']['indexed8_icon01_index241_opaque'], 1)
             self.assertEqual(result['world_last_attempt']['indexed8_index241_rgbkey_discard'], 1)
             self.assertEqual(result['atlas_unmarked_zero_crosscheck']['last_attempt_skips'], 2)
             self.assertEqual(result['atlas_unmarked_zero_crosscheck']['final_frame_colored'], 1)
