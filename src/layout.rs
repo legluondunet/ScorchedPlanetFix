@@ -24,6 +24,9 @@ FPSLimit=60\r\n\
 ; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
 ; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
+; Experimental alternative color-key for 8bit 128x128 world textures\r\n\
+; 0=validated RGB565 key (default), 1=source-index comparison (A/B only)\r\n\
+SourceIndexKey128=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\
