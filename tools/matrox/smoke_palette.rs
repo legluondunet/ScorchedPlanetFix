@@ -159,6 +159,9 @@ fn main() {
     std::env::set_var("MATROX_MSI_LOG", "0");
     std::env::set_var("MATROX_MSI_FPS_LIMIT", "0");
     std::env::set_var("MATROX_MSI_BORDERLESS", "0");
+    // Tests must never inherit a developer's optional keying settings.
+    std::env::set_var("MATROX_MSI_INDEXED_KEY", "0");
+    std::env::set_var("MATROX_MSI_WORLD_BLUE_KEY", "0");
     unsafe {
         let module = LoadLibraryA(b"msi95.dll\0".as_ptr());
         assert!(!module.is_null(), "Cannot load actual MSI95 x86 DLL");
