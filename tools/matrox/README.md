@@ -1385,7 +1385,12 @@ the *original function's own, byte-verified epilogue*
 the exact original fault site in `SMACK_EXACT_AV_RECOVERED`.
 No CPU registers, original video globals, import table,
 heap ownership, game bytes, keyboard messages, callback behavior
-or graphics are modified. Other exceptions continue through the
+or graphics are modified. To avoid **confounding** the owner trial,
+enabling this new exact-AV guard also **bypasses the older PR #56
+input-queue HOLD predicate** for this session: no transition messages
+are delayed by that separate experimental strategy. With
+`SmackerCancelGuard=0`, the parent PR #56 behavior is unchanged.
+Other exceptions continue through the
 existing passive diagnostic logger and normal Windows error
 handling, unchanged. The skipped Smacker tick is never interpreted
 as having decoded a valid image.
