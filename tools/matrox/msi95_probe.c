@@ -254,6 +254,9 @@ static int g_world_bilinear_enabled=0;
 static unsigned g_world_bilinear_triangles=0;
 static unsigned g_world_bilinear_samples=0,g_world_bilinear_changed=0;
 static unsigned g_world_bilinear_keyed_bypass=0;
+static unsigned g_world_bilinear_palette_triangles=0;
+static unsigned g_world_bilinear_palette_samples=0;
+static unsigned g_world_bilinear_uniform_samples=0;
 /* Explicit A/B experiment: the game uses RGB565 0x00FF for some blue
  * sprite borders in the 3D world. Honor the original color key always;
  * only opt-in a second exact-blue key on textured transparent world draws.
@@ -1574,6 +1577,9 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_world_varying_invw=g_world_constant_invw=g_world_invalid_invw=0;
     g_world_bilinear_triangles=g_world_bilinear_samples=g_world_bilinear_changed=0;
     g_world_bilinear_keyed_bypass=0;
+    g_world_bilinear_palette_triangles=0;
+    g_world_bilinear_palette_samples=0;
+    g_world_bilinear_uniform_samples=0;
     g_world_blue_samples=g_world_blue_eligible=g_world_blue_skipped=0;
     g_world_blue_diagnostic_count=0;
     g_index_key_candidates=g_index_key_skipped=0;
@@ -1932,6 +1938,9 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("WORLD_BILINEAR enabled=",(unsigned)g_world_bilinear_enabled," triangles=",g_world_bilinear_triangles);
         lognum("WORLD_BILINEAR filtered_samples=",g_world_bilinear_samples,"changed_pixels=",g_world_bilinear_changed);
         lognum("WORLD_BILINEAR keyed_neighbor_bypass=",g_world_bilinear_keyed_bypass,NULL,0);
+        lognum("WORLD_BILINEAR palette_cached_triangles=",g_world_bilinear_palette_triangles,
+               " palette_cached_samples=",g_world_bilinear_palette_samples);
+        lognum("WORLD_BILINEAR uniform_neighborhood_samples=",g_world_bilinear_uniform_samples,NULL,0);
         lognum("WORLD_BLUE_KEY samples=",g_world_blue_samples,"transparent_state_samples=",g_world_blue_eligible);
         lognum("WORLD_BLUE_KEY skipped=",g_world_blue_skipped,"enabled=",(unsigned)g_world_blue_key_enabled);
         lognum("INDEXED_KEY candidates=",g_index_key_candidates,"skipped=",g_index_key_skipped);
@@ -2314,15 +2323,13 @@ static unsigned world_texel_rgb565(const BYTE*tex,const BYTE*lut,unsigned planes
  * Ignore the experimental black index1/icon01 exemptions here:
  * treating their black as a key is deliberately conservative and keeps
  * silhouettes crisp instead of smearing neighboring black into color. */
-static int world_bilinear_tap_opaque(const BYTE*tex,unsigned planes,
-                                     unsigned pos,unsigned rgb,
-                                     unsigned transparent,unsigned key,
-                                     unsigned mask){
+static int world_bilinear_tap_opaque(unsigned planes,unsigned raw_index,
+                                     unsigned rgb,unsigned transparent,
+                                     unsigned key,unsigned mask){
     if(!transparent)return 1;
     if(((rgb^key)&mask)==0u)return 0;
     if(planes==8u && g_index_key_enabled && key<=255u && mask!=0u){
-        unsigned raw=(unsigned)tex[pos];
-        if((((raw^key)&(mask&255u))==0u))return 0;
+        if((((raw_index^key)&(mask&255u))==0u))return 0;
     }
     if(g_world_blue_key_enabled && rgb==0x00FFu)return 0;
     return 1;
@@ -2551,6 +2558,29 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
              b->v>=-10000.f&&b->v<=10000.f&&c->v>=-10000.f&&c->v<=10000.f)){
             g_rejected_triangles++;return;
         }
+    }
+    /* Prepare a per-triangle CLUT+opacity lookup only for sufficiently
+     * large, eligible indexed 3D polygons. No global cache or palette
+     * generation assumptions: even direct writes to the original CLUT
+     * are seen on the next triangle. The small-triangle path retains
+     * the prior direct decoding, avoiding 256-entry setup overhead. */
+    WORD bilinear_palette_rgb[256];
+    BYTE bilinear_palette_opaque[256];
+    int bilinear_palette_ready=0;
+    if(bilinear_triangle && planes==8u && lut &&
+       (unsigned)(right-left)*(unsigned)(bottom-top)>=128u){
+        const unsigned trans=(unsigned)g_state.msiTexture.Transparency;
+        const unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+        const unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+        for(unsigned index=0;index<256u;index++){
+            unsigned rgb=(unsigned)lut[2u*index]|
+                         ((unsigned)lut[2u*index+1u]<<8);
+            bilinear_palette_rgb[index]=(WORD)rgb;
+            bilinear_palette_opaque[index]=(BYTE)world_bilinear_tap_opaque(
+                8u,index,rgb,trans,key,mask);
+        }
+        bilinear_palette_ready=1;
+        g_world_bilinear_palette_triangles++;
     }
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
@@ -2815,26 +2845,62 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     float fracx=sx-(float)ix0,fracy=sy-(float)iy0;
                     unsigned wx=(unsigned)(fracx*256.0f+0.5f);
                     unsigned wy=(unsigned)(fracy*256.0f+0.5f);
-                    unsigned c00=world_texel_rgb565(texture,lut,planes,iy*texW+ix);
-                    unsigned c10=world_texel_rgb565(texture,lut,planes,iy*texW+ix1);
-                    unsigned c01=world_texel_rgb565(texture,lut,planes,iy1*texW+ix);
-                    unsigned c11=world_texel_rgb565(texture,lut,planes,iy1*texW+ix1);
                     unsigned p00=iy*texW+ix,p10=iy*texW+ix1;
                     unsigned p01=iy1*texW+ix,p11=iy1*texW+ix1;
-                    unsigned is_transparent=(unsigned)g_state.msiTexture.Transparency;
-                    unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
-                    unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
-                    if(world_bilinear_tap_opaque(texture,planes,p00,c00,is_transparent,key,mask) &&
-                       world_bilinear_tap_opaque(texture,planes,p10,c10,is_transparent,key,mask) &&
-                       world_bilinear_tap_opaque(texture,planes,p01,c01,is_transparent,key,mask) &&
-                       world_bilinear_tap_opaque(texture,planes,p11,c11,is_transparent,key,mask)){
-                        unsigned filtered=msi_bilinear_mix_rgb565(c00,c10,c01,c11,wx,wy);
+                    unsigned c00,c10,c01,c11;
+                    int four_opaque;
+                    if(bilinear_palette_ready){
+                        /* Four one-byte indices, four predecoded CLUT
+                         * colors and four prechecked opacity flags.
+                         * The palette is local to this triangle. */
+                        unsigned i00=(unsigned)texture[p00];
+                        unsigned i10=(unsigned)texture[p10];
+                        unsigned i01=(unsigned)texture[p01];
+                        unsigned i11=(unsigned)texture[p11];
+                        c00=(unsigned)bilinear_palette_rgb[i00];
+                        c10=(unsigned)bilinear_palette_rgb[i10];
+                        c01=(unsigned)bilinear_palette_rgb[i01];
+                        c11=(unsigned)bilinear_palette_rgb[i11];
+                        four_opaque=bilinear_palette_opaque[i00] &&
+                                    bilinear_palette_opaque[i10] &&
+                                    bilinear_palette_opaque[i01] &&
+                                    bilinear_palette_opaque[i11];
+                        g_world_bilinear_palette_samples++;
+                    }else{
+                        c00=world_texel_rgb565(texture,lut,planes,p00);
+                        c10=world_texel_rgb565(texture,lut,planes,p10);
+                        c01=world_texel_rgb565(texture,lut,planes,p01);
+                        c11=world_texel_rgb565(texture,lut,planes,p11);
+                        unsigned is_transparent=(unsigned)g_state.msiTexture.Transparency;
+                        unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+                        unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+                        unsigned r00=planes==8u?(unsigned)texture[p00]:0u;
+                        unsigned r10=planes==8u?(unsigned)texture[p10]:0u;
+                        unsigned r01=planes==8u?(unsigned)texture[p01]:0u;
+                        unsigned r11=planes==8u?(unsigned)texture[p11]:0u;
+                        four_opaque=
+                            world_bilinear_tap_opaque(planes,r00,c00,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r10,c10,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r01,c01,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r11,c11,is_transparent,key,mask);
+                    }
+                    if(four_opaque){
+                        /* All four colors equal: interpolation cannot change
+                         * RGB565. Keep the same filtered/changed semantics
+                         * while avoiding twelve channel multiplications. */
+                        unsigned filtered;
+                        if(c00==c10 && c00==c01 && c00==c11){
+                            filtered=c00;
+                            g_world_bilinear_uniform_samples++;
+                        }else{
+                            filtered=msi_bilinear_mix_rgb565(c00,c10,c01,c11,wx,wy);
+                        }
                         g_world_bilinear_samples++;
                         if(filtered!=color)g_world_bilinear_changed++;
                         color=filtered;
                     }else{
-                        /* No bilinear halo across transparent/keyed texture
-                         * boundaries: preserve original centre nearest. */
+                        /* At least one texel is keyed: preserve original
+                         * nearest center and never blend an alpha halo. */
                         g_world_bilinear_keyed_bypass++;
                     }
                 }
