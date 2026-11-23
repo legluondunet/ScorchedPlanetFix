@@ -1014,7 +1014,10 @@ python tools/matrox/analyze_render_intervals.py --json "ScorchedPlanetFix.log"
 ```
 
 The report computes **deltas between consecutive snapshots**, not averages of
-the whole game. It shows wall FPS, CPU renderer ms/frame, bilinear samples/frame,
+the whole game. In original MSI95 log order, `PERF_WALL` comes **before**
+`PERF_COST render` and `PERF_COST state` for the same frame; the parser
+only finalizes the snapshot after those two cost lines, so an incomplete
+trailing `PERF_WALL` is safely discarded. It shows wall FPS, CPU renderer ms/frame, bilinear samples/frame,
 late frames, and skipped sparse-Z atlas texels split into original-key-compatible
 and potentially opaque categories. Short startup samples under 60 frames and
 counter resets are excluded from derived intervals. The last snapshot may be
