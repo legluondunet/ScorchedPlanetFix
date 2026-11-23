@@ -411,6 +411,7 @@ static DWORD g_smack_last_handle=0xffffffffu;
 static unsigned g_smack_changes=0,g_smack_state1_null=0;
 static unsigned g_smack_trace_reports=0,g_smack_iat_reported=0;
 static DWORD g_smack_last_change_tick=0;
+static DWORD g_smack_last_video_total_frames=0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -838,9 +839,29 @@ static void sample_smack_lifecycle(const char *phase){
     g_smack_last_change_tick=GetTickCount();
     g_smack_changes++;
     if(event&MSI_SMACK_EVENT_STATE1_NULL)g_smack_state1_null++;
-    if(g_smack_trace_reports>=192u && !(event&MSI_SMACK_EVENT_STATE1_NULL))
+    /* Original Windows run 14:31 recorded 702 transitions, but the
+     * former hard cap of 192 was exhausted before the first SmackClose
+     * (frame 584), hiding the two handle closures/reopens of interest.
+     * Always retain pointer lifetime events and unexpected counter
+     * jumps; sample ordinary frame increments only near startup or
+     * every 60 decoded images, within a small normal-report budget. */
+    if(!msi_smack_should_log(event,old_state,state,g_smack_trace_reports))
         return;
     g_smack_trace_reports++;
+    /* Only inspect original Smack struct on handle CHANGE and after
+     * checking that all 0x6C bytes are readable. The previous build
+     * needlessly dumped the same fields on every decoded video frame. */
+    unsigned have_fields=0u;
+    DWORD video_width=0u,video_height=0u,video_total_frames=0u;
+    DWORD field_0x68=0u;
+    if(handle && (event&MSI_SMACK_EVENT_HANDLE_CHANGED) &&
+       readable_span((const void*)handle,0x6cu)){
+        const volatile DWORD *smack=(const volatile DWORD*)handle;
+        video_width=smack[1];video_height=smack[2];
+        video_total_frames=smack[3];field_0x68=smack[0x68u/4u];
+        g_smack_last_video_total_frames=video_total_frames;
+        have_fields=1u;
+    }
     char out[520];DWORD k=0;
     putstr(out,&k,"SMACK_LIFECYCLE phase=");putstr(out,&k,phase);
     putstr(out,&k," frame=");putunsigned(out,&k,g_frames);
@@ -851,23 +872,24 @@ static void sample_smack_lifecycle(const char *phase){
     putstr(out,&k," state=");putunsigned(out,&k,state);
     putstr(out,&k," prev_handle=");puthex(out,&k,old_handle);
     putstr(out,&k," handle=");puthex(out,&k,handle);
+    putstr(out,&k," known_video_total_frames=");
+    putunsigned(out,&k,g_smack_last_video_total_frames);
     putstr(out,&k," callback_depth=");putunsigned(out,&k,g_guest_callback_depth);
     putstr(out,&k," last_input=");puthex(out,&k,g_last_forwarded_msg);
     putstr(out,&k," last_input_age_ms=");putunsigned(out,&k,
         g_last_forwarded_tick?
         GetTickCount()-g_last_forwarded_tick:0xffffffffu);
     out[k]=0;logtext(out);
-    /* Read only bounded fields of an allocated Smacker handle; we never
-     * dereference the null/freed pointer that caused the original AV. */
-    if(handle && readable_span((const void*)handle,0x6cu)){
-        const volatile DWORD *smack=(const volatile DWORD*)handle;
+    /* Capture per-video metadata once, rather than logging the same
+     * fields for every sequential frame. 0x68 is an opaque original
+     * Smacker struct DWORD (its semantics are not assumed). */
+    if(have_fields){
         char fields[240];k=0;
         putstr(fields,&k,"SMACK_HANDLE_FIELDS handle=");puthex(fields,&k,handle);
-        putstr(fields,&k," width=");putunsigned(fields,&k,smack[1]);
-        putstr(fields,&k," height=");putunsigned(fields,&k,smack[2]);
-        putstr(fields,&k," frame_count=");putunsigned(fields,&k,smack[3]);
-        putstr(fields,&k," palette_field_0x68=");
-        puthex(fields,&k,smack[0x68u/4u]);
+        putstr(fields,&k," width=");putunsigned(fields,&k,video_width);
+        putstr(fields,&k," height=");putunsigned(fields,&k,video_height);
+        putstr(fields,&k," frame_count=");putunsigned(fields,&k,video_total_frames);
+        putstr(fields,&k," raw_field_0x68=");puthex(fields,&k,field_0x68);
         fields[k]=0;logtext(fields);
     }
     if(event&MSI_SMACK_EVENT_STATE1_NULL){
@@ -1755,6 +1777,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_smack_changes=g_smack_state1_null=0;
     g_smack_trace_reports=g_smack_iat_reported=0;
     g_smack_last_change_tick=0;
+    g_smack_last_video_total_frames=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
     g_swallowed_left_down=g_swallowed_right_down=0;
     g_zplane_draw_context=0;
