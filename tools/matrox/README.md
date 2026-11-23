@@ -1001,3 +1001,30 @@ is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
 a F12 capture and the session timing summary. If the game is still
 too CPU-bound, do not enable bilinear by default; the historic Mystique
 nearest mode is always available.
+
+## Experimental Win32 vertex-region validation fast path (performance)
+
+The MSI95 software backend receives three separately supplied original-game
+pointers for every world triangle. Their records must be checked before any
+dereference: valid geometry can be transient around OEM scene reloads.
+
+The experimental optimization in PR #61 uses **one fresh** `VirtualQuery`
+for the first vertex and reuses its committed, accessible **same memory region**
+for each additional vertex *only when the entire vertex struct fits*. If a
+vertex lies in another region, or spans a memory boundary, the existing
+individual `readable_span` validation still runs. Guard/no-access/uncommitted
+memory remains rejected. No reuse between triangles or frames; no permission
+changes or original-game memory patches.
+
+The periodic `VERTEX_REGION_CHECK reused_queries=... fallback_queries=...`
+line estimates how many Windows memory queries are avoided, not measured CPU
+speedup. The real x86 DLL smoke tests cover contiguous stack vertices, three
+distinct `VirtualAlloc` regions, low/NULL pointers and a record crossing a
+`PAGE_NOACCESS` boundary. Original per-pixel rasterizer, CLUT, Z-plane,
+bilinear, dithering, Smacker, game files and defaults remain unchanged.
+
+**Assessment:** potentially useful for triangle-heavy scenes (the owner's A/B
+logged over 350k triangles in 900 frames without bilinear), but actual gains
+must be confirmed on Windows with matching scenes. This is not a cure for
+missing Matrox image regions, transparency, slow per-pixel CPU rasterization or
+intermittent original Smacker faults. Keep this PR draft until runtime tested.
