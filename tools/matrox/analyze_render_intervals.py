@@ -86,8 +86,6 @@ def difference(previous: dict, current: dict) -> dict | None:
     wraps = []
     for prefix, names in FAMILIES.items():
         for name in names:
-            if name not in previous or name not in current:
-                continue
             key = ALIASES.get((prefix, name), name)
             if key not in previous or key not in current:
                 continue
@@ -145,17 +143,20 @@ def analyze(path: Path, min_frames: int = 60) -> dict:
                             pending_wall = None
                         break
     intervals = []
+    valid_steps = []
     for before, after in zip(snapshots, snapshots[1:]):
         interval = difference(before, after)
-        if interval is not None and interval["frames"] >= min_frames:
-            intervals.append(interval)
+        if interval is not None:
+            valid_steps.append(interval)
+            if interval["frames"] >= min_frames:
+                intervals.append(interval)
     wrap_totals: dict[str, int] = {}
-    for row in intervals:
+    for row in valid_steps:
         for key in row["counter_wraps"]:
             wrap_totals[key] = wrap_totals.get(key, 0) + 1
     # All accepted intervals must connect to report reliable cumulative
     # totals; otherwise a reset/ambiguous wrap might have been skipped.
-    fully_connected = (len(intervals) == max(0, len(snapshots) - 1))
+    fully_connected = (len(valid_steps) == max(0, len(snapshots) - 1))
     extended_totals = ({
         key: value + UINT32 * wrap_totals.get(key, 0)
         for key, value in snapshots[-1].items()
