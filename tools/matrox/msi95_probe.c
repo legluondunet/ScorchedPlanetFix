@@ -2394,6 +2394,35 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     putstr(ab,&an," lut1=");puthex(ab,&an,ix1);
                     putstr(ab,&an," lut241=");puthex(ab,&an,ix241);
                     ab[an]=0;logtext(ab);
+                    /* Exact original game-resource provenance from the
+                     * owner's TITLEM.RWB, measured independently offline.
+                     * F12 ONLY: identify the true uploaded texture by a
+                     * content hash, never by a volatile heap pointer.
+                     * The first 16384 8-bit indices in original icon01
+                     * hash to FNV1a32 0x35107cba (6993 pixels index241).
+                     * Diagnostic only; no key/discard/draw state changes. */
+                    if(texW==128u && texH==128u){
+                        unsigned hash=2166136261u;
+                        unsigned n0=0,n1=0,n241=0;
+                        for(unsigned ix=0;ix<16384u;ix++){
+                            unsigned v=(unsigned)texture[ix];
+                            hash=(hash^v)*16777619u;
+                            if(v==0u)n0++;
+                            if(v==1u)n1++;
+                            if(v==241u)n241++;
+                        }
+                        char al[380];DWORD nn=0;
+                        putstr(al,&nn,"F12_TEXTURE_ATLAS frame=");putunsigned(al,&nn,g_frames);
+                        putstr(al,&nn," texture_offset=");putunsigned(al,&nn,texOffset);
+                        putstr(al,&nn," lut_offset=");putunsigned(al,&nn,(unsigned)loff);
+                        putstr(al,&nn," fnv1a32=");puthex(al,&nn,hash);
+                        putstr(al,&nn," raw_index0=");putunsigned(al,&nn,n0);
+                        putstr(al,&nn," raw_index1=");putunsigned(al,&nn,n1);
+                        putstr(al,&nn," raw_index241=");putunsigned(al,&nn,n241);
+                        if(hash==0x35107cbau && n241==6993u && n1==0u)
+                            putstr(al,&nn," original_titlem=icon01_FINGERPRINT_MATCH");
+                        al[nn]=0;logtext(al);
+                    }
                 }
             }
         }
