@@ -37,7 +37,9 @@ def load_capture(prefix: Path) -> dict:
            for layer in layers.values()):
         raise ValueError(f'{prefix}: all four same-serial layers must have equal dimensions')
     return {
-        'name': prefix.name,
+        # Include the directory: separate sessions often reuse capture_0001.
+        # Two unrelated captures must never overwrite one per_capture entry.
+        'name': str(prefix),
         'width': width,
         'height': height,
         'frame': layers['frame'][2],
