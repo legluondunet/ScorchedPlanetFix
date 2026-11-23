@@ -775,3 +775,81 @@ It accepts the owner's original extracted file, emits only atlas names,
 index counts and SHA-256 fingerprints (not texture bytes, images, or
 game assets). Synthetic CI tests validate parsing and strict header
 checking. The optional tool is separate from the launcher/runtime.
+
+## Icon01-only background opacity A/B (23 November 2026)
+
+**Scope and rationale:** A real native Windows F12 session with the previous
+`SourceIndexKey128=0` mode identified the actual original title atlas:
+
+```text
+F12_TEXTURE_ATLAS frame=234 texture_offset=16205312 lut_offset=16221696 fnv1a32=0x35107CBA raw_index0=0 raw_index1=0 raw_index241=6993 original_titlem=icon01_FINGERPRINT_MATCH
+WORLD_KEY_INDEX_TOP rank=1 source_index=241 attempts=7020
+```
+
+In the 640x400 *main title menu*, **6,925 distinct final keyed-only
+pixels** correspond to this `icon01` atlas: 2,117 in the floppy icon,
+1,778 in joystick, 2,225 in PCB and 805 in flags. The original asset
+has 6,993 index-241 texels, with quadrant counts 2,131 / 1,809 /
+2,248 / 805. 3dfx renders an opaque dark background under the
+corresponding art, consistent with the texture's intended appearance,
+although **the original Matrox Mystique driver parity is not yet
+confirmed**.
+
+**Option, default OFF:**
+
+```ini
+[Matrox]
+Icon01Opaque=0
+```
+
+`Icon01Opaque=1` preserves black RGB565 **only for source index 241**
+when all conditions hold:
+
+- world (not Z-plane/HUD) triangle, 8-bit indexed, 128x128 texture;
+- transparency is requested with `KeyingColor=0` and
+  `KeyingColorMask=0xffff`; palette resolves source index 241 to
+  RGB565 0x0000;
+- the *current cached texture* is an original TITLEM `icon01` **data
+  fingerprint match**: FNV-1a32 `0x35107CBA`, 6,993 source-index-241
+  bytes, and zero source-index-0 and source-index-1 bytes.
+
+The hash and counts are computed **only on complete 16,384-byte
+texture uploads** (not on every pixel or every triangle). If another
+texture is uploaded over the matched cache memory range, the match is
+invalidated **before** the next drawing operation. Cache offsets are
+used only to locate the matched texture *within that runtime session*:
+they are not hardcoded to any value observed in a previous run.
+
+**No other palette index, other 8-bit atlas, 4/16-bit texture, HUD,
+sparse Z-plane, retail 3dfx/GameFrame code, game EXE or user game
+asset is modified.** The existing black-index-1 preview remains in
+place. `Icon01Opaque=0` preserves the previously tested output.
+
+Runtime lines show `ICON01_OPAQUE enabled`,
+`ICON01_OPAQUE original_titlem=icon01_FINGERPRINT_MATCH`, matched
+uploads, and source-index-241 sample attempts. One F12 outputs
+`WORLD_KEY_SCREEN ... icon01_index241_opaque=...` and the teal
+world-provenance category `indexed8_icon01_index241_opaque`.
+These sample counts may differ from *final* distinct framebuffer pixels
+because of overdraw.
+
+The native MSI95 x86 pixel smoke test uses an **artificial 128x128
+texture with a deliberately constructed 32-bit FNV collision and matching
+source-index counts**. It is **not** the original `icon01` or any
+other proprietary game asset. It proves the real renderer recognizes
+the selected signature, draws matching index-241 black texels only
+with `Icon01Opaque=1`, and **stops** treating a cache offset as
+`icon01` when a different texture overwrites it. A signature is
+a *compatibility guard*, **not a cryptographic authenticity
+certificate**. Invalid/duplicate INI entries are rejected and
+existing INI values remain intact.
+
+**Minimal owner test:** Windows or Wine Matrox OEM, enable
+`[Matrox] Icon01Opaque=1` and `[Debug] Log=1`, select the
+main menu, press F12 **once**. Send the log and four matched BMPs;
+there is no need for another mode-0 run because
+`matrox_capture_0003` at 2026-11-23 11:16 is the same-scene
+baseline. Check all four source-241 icon backgrounds plus the
+unchanged index-1 icon backgrounds. Do not enable by default, merge,
+or assume exact original-driver RGB values without matching historical
+hardware reference.
