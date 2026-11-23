@@ -1237,3 +1237,82 @@ Do not repeatedly trigger crashes on purpose. This
 instrumentation is not itself a crash fix; #56 remains
 a conservative, unproven timing hypothesis and all PRs stay
 draft/unmerged until the owner reviews the evidence.
+
+
+### Owner's actual native-Windows lifecycle log, 2026-11-23 14:31
+
+The owner supplied `ScorchedPlanetFix(20261123-143158).log`
+(4,713 lines / 441,016 bytes) for this exact PR #57.
+**Normal shutdown**, native Windows, no first-chance AV:
+4,923 frames / 713,669 renderer triangles / 64,842 Z-plane
+calls, 136,344 ms total runtime, **0 texture heap allocations
+remaining** at shutdown; `SMACK_IAT original_oem_rva_match=1`
+with all five real original DLL addresses. The narrowed PR #56
+input hold remained **inactive** (0 deferred, 0 timeouts).
+`SMACK_LIFECYCLE state1_null_transitions=0`, which means
+**none was sampled**, not that an unsampled transient is impossible.
+
+**Instrumentation defect discovered by real owner data:**
+`SMACK_LIFECYCLE total_changes=702`, but only **192**
+changes were logged, exhausting the arbitrary normal-report
+limit at game frame 199, while the first intro movie was still
+playing. Every sequential Smack video frame increment generated
+a `SMACK_LIFECYCLE` line and a redundant
+`SMACK_HANDLE_FIELDS` dump. Thus the precisely interesting
+open/close sequence occurred after the reporting cap and was
+lost from the new detailed log.
+
+The preexisting independent `GAME_GLOBAL_50DCD0` probe still
+captured useful evidence:
+- original movie opened at MSI game frame 7; Smacker
+  `320x152, 285` frames and handle `0x00F30940`;
+- at MSI frame **584**, during Enter-triggered nested
+  callback/heap loading, video handle changed to NULL and
+  original video frame index was **286** (i.e. just past
+  the 285-frame total), consistent with ordinary end/skip;
+- at MSI frame **3844**, another Smacker video opened,
+  using the same native allocation address with frame index 1;
+- at MSI frame **3976**, after another Enter keydown,
+  its handle became NULL at original video index **106**
+  during texture loading. This later shutdown/transition
+  was also **nonfatal**; an interrupt/skip is plausible but
+  the exact semantics are unproven.
+
+Do not interpret the old report ceiling as evidence that
+no SmackClose occurred. Neither normal close establishes the
+sequence of the prior startup AV 0x0046D578, where the
+handle was NULL with original *video frame index* 1.
+
+**Revised diagnostic policy:** The original game-global
+sampling, game data and runtime rendering remain unchanged.
+In `SMACK_LIFECYCLE`, always emit original video
+**handle changes** (open/close), first-frame+NULL, frame-index
+resets and jumps, **even after** the old report count.
+For ordinary sequential video-frame increments, emit only
+indices 1..3 and every 60th frame under a 64-sample
+normal-report budget. Read and log video handle geometry,
+frame total and raw DWORD +0x68 **once per newly observed
+non-NULL handle**, never once per frame. Preserve last known
+video total in closure lines so the logged index and video
+length can be compared. This cuts unnecessary logging
+and prevents ordinary movie playback from hiding the
+important handle lifetime events.
+
+The freestanding smoke now executes **23** deterministic checks:
+11 original state/handle classifier cases + 12 trace
+importance/sparse-report cases, including normal video
+close **after** the previous limit, video reopen, index
+reset and first-frame-NULL. Future Windows CI must again
+verify the complete x86 MSI95 DLL, original input-guard
+regressions and Windows launcher.
+
+Next owner evidence request, after CI success: a normal
+intro -> menu -> optional short gameplay -> exit session
+with `[Debug] Log=1` and only the runtime log.
+**Do not intentionally crash the game**. Look for new
+`SMACK_LIFECYCLE` handle=0 transitions at original index
+286 and/or 106, with `known_video_total_frames`.
+The previous owner's run is already a successful
+functional validation of the unmodified renderer and narrowed
+input guard; it is **not** a demonstration that the original
+Smacker AV can never recur.
