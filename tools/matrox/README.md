@@ -704,3 +704,74 @@ establish what original MSI95 silicon did with those aliases. True
 hardware equivalence still requires aligned original Mystique driver
 reference scenes. Avoid making all RGB565-black pixels opaque or blindly
 switching every texture to pre-CLUT source-index keying.
+
+## Original OEM `TITLEM.RWB` asset evidence: index 241 belongs to `icon01` (23 November 2026)
+
+An external, private analysis of the actual owner's OEM Matrox ISO
+finds the original game file `SPLANET/TITLEM.RWB` (**678,721 bytes**,
+SHA-256 `268b99c0c20f9d8ea8cdabb32bd0c6f0446b6f5d5e10de8aac5a3113a21bb408`).
+The OEM-specific historical stream has nested `TEXU / STNG / RAST /
+STRT / DATA` tags. Its 128x128 raster entries declare 32,768 bytes
+of data. Inspecting **only the first 16,384 index bytes** from each
+named texture, without guessing the role of the remaining bytes:
+
+| Original atlas name | Raw index 1 | Raw index 241 | Raw index 0 |
+|---|---:|---:|---:|
+| `icon00` | 5,950 | 0 | 0 |
+| `button` | 2,011 | 0 | 0 |
+| **`icon01`** | **0** | **6,993** | **0** |
+| `FACE3` | 9,040 | 0 | 0 |
+| `FACE2` | 8,188 | 0 | 0 |
+| `FACE1` | 6,473 | 0 | 0 |
+| `FLAGS` | 1,792 | 0 | 0 |
+| `FLAGS02` | 0 | 0 | 0 |
+
+*The file contains additional unnamed raster entries; the table covers
+eight validated, named 128x128 atlas entries. This is not evidence
+that **all** Matrox game assets use index 241 only in `icon01`.*
+
+Within `icon01`, the four 64x64 atlas quadrants contain source
+index 241 at counts **1,809 / 2,131 / 2,248 / 805** (top-left,
+top-right, bottom-left, bottom-right), respectively. These encode the
+joystick, floppy disk, PCB card, and flags icon artwork. The live
+F12 world-provenance map in owner Windows screenshot
+`matrox_capture_0001` revealed **2,225** keyed-only pixels under
+the PCB icon and **805** under the flags icon; the original atlas
+counts independently predict the spatial locations. The slight 23
+pixel difference on the PCB can result from clipping/rasterization;
+this remains a plausible explanation, **not** an independently
+proved pixel-by-pixel reconstruction.
+
+Existing live F12 CLUT logging confirms `source[1]` and
+`source[241]` both produce RGB565 **`0x0000`**, using a
+`KeyingColor=0` / `Mask=0xffff` state. The 3dfx version's
+main-menu icon PCB also rests on a near-black/navy background,
+corroborating that the icon background is intentional. **However,
+the 3dfx screenshot is a different menu state from the Matrox
+FACILE dialog**, so the images do not prove exact per-pixel Matrox
+Mystique hardware fidelity or the 3dfx RGB color must be reused.
+
+**Engineering consequence:** On the specific original `icon01`
+atlas, opacity of index 241 is strongly justified; using a blanket
+raw-index-key rule across *all* world indexed textures remains
+unproved and would also change index-0 semantics outside this scene.
+Prefer an **`icon01`-scoped** exception, identifying the
+runtime uploaded texture by a stable original-resource fingerprint
+rather than a volatile heap pointer or guessed CLUT offset.
+A candidate fingerprint of the first original `icon01` 16,384
+index bytes is SHA-256
+`cad6863404701573b121cc4e5c37c5700c25e3b4672895a9a17b75d5f2aebbee`
+(**verify before hardcoding**: the source atlas must be matched against
+the runtime uploaded bytes; do not assume identity blindly).
+Do not modify or redistribute the original game atlas, and do not
+enable a new rendering rule without testing the full game.
+
+This repository includes a **read-only** standard-library script:
+```powershell
+python tools/matrox/inspect_titlem_atlases.py "game/TITLEM.RWB"
+python tools/matrox/test_inspect_titlem_atlases.py
+```
+It accepts the owner's original extracted file, emits only atlas names,
+index counts and SHA-256 fingerprints (not texture bytes, images, or
+game assets). Synthetic CI tests validate parsing and strict header
+checking. The optional tool is separate from the launcher/runtime.
