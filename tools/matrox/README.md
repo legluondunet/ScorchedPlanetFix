@@ -1001,3 +1001,30 @@ is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
 a F12 capture and the session timing summary. If the game is still
 too CPU-bound, do not enable bilinear by default; the historic Mystique
 nearest mode is always available.
+
+## Periodic rendering-cost and sparse-atlas audit (read only)
+
+The Matrox native MSI95 log contains **cumulative** counters recorded at
+`PERF_WALL` snapshots. To see where a session spends render time, without
+changing the game DLL or enabling extra hooks:
+
+```powershell
+python tools/matrox/analyze_render_intervals.py "ScorchedPlanetFix.log"
+python tools/matrox/analyze_render_intervals.py --json "ScorchedPlanetFix.log"
+```
+
+The report computes **deltas between consecutive snapshots**, not averages of
+the whole game. It shows wall FPS, CPU renderer ms/frame, bilinear samples/frame,
+late frames, and skipped sparse-Z atlas texels split into original-key-compatible
+and potentially opaque categories. Short startup samples under 60 frames and
+counter resets are excluded from derived intervals. The last snapshot may be
+earlier than `msiExit`; those trailing frames are **not** covered by this report.
+
+**Interpret carefully:** sample totals include overdraw, wall FPS includes
+input/video/IO waits, and a zero texel that would be keyed under the active
+palette does **not** prove that the original Mystique would display that location
+identically. The report does not identify missing borders by itself. To compare
+`WorldBilinear=0` and `WorldBilinear=1`, capture equivalent gameplay scenes
+with otherwise identical INI settings and preferably `[Debug] Log=0` for
+performance measurement. Do not confuse this diagnostic with a controlled
+same-scene benchmark. No game assets or proprietary DLL are needed by the tool.
