@@ -123,6 +123,16 @@ jobs:
           & $exe
           if ($LASTEXITCODE -ne 0) { throw 'Matrox transition guard predicate regression failed' }
 
+      - name: Validate exact Matrox Smacker AV classifier (no original media)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'MatroxExactSmackerAVPolicy.exe'
+          clang -O2 -Wall -Wextra -Werror tools/matrox/test_smack_av_recover.c -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile strict Smacker AV classifier checks' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Smacker AV recovery policy safety tests failed' }
+
       - name: Compile clean-room MSI95 x86 from pinned source
         shell: pwsh
         run: |
@@ -133,6 +143,30 @@ jobs:
           python tools/matrox/audit_exports.py $msi
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Native Win32 x86 Smacker VEH real exception-and-epilogue smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'target/matrox-msi95-x86'
+          $obj = Join-Path $base 'smoke_smack_av_x86.obj'
+          $exe = Join-Path $base 'smoke_smack_av_x86.exe'
+          clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -c tools/matrox/smoke_smack_av_x86.c -o $obj
+          if ($LASTEXITCODE -ne 0) { throw 'Smacker native VEH smoke x86 compile failed' }
+          $link = @(
+            '/MACHINE:X86','/NODEFAULTLIB','/ENTRY:mainCRTStartup',
+            '/SUBSYSTEM:CONSOLE',"/OUT:$exe",$obj,(Join-Path $base 'kernel32.lib'),
+            '/alternatename:__imp__VirtualAlloc@16=__imp__VirtualAlloc',
+            '/alternatename:__imp__AddVectoredExceptionHandler@8=__imp__AddVectoredExceptionHandler',
+            '/alternatename:__imp__FlushInstructionCache@12=__imp__FlushInstructionCache',
+            '/alternatename:__imp__GetCurrentProcess@0=__imp__GetCurrentProcess',
+            '/alternatename:__imp__ExitProcess@4=__imp__ExitProcess'
+          )
+          & lld-link @link
+          if ($LASTEXITCODE -ne 0) { throw 'Smacker native VEH smoke x86 link failed' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "Smacker native x86 guard test failed exit=$LASTEXITCODE" }
+          Write-Host 'MATROX_SMACK_AV_VEH_X86_PASS both original-sized null dereferences skip to balanced epilogue'
 
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh
