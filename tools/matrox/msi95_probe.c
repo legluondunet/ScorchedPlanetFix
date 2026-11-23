@@ -870,6 +870,10 @@ static BOOL game_transition_input_signature_supported(void){
     return TRUE;
 }
 static int transition_input_hold_now(void){
+    /* The new no-patch, exact-AV experiment must NOT be confounded by
+     * the older PR #56 timing/keyboard queue intervention. Its normal
+     * baseline remains unchanged when SmackerCancelGuard=0. */
+    if(g_smack_exact_av_guard_armed)return 0;
     if(!g_initialized || !g_heap_count || !g_last_heap_alloc_tick ||
        !game_transition_input_signature_supported() ||
        !readable_span((const void*)0x0050DCC0u,0x14u))return 0;
@@ -1862,7 +1866,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
              return NULL;
          }
          g_smack_exact_av_guard_armed=1;
-         logtext("SMACK_EXACT_AV_GUARD_ARMED opt_in=1 no_exe_patch=1 no_input_delay=1 sites=0x0046D578,0x0046D76D epilogue=0x0046D7D2 limit=16");
+         logtext("SMACK_EXACT_AV_GUARD_ARMED opt_in=1 no_exe_patch=1 legacy_input_hold_bypassed=1 sites=0x0046D578,0x0046D76D epilogue=0x0046D7D2 limit=16");
      }else logtext("SMACK_EXACT_AV_GUARD disabled_default=1");
     }
     g_last_triangle_tick=g_boot_tick;
