@@ -67,6 +67,16 @@ class MatroxReferenceTests(unittest.TestCase):
         with self.assertRaises(AlignmentError):
             analyze(self.a,too_large)
 
+    def test_reject_invalid_registration_confidence_or_image_channels(self):
+        with self.assertRaises(AlignmentError):
+            analyze(self.a, self.b, min_matches=0)
+        with self.assertRaises(AlignmentError):
+            analyze(self.a, self.b, min_inlier_fraction=1.5)
+        with self.assertRaises(AlignmentError):
+            analyze(self.a[:, :, 0], self.b)
+        with self.assertRaises(AlignmentError):
+            analyze(self.a, self.b, band=0)
+
     def test_bounded_crop_and_border(self):
         self.assertEqual(parse_box('1,2,100,80',self.a.shape),(1,2,100,80))
         self.assertEqual(select_crop(self.a,'1,2,100,80').shape,(78,99,3))
