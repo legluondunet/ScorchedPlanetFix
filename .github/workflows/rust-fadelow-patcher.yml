@@ -54,6 +54,15 @@ jobs:
           python -m py_compile tools/matrox/inspect_titlem_atlases.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox TITLEM atlas script syntax failed' }
 
+      - name: Test offline Matrox 3D shadow accounting (synthetic fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_shadow_telemetry.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox shadow telemetry tests failed' }
+          python -m py_compile tools/matrox/analyze_shadow_telemetry.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox shadow telemetry syntax check failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
