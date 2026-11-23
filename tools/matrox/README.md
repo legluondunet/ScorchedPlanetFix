@@ -704,3 +704,56 @@ establish what original MSI95 silicon did with those aliases. True
 hardware equivalence still requires aligned original Mystique driver
 reference scenes. Avoid making all RGB565-black pixels opaque or blindly
 switching every texture to pre-CLUT source-index keying.
+
+## Experimental 128x128 indexed source-key A/B (2026-11-23, draft)
+
+**NOT a verified original Matrox hardware fix. Default OFF.** Owner's
+2026-11-23 real Windows F12 captured two 128x128 world CLUTs (key=RGB565
+0x0000, mask=0xffff): both map **source index 1** and **241** to RGB565
+black, but the existing narrow `index1 opaque` experiment keeps only
+source index 1. Across the whole F12 frame there were 7,020 index-241
+key-discard *attempts* (3,030 final last-attempt positions) around
+peripheral icon art, not the central portraits.
+
+**Hypothesis to A/B:** The original indexed key may compare the raw
+8-bit texel index to key index 0 before applying the CLUT, rather than
+compare decoded RGB565 values. The original 1995 MSI95 SDK shows the
+color-key state, but does **not** establish that comparison order for
+the actual Mystique hardware. Treat BOTH interpretations as experiments.
+
+`[Matrox] SourceIndexKey128=0` (default) retains the previously
+pixel-validated index-1 black opaque preview and post-CLUT RGB565
+comparison. `SourceIndexKey128=1` substitutes a **raw source index 0
+key** for **only** transparent 128x128 8-bit world triangles with exact
+`KeyingColor=0`, `KeyingColorMask=0xffff`. This makes source index
+241 (a decoded-black alias) opaque, and source index 0 transparent even
+if its CLUT entry is blue (`0x00ff`). The existing 8-bit source index 1
+remains opaque. No new original EXE patch; no Z-plane/HUD, other
+dimensions, 4/16-bit texturing, untextured world, retail GameFrame,
+modulation, dithering, geometry, FPS or focus changes. All other
+color-key tests and existing original file verifiers remain unchanged.
+The launcher solely owns and overwrites the environment variable
+`MATROX_MSI_INDEX_KEY_128` to prevent inherited configuration.
+
+The 2-phase native x86 `smoke_palette.rs` executes the actual MSI95
+DLL using synthetic 8/16-bit textures. In both default and opt-in
+modes, it checks index-1, index-241, index-0, colored pixels, 64x64
+exclusion, disabled transparency and 16-bit exclusion. It also
+constructs an **index-0 CLUT blue** synthetic pixel in the opt-in
+phase and checks that only its raw index triggers transparency.
+None of these tests establishes fidelity to Mystique's physical
+hardware: they only check that the option changes **exactly** the
+intended case and leaves reference behavior intact.
+
+**Minimal owner A/B after CI:** Use the same installed Matrox edition
+and same Difficulty menu selection twice, with other INI values
+unchanged. First set `SourceIndexKey128=0` (reference) and take F12
+plus a photo; then `SourceIndexKey128=1` (experiment), restart,
+select the same menu state and take one F12 plus photo. Keep
+`[Debug] Log=1`. Compare icon black background areas and broken
+border fragments, not just the portraits. The expected change is
+mainly 8-bit index-241 icon pixels (blue palette provenance turns into
+drawn black), and possibly other black aliases on the 20-alias CLUT.
+Do not merge/enable by default until **same-state original Mystique
+driver VM** shows which result is more authentic. If the icon changes
+get worse, keep the safe `0` and drop this experimental PR.
