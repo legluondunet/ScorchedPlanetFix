@@ -102,7 +102,93 @@ def parse_roi(raw: str, width: int, height: int) -> tuple[int, int, int, int]:
     return x0, y0, x1, y1
 
 
-def analyze(files: dict[str, Path], roi: str | None = None) -> dict:
+def connected_regions(mask: bytearray, width: int,
+                      box: tuple[int, int, int, int],
+                      minimum: int = 8, maximum: int = 8) -> dict:
+    """Four-connected suspect regions, in native 640x400 coordinates.
+
+    A cluster of a *diagnostic category* is not proof of a missing asset:
+    provenance is last ATTEMPT and MSI coverage is last WRITE only.
+    """
+    x0, y0, x1, y1 = box
+    visited = bytearray(len(mask))
+    regions = []
+    total = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            root = y * width + x
+            if not mask[root] or visited[root]:
+                continue
+            queue = [root]
+            visited[root] = 1
+            count = 0
+            left = right = x
+            top = bottom = y
+            while queue:
+                index = queue.pop()
+                py, px = divmod(index, width)
+                count += 1
+                left = min(left, px)
+                right = max(right, px)
+                top = min(top, py)
+                bottom = max(bottom, py)
+                for nx, ny in ((px - 1, py), (px + 1, py),
+                               (px, py - 1), (px, py + 1)):
+                    if nx < x0 or nx >= x1 or ny < y0 or ny >= y1:
+                        continue
+                    neighbor = ny * width + nx
+                    if mask[neighbor] and not visited[neighbor]:
+                        visited[neighbor] = 1
+                        queue.append(neighbor)
+            total += 1
+            if count >= minimum:
+                regions.append({
+                    'pixels': count,
+                    'bbox': [left, top, right + 1, bottom + 1],
+                    'touches_roi_boundary': (
+                        left == x0 or top == y0 or right + 1 == x1 or
+                        bottom + 1 == y1),
+                })
+    regions.sort(key=lambda item: (-item['pixels'], item['bbox'][1],
+                                   item['bbox'][0]))
+    return {
+        'total_components_all_sizes': total,
+        'components_above_minimum': len(regions),
+        'min_pixels': minimum,
+        'reported': regions[:maximum],
+        'unreported_above_minimum': max(0, len(regions) - maximum),
+    }
+
+
+# Last-attempt provenance and last-write coverage may describe DIFFERENT
+# polygons. Each intersection below is a location of interest, NOT a verdict.
+REGION_CATEGORIES = {
+    'visible_world_index1_black_preview': (
+        'RGB565 black final pixel, last world sample index1-opaque, '
+        'last MSI write textured black'),
+    'world_index241_keyed_only': (
+        'last index241 world sample was keyed, no later MSI write '
+        '(other game-side framebuffer writes are possible)'),
+    'world_index1_keyed_only': (
+        'last index1 world sample was keyed, no later MSI write'),
+    'world_other_rgb_keyed_only': (
+        'other indexed world sample keyed, no later MSI write'),
+    'zplane_unmarked_zero_black_unowned': (
+        'last sparse atlas sample was unmarked zero, final black pixel '
+        'without a later MSI write; may be intentional transparent space'),
+    'black_without_final_msi_write': (
+        'black framebuffer with no final MSI write: often intentional '
+        'background, never proof of missing art'),
+}
+
+
+def analyze(files: dict[str, Path], roi: str | None = None,
+            regions: bool = False, min_region_pixels: int = 8,
+            max_regions: int = 8) -> dict:
+    if not 1 <= min_region_pixels <= 256000:
+        raise ValueError('min_region_pixels must be between 1 and 256000')
+    if not 1 <= max_regions <= 32:
+        raise ValueError('max_regions must be between 1 and 32')
     result = {kind: read_rgb565_bmp(files[kind])
               for kind in ('frame', 'coverage', 'atlas', 'world')}
     w, h, frame = result['frame']
@@ -115,6 +201,8 @@ def analyze(files: dict[str, Path], roi: str | None = None) -> dict:
     x0, y0, x1, y1 = box
     indices = (y*w+x for y in range(y0, y1) for x in range(x0, x1))
     cc, ac, wc = Counter(), Counter(), Counter()
+    spatial_masks = ({key: bytearray(w * h) for key in REGION_CATEGORIES}
+                     if regions else None)
     black = 0
     suspect_black_unowned = 0
     atlas_zero_on_final_colored = 0
@@ -122,6 +210,21 @@ def analyze(files: dict[str, Path], roi: str | None = None) -> dict:
     atlas_zero_covered = Counter()
     for i in indices:
         c, a, src = coverage[i], atlas[i], world[i]
+        if spatial_masks is not None:
+            black = frame[i] == 0
+            unowned = c in (0, 7, 8, 9)
+            spatial_masks['visible_world_index1_black_preview'][i] = (
+                black and c == 2 and src == 12)
+            spatial_masks['world_index241_keyed_only'][i] = (
+                c == 7 and src == 10)
+            spatial_masks['world_index1_keyed_only'][i] = (
+                c == 7 and src == 9)
+            spatial_masks['world_other_rgb_keyed_only'][i] = (
+                c == 7 and src == 11)
+            spatial_masks['zplane_unmarked_zero_black_unowned'][i] = (
+                black and unowned and a == 4)
+            spatial_masks['black_without_final_msi_write'][i] = (
+                black and unowned)
         cc[COVERAGE[c]] += 1
         ac[ATLAS[a]] += 1
         wc[WORLD[src]] += 1
@@ -136,7 +239,18 @@ def analyze(files: dict[str, Path], roi: str | None = None) -> dict:
             else:
                 atlas_zero_on_final_black += 1
     count = (x1 - x0) * (y1 - y0)
-    return {
+    spatial_report = None
+    if spatial_masks is not None:
+        spatial_report = {
+            key: {
+                'meaning': REGION_CATEGORIES[key],
+                'candidate_pixels_in_roi': sum(mask),
+                **connected_regions(mask, w, box, min_region_pixels,
+                                    max_regions),
+            }
+            for key, mask in spatial_masks.items()
+        }
+    report = {
         'dimensions': [w, h], 'roi': list(box), 'pixels': count,
         'frame': {'black': black, 'colored': count - black,
                   'black_without_final_msi_write': suspect_black_unowned},
@@ -157,6 +271,9 @@ def analyze(files: dict[str, Path], roi: str | None = None) -> dict:
             'F12 BMPs alone do not establish original Matrox hardware equivalence.',
         ],
     }
+    if spatial_report is not None:
+        report['spatial_regions'] = spatial_report
+    return report
 
 
 def main() -> int:
@@ -164,9 +281,18 @@ def main() -> int:
     p.add_argument('prefix', type=Path, help='Path through serial, e.g. captures/matrox_capture_0003')
     p.add_argument('--roi', help='End-exclusive x0,y0,x1,y1 to inspect panel or portrait region')
     p.add_argument('--json', action='store_true', help='Print machine-readable JSON')
+    p.add_argument('--regions', action='store_true',
+                   help='Rank bounded four-connected suspect pixel regions')
+    p.add_argument('--min-region-pixels', type=int, default=8,
+                   help='Minimum pixel count per reported region (default 8)')
+    p.add_argument('--max-regions', type=int, default=8,
+                   help='Maximum listed regions per category (default 8, max 32)')
     args = p.parse_args()
     try:
-        report = analyze(resolve_inputs(args.prefix), args.roi)
+        report = analyze(resolve_inputs(args.prefix), args.roi,
+                         regions=args.regions,
+                         min_region_pixels=args.min_region_pixels,
+                         max_regions=args.max_regions)
     except (ValueError, OSError, struct.error) as exc:
         p.error(str(exc))
     if args.json:
@@ -180,6 +306,15 @@ def main() -> int:
     print('Last sampled Z-plane atlas:', report['atlas_last_attempt'])
     print('Skipped atlas zero vs actual framebuffer / ownership:',
           report['atlas_unmarked_zero_crosscheck'])
+    if args.regions:
+        print('Candidate connected regions (end-exclusive RGB565 coordinates):')
+        for category, detail in report['spatial_regions'].items():
+            print(f"  {category}: candidate_pixels={detail['candidate_pixels_in_roi']}"
+                  f" components={detail['total_components_all_sizes']}")
+            for region in detail['reported']:
+                print(f"    pixels={region['pixels']} bbox={region['bbox']}"
+                      f" roi_edge={region['touches_roi_boundary']}")
+        print('CAUTION: connected candidate regions are NOT confirmed missing art.')
     print('CAUTION:', report['interpretation'][0])
     print('CAUTION:', report['interpretation'][2])
     return 0
