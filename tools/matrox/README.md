@@ -1031,3 +1031,48 @@ identically. The report does not identify missing borders by itself. To compare
 with otherwise identical INI settings and preferably `[Debug] Log=0` for
 performance measurement. Do not confuse this diagnostic with a controlled
 same-scene benchmark. No game assets or proprietary DLL are needed by the tool.
+
+## 2026-11-23 long-session MSI95 32-bit counter rollovers
+
+Owner's Wine 11.19 stress log `ScorchedPlanetFix(20261123-190700).log`
+ran 59,482 frames / ~1,319,100 ms / 26,279,005 game triangles and
+8,850,198 Z-planes. It closed cleanly, heap `exit_live=0`, no logged
+access violation, zero periodic rejected triangles and missing textures,
+with 52,538,130 saved per-vertex Win32 memory-region queries and zero
+fallbacks at the last periodic report. No F12 was requested, so the session
+is **stability evidence, not visual-fidelity evidence**.
+
+**Important diagnostic finding:** The x86 DLL stores per-pixel aggregate
+counters in 32-bit `unsigned` variables. In this long stress run,
+`RENDER_PROGRESS pixels` wrapped **7 times**; actual
+overdraw-inclusive rasterized-pixel samples through frame 59,400 were
+**31,769,579,811**, not the final printed 1,704,808,739.
+`MSI_MODULATE pixels` and `MSI_DITHER candidates` wrapped **twice**:
+reconstructed 8,638,760,391; `MSI_DITHER changed_pixels` wrapped
+**once**: 4,521,916,738. The final source counters are not corrupted game
+memory, but the 32-bit telemetry values are misleading by themselves.
+All reconstructed numbers stop at **frame 59,400**, not the exit frame.
+
+The offline `analyze_render_intervals.py` now recognizes **explicit,
+near-boundary UINT32 rollovers** in sample/texel counters, and retains
+the entire interval instead of silently dropping it. It separates
+colliding `changed_pixels` and `pixels` names across the world
+bilinear, modulation, dither, raster, perspective, Z-plane and atlas
+families. It reports `counter_wraps` per interval, the number of
+observed wraps by counter, and `last_snapshot_extended` only when the
+snapshot sequence is continuous and free of ambiguous resets.
+Durations, frame counts, render milliseconds and arbitrary counter
+resets are **never blindly wrapped**. This requires that a single gap
+between successive snapshots cannot contain an entire hidden 2^32
+counter cycle; otherwise cumulative recovery is not possible.
+Synthetic regression tests cover wraps and ambiguous resets.
+
+Offline usage on the original log (no game data committed):
+```text
+python tools/matrox/analyze_render_intervals.py "ScorchedPlanetFix(20261123-190700).log" --json
+```
+
+No runtime DLL, source hash, INI behavior or FPS is changed. Avoid
+paying for 64-bit increments on every 32-bit raster pixel merely to
+correct read-only statistics; an offline reconstruction is more
+efficient and safe for original 1996 CPU-bound 3D rendering.
