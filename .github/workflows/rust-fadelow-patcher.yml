@@ -45,6 +45,17 @@ jobs:
           python -m py_compile tools/matrox/analyze_f12_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 cross-layer triage syntax check failed' }
 
+      - name: Test optional Matrox screenshot geometry alignment (synthetic images only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check --quiet "opencv-python-headless>=4.8,<5" "numpy>=1.24,<3"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install optional image registration test requirements' }
+          python tools/matrox/test_align_reference_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox screenshot alignment tests failed' }
+          python -m py_compile tools/matrox/align_reference_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox screenshot alignment syntax check failed' }
+
       - name: Test original-format Matrox TITLEM atlas inspector (synthetic fixtures)
         shell: pwsh
         run: |
