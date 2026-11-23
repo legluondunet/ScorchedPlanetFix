@@ -1065,7 +1065,7 @@ AV_GAME_GLOBAL_50DCD0 path=ECX_plus_0x68 ...
 ```
 
 A freestanding `msi_transition_hold.h` predicate is checked by
-`test_transition_hold.c` with **10 deterministic tests** for observed
+`test_transition_hold.c` with **12 deterministic tests** (including benign video states 2 and 5) for observed
 ~94 ms transition timing, 1,500ms boundary, non-OEM signature,
 uninitialized renderer, absent heaps, restored scene, stale state,
 and tick wraparound. The Windows MSI95 x86 compile and previous
