@@ -4,7 +4,10 @@
  *
  * Pure freestanding RGB565 math: callers resolve original CLUT first,
  * then pass four verified opaque texels and 8-bit fractional weights.
- * Never call on a sprite, sparse Z-plane or transparency-keyed atlas.
+ * Called only for four independently confirmed opaque neighboring
+ * texels in eligible perspective-varying 3D world triangles. The game
+ * may still request transparency for an otherwise opaque world texture.
+ * Never interpolate across a keyed texel or on UI/HUD Z-planes.
  */
 #ifndef SCORCHED_MSI_WORLD_BILINEAR_H
 #define SCORCHED_MSI_WORLD_BILINEAR_H
