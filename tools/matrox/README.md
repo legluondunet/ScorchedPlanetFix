@@ -1188,8 +1188,10 @@ bounded **read-only video state and handle watcher**. Only with
 the originals `[0x0050DCC0]` and `[0x0050DCD0]` at existing
 safe MSI95 points: before/after original window callbacks,
 during heap alloc/free, and before/after frame presentation.
-It logs **only changes**, capped at 192 normal reports
-per session; exceptional state1+NULL transitions are always logged.
+It logs opens/closes, frame counter jumps and state1+NULL transitions
+without the previous ordinary-video-frame cap; sequential playback
+reports are sampled at frames 1..3 and every 60th (subject to a
+small normal-report budget).
 No extra game function calls, game memory writes or hooks.
 
 ```text
@@ -1219,10 +1221,11 @@ return `EXCEPTION_CONTINUE_SEARCH` and does not patch/skip
 exceptions.
 
 A standalone synthetic `msi_smack_lifecycle.h` classifier and
-`test_smack_lifecycle.c` exercise **11** cases: successful open,
+`test_smack_lifecycle.c` exercise **23** cases: successful open,
 normal close, suspected state1+NULL, state-only transitions,
-benign states, reopening, pointer replacement, and repeated
-nonchanges. This test is included in the same Windows CI that
+benign states, reopening, pointer replacement, repeated nonchanges, and preservation
+of late video close/open despite normal frame logging limits. This
+test is included in the same Windows CI that
 audits the real x86 MSI95 renderer and launcher. No original
 Smack DLL or OEM EXE is needed in CI.
 
