@@ -27,6 +27,9 @@ Dither=0\r\n\
 ; Render index241 black ONLY for fingerprint-verified original Matrox icon01 atlas\r\n\
 ; 0=unchanged/reference (default), 1=experimental title-icon fidelity A/B\r\n\
 Icon01Opaque=0\r\n\
+; Optional smoother 3D-only textures; original 1996 Mystique used nearest sampling\r\n\
+; 0=nearest / original (default), 1=bilinear on opaque varying-depth world only\r\n\
+WorldBilinear=0\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\

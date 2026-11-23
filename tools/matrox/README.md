@@ -853,3 +853,151 @@ baseline. Check all four source-241 icon backgrounds plus the
 unchanged index-1 icon backgrounds. Do not enable by default, merge,
 or assume exact original-driver RGB values without matching historical
 hardware reference.
+
+
+## Optional modern 3D bilinear texture filtering (2026-11-23; corrected after live owner test)
+
+**Modern opt-in enhancement, NOT original Mystique silicon.** The 1996
+Mystique used nearest texture sampling. `WorldBilinear=0` remains the
+unchanged default. `[Matrox] WorldBilinear=1` tests smoother world
+textures at an additional per-pixel CPU cost.
+
+### Critical correction after actual Windows gameplay (2026-11-23 12:05)
+
+The owner's genuine Windows-native runtime log
+`ScorchedPlanetFix(20261123-120532).log` with F12 quartets `0005`
+(frame 3390) and `0006` (frame 3591) revealed an unintended
+**zero-effect** implementation in the initial PR #55 build:
+
+```text
+WORLD_BILINEAR enabled=1 triangles=0
+WORLD_BILINEAR filtered_samples=0 changed_pixels=0
+PERSPECTIVE_UV enabled=1 triangles=453430
+PERSPECTIVE_UV adjusted_pixels=345493542
+```
+
+The originally overconservative restriction
+`!g_state.msiTexture.Transparency` excluded *every* eligible 3D
+terrain texture in this real session, even though the game requests
+transparency on these textures and their actual interior texels are
+opaque. The original 0005/0006 screenshots therefore remain
+nearest-neighbor despite the INI switch; **do not claim they visually
+validate bilinear**. This is corrected on the next branch commit.
+
+### Current filtering algorithm and safety
+
+- Only 8-bit indexed (CLUT) or 16-bit RGB565 **world** textured
+  triangles with valid **varying inverse-W across vertices**, valid
+  original cache binding and full `opacity=100`. No 4-bit palette,
+  untextured, Z-plane/HUD/text, constant-invW title icon quad, or
+  3dfx/GameFrame path can enter the filter.
+- UV interpolation, wrap/clamp, perspective and the original **nearest
+  center pixel's key/discard decision** are computed normally first.
+- Regardless of whether the game's state requests transparency,
+  retrieve the four RGB565 neighboring source samples. Only if **all
+  four taps are opaque under the current native RGB565 color-key,
+  optional indexed-source key and optional world-blue key** does the
+  filter blend their RGB565 channels with 8-bit fixed-point fractions.
+- **If any neighboring tap is color-keyed or transparency-discarded**,
+  do NOT blend it and preserve the original center nearest color.
+  Conservatively treat original index1 and icon01 black exemptions
+  as keys for the neighbor test, so silhouettes and icon edges cannot
+  acquire colored halos. Existing index1/icon01 center-pixel behavior
+  is unchanged.
+- No original EXE or textures are patched or copied. Color modulation
+  continues after filtering, as before. The existing 640x400 HUD, sparse
+  1024x1024 Z-plane atlas, icon01 title correction and native 3dfx
+  renderer all remain isolated.
+
+The runtime logs cumulative overdraw-inclusive stats:
+
+```text
+WORLD_BILINEAR enabled=1 triangles=N
+WORLD_BILINEAR filtered_samples=N changed_pixels=N
+WORLD_BILINEAR keyed_neighbor_bypass=N
+```
+
+`keyed_neighbor_bypass` quantifies safe nearest-neighbor fallbacks on
+would-be filterable 3D triangle pixels, not a count of missing art.
+
+Native Windows DLL smoke uses **18** original icon01/palette pixel
+cases plus **32** bilinear cases: filter 0/1 × 8/16 bpp × game
+transparency on/off × constant/varying invW × keyed-neighbor absent/
+present. The transparent-keyed neighbor must always force the
+reference nearest pixel, while opaque neighborhoods smooth even
+when the game's transparency flag is enabled. Zero copyrighted
+original texture assets.
+
+**Next user test:** one F12 in a playable terrain scene on this
+corrected experimental compilation (`WorldBilinear=1`,
+`Icon01Opaque=1`, `[Debug] Log=1`). The previous 0005/0006
+screens already provide useful *nearest* visual references but are
+not the same camera position as a prospective capture. The immediate
+acceptance check is that `WORLD_BILINEAR filtered_samples > 0` and
+`changed_pixels > 0` with sharp cockpit/HUD; only compare exact
+pixel differences if captured at the same game frame and viewpoint.
+Performance may be noticeably slower due to 4 texel reads per sample;
+return to `WorldBilinear=0` to recover original 1996 nearest look.
+
+### CPU optimization after native Windows #0007 validation (2026-11-23)
+
+The owner confirmed on native Windows that the corrected bilinear filter is
+**actually active** in playable 3D: `WorldBilinear=1`,
+445,661 eligible world triangles, **363,544,261 filtered samples**,
+**209,190,528** changed RGB565 sample colors, and **16,436**
+key-neighbor nearest fallbacks in the last periodic diagnostic snapshot.
+The HUD and cockpit Z-plane remain in their own native draw path.
+The session took 18.88 ms of renderer time per frame on average,
+versus 12.25 ms in an earlier *different* 3D session in which the
+filter had been a no-op. This suggests a possible significant CPU
+cost, **not a controlled same-scene speed measurement**.
+
+The optimized draft branch now improves only the inner filter hot path:
+
+- For an eligible **8-bit indexed world** triangle with projected
+  bounding rectangle at least **512** pixels, predecode its currently
+  bound, original **256-entry RGB565 CLUT** and a parallel 256-entry
+  *original key-aware opacity* table **once per triangle**, using the
+  current transparency flag, key/mask, optional source-index key and
+  optional blue-key fallback.
+- For every shaded sample, read four raw indices and use the two local
+  tables rather than decoding four RGB565 palette entries and
+  reevaluating four key predicates repeatedly.
+- For smaller triangles (and for all 16-bit RGB565 textures), retain
+  the previous directly decoded/color-key-checked path. This avoids
+  making tiny polygons pay for a full 256-entry CLUT predecode.
+- When the four opaque neighboring RGB565 colors are identical,
+  preserve the exact same result without doing twelve channel
+  multiplications. The `filtered_samples` and `changed_pixels`
+  counters retain their former meaning.
+- **No cross-triangle / global palette cache**: every eligible large
+  triangle re-reads the current palette. In particular, another
+  texture/CLUT upload or an original direct CLUT change cannot leave
+  stale cache entries affecting later triangles.
+- The **original nearest center key/discard check happens first**, and
+  every potential bilinear neighbor must still be opaque. The
+  existing `icon01`, original portrait index1 and cockpit/HUD
+  boundaries are unchanged; `WorldBilinear=0` remains default.
+
+Additional log counters:
+
+```text
+WORLD_BILINEAR palette_cached_triangles=N palette_cached_samples=N
+WORLD_BILINEAR uniform_neighborhood_samples=N
+```
+
+The expanded Windows MSI95 x86 **actual-DLL** regression exercises
+**18** existing palette/icon01 cases and **128** bilinear render cases:
+`WorldBilinear 0/1` × 8/16bpp × transparency off/on × varying/
+constant inverse-W × keyed-neighbor on/off × small/large geometry ×
+uniform/nonuniform source texel colors.
+Small triangles exercise the uncached path; large indexed triangles
+exercise predecoded local CLUT tables. Tests use only synthetic red,
+blue and keyed RGB565 texels, not original copyrighted textures.
+
+**Performance remains to be verified in actual gameplay** before
+claiming a measured FPS gain or merging. The correct minimal next step
+is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
+a F12 capture and the session timing summary. If the game is still
+too CPU-bound, do not enable bilinear by default; the historic Mystique
+nearest mode is always available.

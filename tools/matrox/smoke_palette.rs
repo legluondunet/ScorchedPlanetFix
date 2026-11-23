@@ -159,6 +159,9 @@ fn main() {
     std::env::set_var("MATROX_MSI_LOG", "0");
     std::env::set_var("MATROX_MSI_FPS_LIMIT", "0");
     std::env::set_var("MATROX_MSI_BORDERLESS", "0");
+    // Tests must never inherit a developer's optional keying settings.
+    std::env::set_var("MATROX_MSI_INDEXED_KEY", "0");
+    std::env::set_var("MATROX_MSI_WORLD_BLUE_KEY", "0");
     unsafe {
         let module = LoadLibraryA(b"msi95.dll\0".as_ptr());
         assert!(!module.is_null(), "Cannot load actual MSI95 x86 DLL");
@@ -263,7 +266,111 @@ fn main() {
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
         }
+        // Real x86 MSI95 smoke: interpolate only four fully opaque texels,
+        // even if the GAME sets Texture.Transparency=1 globally. Keep
+        // source-key neighbors fully crisp (never blend RGB565 key-black
+        // into terrain colors). Constant-invW menus remain nearest.
+        // All fixtures synthetic; no original game texture bytes.
+        for filter_on in [false, true] {
+            std::env::set_var("MATROX_MSI_WORLD_BILINEAR", if filter_on {"1"} else {"0"});
+            std::env::set_var("MATROX_MSI_ICON01_OPAQUE", "0");
+            let info = init(640,400,16,0,0,guest_wndproc);
+            assert!(!info.is_null(), "Cannot init world bilinear smoke");
+            let pitch=(*info).color.pitch as usize;
+            let framebuffer=std::slice::from_raw_parts_mut(
+                (*info).color.mem as *mut u16, pitch*400/2);
+            for planes in [8usize,16usize] {
+                for transparency in [false,true] {
+                    for varying in [false,true] {
+                    for keyed_neighbor in [false,true] {
+                    for small_geometry in [false,true] {
+                    for uniform_color in [false,true] {
+                        assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
+                        framebuffer.fill(GREEN);
+                        let mut texture=vec![0u8;128*128*(planes/8)];
+                        let mut lut=vec![0u8;512];
+                        lut[2*2]=(RED&255) as u8;lut[2*2+1]=(RED>>8) as u8;
+                        const BLUE:u16=0x001f;
+                        lut[2*3]=(BLUE&255) as u8;lut[2*3+1]=(BLUE>>8) as u8;
+                        for y in 0..128 {
+                            for x in 0..128 {
+                                let pos=y*128+x;
+                                let color=if uniform_color { BLUE }
+                                          else if x<64 { RED } else { BLUE };
+                                if planes==8{
+                                    texture[pos]=if uniform_color {3}
+                                                 else if x<64 {2} else {3};
+                                }else{
+                                    texture[2*pos]=(color&255) as u8;
+                                    texture[2*pos+1]=(color>>8) as u8;
+                                }
+                            }
+                        }
+                        if keyed_neighbor {
+                            // At U=0.5 the left bilinear tap x=63
+                            // becomes key-black; the selected NEAREST
+                            // center texel x=64 is still opaque blue.
+                            for y in [63usize,64usize] {
+                                let pos=y*128+63;
+                                if planes==8{texture[pos]=1;}
+                                else{texture[2*pos]=0;texture[2*pos+1]=0;}
+                            }
+                        }
+                        let params=Params{
+                            texture:TextureParams{
+                                enable:1,width:128,height:128,planes:planes as i32,
+                                mem:texture.as_mut_ptr(),heap:ptr::null_mut(),
+                                cache_offset:0,
+                                lut:Lut{
+                                    mem:if planes==8{lut.as_mut_ptr()}else{ptr::null_mut()},
+                                    heap:ptr::null_mut(),cache_offset:65536,
+                                },
+                                clamp_u:1,clamp_v:1,modulate:0,decal:0,
+                                transparency:i32::from(transparency),
+                                key_color:0,key_mask:0xffff,
+                                key_alpha:1,key_alpha_mask:0,
+                            },
+                            depth:DepthParams{enable:0,compare:0,protect:0},
+                            color:ColorParams{dither:0,protect:0},
+                        };
+                        assert_ne!(set(&params),0);
+                        let mut vertices=if small_geometry {
+                            // Bounding box 8x8, bypass the palette-table
+                            // setup: the direct RGB565 path must match.
+                            [Vertex::at(48.0,48.0),Vertex::at(56.0,48.0),
+                             Vertex::at(48.0,56.0)]
+                        }else{
+                            // Bounding box 50x50, use the palette-table
+                            // optimization for 8-bit indexed textures.
+                            [Vertex::at(40.0,40.0),Vertex::at(90.0,40.0),
+                             Vertex::at(40.0,90.0)]
+                        };
+                        if varying {vertices[1].inv_w=0.5;}
+                        assert_ne!(render(&vertices[0],&vertices[1],&vertices[2],100),0);
+                        let actual=framebuffer[50*pitch/2+50];
+                        let expected=if filter_on && varying {
+                            if keyed_neighbor && transparency {
+                                BLUE // color-keyed neighbor: original nearest
+                            } else if keyed_neighbor {
+                                0x0010 // opaque neighbor RGB565 black + blue
+                            } else if uniform_color {
+                                BLUE // four identical neighbors fast path
+                            } else {
+                                0x8010 // all four opaque: red + blue midpoint
+                            }
+                        }else{BLUE};
+                        assert_eq!(actual,expected,
+                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} small_geometry={} uniform_color={} expected {:#06x} got {:#06x}",
+                            filter_on,planes,transparency,varying,keyed_neighbor,small_geometry,uniform_color,expected,actual);
+                    }
+                    }
+                    }
+                    }
+                }
+            }
+            assert_ne!(exit(),0);
+        }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen real rasterized baseline/icon01-scoped keying cases");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + 128 real bilinear assertions (CLUT cache, direct path, uniform neighbors)");
     }
 }
