@@ -1126,3 +1126,114 @@ CI only one original Enter startup transition needs a repeat,
 checking that menu/game access is responsive, without the
 unnecessary three timeout delays. Do not enable or merge until
 the owner confirms the behavior on original game data.
+
+
+## Passive original Smacker video lifecycle tracing (2026-11-23)
+
+The original OEM `SPLANETW.EXE` and `SMACKW32.DLL` were examined
+locally from the **user-supplied original Matrox Mystique ISO**.
+These proprietary files are NEVER committed or distributed. Unlike
+an inference from a stack address, the original PE import/ordinal
+table and the original DLL's actual export names establish the full
+function identity of these OEM call targets:
+
+| OEM IAT slot | Original DLL ordinal | Export | Original DLL RVA |
+| --- | --- | --- | --- |
+| 0x006A5388 | 32 | `_SmackWait@4` | 0x2CF0 |
+| 0x006A538C | 19 | `_SmackDoFrame@4` | 0x4180 |
+| 0x006A5390 | 21 | `_SmackNextFrame@4` | 0x3EA0 |
+| 0x006A5394 | 18 | `_SmackClose@4` | 0x4560 |
+| 0x006A5398 | 14 | `_SmackOpen@12` | 0x4900 |
+
+Further local, read-only disassembly of the **original** game code
+and `smackw32.dll` confirms:
+
+- `SPLANETW.EXE:0x0046D110`: calls `SmackOpen`; return pointer is
+  stored directly into `[0x0050DCD0]`. The game tests for NULL.
+  After success and a valid video, at `0x0046D154` it sets
+  `[0x0050DCC0]=1` (an initial video-frame/state value).
+- `SPLANETW.EXE:0x0046D501`: calls `SmackClose(handle)` via
+  `[0x006A5394]`; `0x0046D50D` writes NULL to
+  `[0x0050DCD0]`. Another error/teardown path at
+  `0x0046D260` also calls `SmackClose` then clears the handle.
+- `SPLANETW.EXE:0x0046D540`: first reads `[0x0050DCC0]`.
+  If `1`, it skips `SmackWait` and calls
+  `SmackDoFrame(handle)`; then at `0x0046D572` reloads the
+  original handle and at `0x0046D578` immediately dereferences
+  `[handle+0x68]` without a new NULL check.
+- Crucially **original** `smackw32.dll:0x418A` explicitly tests
+  its handle argument for NULL, and when NULL, the original
+  `SmackDoFrame(NULL)` returns zero *without dereferencing it*.
+  The actual Windows AV thus occurs **in original game logic,
+  after returning from the native Smacker function**. It is not
+  inside the DLL and not inside our optional world bilinear code.
+- The owner's genuine `splanetw.exe.15092.dmp` confirms
+  `[0x0050DCC0]=1`, `[0x0050DCD0]=NULL`,
+  `ECX=0`, `EIP=0x0046D578`, AV read at `0x68`.
+  The owner's subsequent successful native Windows sessions show
+  normal transient handle NULL with states 2, 5, 6 and 7.
+  Such NULL values cannot alone justify delaying input or
+  manipulating game state.
+
+The precise *why* remains unproven: nested/reentrant game
+callback, interrupted closure or startup state synchronization
+could explain how the game update routine is reached with a
+cleared handle; one minidump does not prove the ordering.
+
+### New passive instrumentation
+
+A **standalone diagnostic branch stacked on draft #56** adds a
+bounded **read-only video state and handle watcher**. Only with
+`[Debug] Log=1` and exact OEM instruction signature(s), it samples
+the originals `[0x0050DCC0]` and `[0x0050DCD0]` at existing
+safe MSI95 points: before/after original window callbacks,
+during heap alloc/free, and before/after frame presentation.
+It logs **only changes**, capped at 192 normal reports
+per session; exceptional state1+NULL transitions are always logged.
+No extra game function calls, game memory writes or hooks.
+
+```text
+SMACK_IAT module_base=... SmackWait=... SmackDoFrame=... SmackNextFrame=... SmackClose=... SmackOpen=...
+SMACK_IAT original_oem_rva_match=1
+SMACK_LIFECYCLE phase=... frame=... elapsed_ms=... flags=N prev_state=N state=N prev_handle=... handle=... callback_depth=N last_input=... last_input_age_ms=N
+SMACK_HANDLE_FIELDS handle=... width=N height=N frame_count=N palette_field_0x68=...
+SMACK_STATE1_NULL_OBSERVED frame=N heap_age_ms=N event_number=N
+SMACK_LIFECYCLE total_changes=N state1_null_transitions=N
+```
+
+`SMACK_LIFECYCLE flags` is 1 if only state changes,
+2 if only handle changes, 3 for both; add bit 4 if a
+*newly observed* `state=1,handle=NULL` transition.
+A NULL observation **is not equivalent** to a proven impending
+crash and never changes renderer or input behavior.
+Before reading handle struct fields, it checks all 0x6C bytes
+for readable memory and never dereferences NULL. Original
+input last-message age, callback depth and elapsed time
+correlate the video transition without direct function hooking.
+
+On one of the two known original Smacker-dereference AV addresses,
+an enhanced **passive VEH** also emits
+`SMACK_AV_LAST_SNAPSHOT` with the last sampled state, handle,
+age and number of state1+NULL events. The VEH continues to
+return `EXCEPTION_CONTINUE_SEARCH` and does not patch/skip
+exceptions.
+
+A standalone synthetic `msi_smack_lifecycle.h` classifier and
+`test_smack_lifecycle.c` exercise **11** cases: successful open,
+normal close, suspected state1+NULL, state-only transitions,
+benign states, reopening, pointer replacement, and repeated
+nonchanges. This test is included in the same Windows CI that
+audits the real x86 MSI95 renderer and launcher. No original
+Smack DLL or OEM EXE is needed in CI.
+
+**Minimal owner validation:** on the new experimental Windows
+package, use the normal Matrox intro → menu → game → exit sequence
+with `[Debug] Log=1`, then send **only the runtime log**.
+The existing world/atlas F12 captures need not be repeated.
+Look for `SMACK_IAT original_oem_rva_match=1`,
+`SMACK_LIFECYCLE` transitions, and optionally a specific
+`SMACK_STATE1_NULL_OBSERVED` event if it actually arises.
+Do not repeatedly trigger crashes on purpose. This
+instrumentation is not itself a crash fix; #56 remains
+a conservative, unproven timing hypothesis and all PRs stay
+draft/unmerged until the owner reviews the evidence.
