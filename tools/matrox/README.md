@@ -1202,3 +1202,81 @@ The source uses only the Python standard library and the existing
 modified.** This is evidence triage, not a runtime fix. Never assume
 a screenshot showing a smaller/different HUD is a renderer bug unless
 its original game's view mode and HUD state are also confirmed.
+
+## F12 last MSI shadow ownership — isolated experiment (2026-11-23)
+
+The owner's **22-minute** Wine 11.19 stress log `ScorchedPlanetFix(20261123-190700).log`
+shows a notable split at **frame 59,400**:
+
+- `SHADOW_UNDERLAY candidates_with_texture=3450362054`
+- `SHADOW_UNDERLAY no_texture=3401080838`
+- `SHADOW_ONCE repeated_samples=15359434`
+- `SHADOW_BLEND dark_flat_pixels=2571835030` (**one UINT32 rollover**).
+
+The exact accounting identity is:
+
+```text
+3,450,362,054 + 3,401,080,838 + 15,359,434
+ = 6,866,802,326
+ = 2,571,835,030 + 4,294,967,296
+```
+
+These are **overdraw-inclusive dark-flat sample attempts**, not
+3.4 billion visually missing pixels. They confirm that the existing
+`ShadowOnce=1` rasterizer often encounters the original
+`RGB565=0x0841` flat-dark triangles with **no previously recorded
+textured world fragment at that pixel**. The existing code draws such
+candidates **opaque**. This might explain some dark stains, or it might
+be original intended untextured shading, sky/background drawing, or
+world-order state. A source sample alone cannot settle it.
+
+### One extra, read-only, per-F12 capture
+
+The experimental MSI95 DLL on [draft PR #65](https://github.com/legluondunet/ScorchedPlanetFix/pull/65)
+writes one fifth BMP, alongside the original same-serial quartet:
+`matrox_capture_XXXX_shadow.bmp` (640×400, 16-bit RGB565 BI_BITFIELDS).
+The previous four BMPs remain byte-compatible. The fifth image tracks
+**ONLY THE LAST SUCCESSFUL MSI WRITE**, not attempted or repeated
+skipped shadows:
+
+| Color | Last-write category |
+| --- | --- |
+| Black | Other final MSI draw; or no successful MSI draw |
+| Green | Dark-flat shadow blended to 50% over a recorded textured world base |
+| Red | Dark-flat shadow drawn opaque with no recorded textured world base |
+| Yellow | Other dark-flat draw with recorded textured base |
+| Cyan | Other dark-flat draw with no recorded textured base |
+| Magenta | Unusual prior-blend state |
+
+A later world texture, flat non-shadow, or Z-plane overwrites the
+shadow-origin tag, exactly as it overwrites the F12 owner map. Repeated
+skipped dark-flat samples do not overwrite the earlier tag. A
+`SHADOW_CAPTURE OK file=… blended_with_textured_base=…
+opaque_no_textured_base=…` line confirms the fifth bitmap was emitted.
+
+**No shadow/blend/color/key behavior changes.** All shadow metadata is
+allocated optionally (256 KiB at 640×400), zeroed and written only for
+the one frame explicitly requested by F12. Normal gameplay samples
+have no instrumentation writes.
+
+For the new offline cross-layer analyzer (Python standard library only):
+
+```text
+python tools/matrox/analyze_shadow_capture.py captures/matrox_capture_0008 --json
+python tools/matrox/analyze_shadow_capture.py captures/matrox_capture_0008 --roi 100,80,540,260 --min-region-pixels 12
+python tools/matrox/test_analyze_shadow_capture.py
+```
+
+The tool validates all **five same-serial bitmaps**, color constants,
+screen size, ROI, and shadow-vs-coverage ownership consistency; lists
+4-connected native-pixel regions for shadow-with/without-underlay; and
+refuses a legacy four-layer screenshot rather than fabricating values.
+The Windows CI uses **synthetic** RGB565 fixtures only, no game assets.
+
+**Interpretation guard:** A red pixel means the last world MSI draw
+was a dark-flat `0x0841` candidate with no prior *recorded textured*
+underlay, **not** that the pixel is incorrect. Original software CPU
+writes or deliberately untextured background geometry remain possible.
+Only an authentic same-scene Mystique-driver reference can justify
+changing this renderer rule. Original 1996 nearest sampling stays the
+default, no extra postfilter is introduced.
