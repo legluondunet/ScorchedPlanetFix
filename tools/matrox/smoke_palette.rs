@@ -420,6 +420,76 @@ fn main() {
             }
             assert_ne!(exit(),0);
         }
+        // Native x86 real-pixel test of the common [0,1) UV fast path.
+        // Expected coordinates always use the ORIGINAL floor-based wrap.
+        // Exercise independent U and V tiling, fractional/negative/outside
+        // values, 1.0 seam and clamped source coordinates. This uses synthetic
+        // pixel indices only; no original OEM game/media content.
+        std::env::set_var("MATROX_MSI_WORLD_BILINEAR","0");
+        let info=init(640,400,16,0,0,guest_wndproc);
+        assert!(!info.is_null(),"Cannot init real UV wrap smoke");
+        let pitch=(*info).color.pitch as usize;
+        let framebuffer=std::slice::from_raw_parts_mut(
+            (*info).color.mem as *mut u16,pitch*400/2);
+        let mut texture=vec![0u8;8*8];
+        let mut lut=vec![0u8;512];
+        const UV_COLORS:[u16;3]=[0xf800,0x07e0,0x001f];
+        for i in 0..3 {
+            lut[2*(i+2)]=(UV_COLORS[i]&0xff) as u8;
+            lut[2*(i+2)+1]=(UV_COLORS[i]>>8) as u8;
+        }
+        for y in 0..8usize {
+            for x in 0..8usize {
+                // Match x=0 and x=7 so floating point interpolation near
+                // exactly u=1.0 remains visually seam-safe on x86 SSE.
+                texture[y*8+x]=2+((x%7+3*y)%3) as u8;
+            }
+        }
+        let mut vertices=[
+            Vertex::at(40.0,40.0),Vertex::at(90.0,40.0),
+            Vertex::at(40.0,90.0),
+        ];
+        let mut uv_assertions=0usize;
+        for clamp in [false,true] {
+            assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
+            let params=Params {
+                texture:TextureParams {
+                    enable:1,width:8,height:8,planes:8,
+                    mem:texture.as_mut_ptr(),heap:ptr::null_mut(),
+                    cache_offset:0,
+                    lut:Lut {mem:lut.as_mut_ptr(),heap:ptr::null_mut(),cache_offset:65536},
+                    clamp_u:i32::from(clamp),clamp_v:i32::from(clamp),
+                    modulate:0,decal:0,transparency:0,
+                    key_color:0,key_mask:0xffff,key_alpha:1,key_alpha_mask:0,
+                },
+                depth:DepthParams {enable:0,compare:0,protect:0},
+                color:ColorParams {dither:0,protect:0},
+            };
+            assert_ne!(set(&params),0);
+            for &u in &[-2.8125f32,-1.1875,-0.8125,-0.1875,-0.0,
+                         0.0,0.1875,0.4375,0.8125,1.0,1.1875,2.4375] {
+                for &v in &[-1.1875f32,-0.1875,0.1875,0.6875,1.1875] {
+                    for vertex in &mut vertices { vertex.u=u; vertex.v=v; }
+                    framebuffer.fill(0x39e7);
+                    assert_ne!(render(&vertices[0],&vertices[1],&vertices[2],100),0);
+                    // Independent mathematical floor reference, never using
+                    // or calling the optimized native helper under test.
+                    let uu=if clamp {u.clamp(0.0,1.0)}else{u-u.floor()};
+                    let vv=if clamp {v.clamp(0.0,1.0)}else{v-v.floor()};
+                    let tx=((uu*8.0) as usize).min(7);
+                    let ty=((vv*8.0) as usize).min(7);
+                    let sample=texture[ty*8+tx] as usize-2;
+                    let expected=UV_COLORS[sample];
+                    assert_eq!(framebuffer[50*pitch/2+50],expected,
+                               "UV wrap real DLL clamp={} u={} v={} tx={} ty={}",
+                               clamp,u,v,tx,ty);
+                    uv_assertions+=1;
+                }
+            }
+        }
+        assert_ne!(exit(),0);
+        assert_eq!(uv_assertions,120);
+        println!("MSI95_UV_WRAP_SMOKE_PASS 120 synthetic real-DLL pixel assertions (nearest, clamp/wrap, negatives, unit seam, tiling)");
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
         println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + 128 real bilinear assertions; triangle vertex same-region, distinct-region and invalid-memory checks");
     }
