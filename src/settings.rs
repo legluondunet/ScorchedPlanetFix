@@ -313,7 +313,7 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
+            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,smacker_cancel_guard:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
