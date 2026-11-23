@@ -760,8 +760,8 @@ runtime uploaded texture by a stable original-resource fingerprint
 rather than a volatile heap pointer or guessed CLUT offset.
 A candidate fingerprint of the first original `icon01` 16,384
 index bytes is SHA-256
-`cad6863404701573b121cc4e5c37c5700c25e3b4672895a9a17b75d5f2aebbee`
-(**verify before hardcoding**: the source atlas must be matched against
+`cad68634047015739d69bcbd42fb20028c9191bab4b1c3e09a1b51b045bc14b7`
+(computed from the actual owner's original ISO; the source atlas must be matched against
 the runtime uploaded bytes; do not assume identity blindly).
 Do not modify or redistribute the original game atlas, and do not
 enable a new rendering rule without testing the full game.
