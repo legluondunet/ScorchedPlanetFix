@@ -1081,3 +1081,48 @@ both known game-global dereference sites without altering the
 exception context. Avoid repeating F12 gameplay tests until the
 startup transition is stable; restore the prior known playable
 artifact if needed.
+
+### Real native Windows follow-up, 13:28: narrower video-state gate
+
+The owner's new full `ScorchedPlanetFix(20261123-132828).log`
+confirms the initial PR #56 build **did not crash**. It ran
+**624 frames / 103,582 triangles / 12,855 Z-plane calls**,
+then shut down cleanly after **15,625 ms** with **zero live
+texture allocations**, no `FIRST_CHANCE_AV`.
+
+However, the initial scene-pointer-only input hold was triggered
+**three times** and all three ended in **1.5 s timeout with the
+pointer still zero**. It deferred **184** message-pump attempts
+cumulatively. The runs' normal renderer kept functioning:
+- frame **35→105**: after normal menu loading; prior original
+  `[0050DCC0]` state observed as **2** at frame 31;
+- frame **367→412**: during Z-plane/3D load, after an earlier
+  original `[0050DCC0]` state observed as **5** at frame 259;
+- frame **464→533**: another title/menu transition; no fatal AV.
+
+The previous genuine **crash dump** and failure log, by contrast,
+show `[0050DCC0]=1` at the exact original Smacker dereference
+`0x0046D578` while `[0050DCD0]=NULL`. The original game's
+state-1 branch executes `smackw32.dll` logic then reads
+`[scene+0x68]`. This is a much stronger differentiator than
+`scene=NULL` alone. **A clean session does not establish that
+holding keys caused its success.** Moreover repeated 1.5s
+timeouts are an undesirable UX cost.
+
+The revised draft guard therefore demands **video state exactly
+1** in addition to unchanged OEM byte signatures, recent real
+texture allocation, NULL scene pointer and 1500ms upper bound.
+The original owner source-attributed state2/state5 transitions
+are explicitly excluded. Status is now logged on release;
+queued Win32 messages remain unmodified, with no game-EXE edits.
+This narrowing still does **not** prove whether the actual cause
+is the timing of input events or the original Smacker object's
+lifetime and closing semantics.
+
+The freestanding synthetic regression expands from **10 to 12**
+predicate cases including explicit rejection of statuses 2 and 5,
+then compiles as part of the normal Windows build. After a green
+CI only one original Enter startup transition needs a repeat,
+checking that menu/game access is responsive, without the
+unnecessary three timeout delays. Do not enable or merge until
+the owner confirms the behavior on original game data.
