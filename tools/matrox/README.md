@@ -1001,3 +1001,83 @@ is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
 a F12 capture and the session timing summary. If the game is still
 too CPU-bound, do not enable bilinear by default; the historic Mystique
 nearest mode is always available.
+
+## Input-pump deferral during null-scene reload (23 November 2026; startup AV mitigation)
+
+The owner reported a **real native Windows access violation** immediately
+after pressing Enter to leave the introductory screen, from the
+experimental optimized-bilinear 2026-11-23 build. The original
+`ScorchedPlanetFix(20261123-130517).log` shows:
+
+```text
+WIN32_INPUT msg=0x00000100 wparam=0x0000000D count=1  [Enter KeyDown, frame ~297]
+GAME_GLOBAL_50DCD0 phase=texture_alloc frame=298 ptr=0x00000000 prior_ptr=0x01550940
+HEAP_ALLOC elapsed_ms=12000 frame=298
+WIN32_INPUT msg=0x00000102 wparam=0x0000000D count=2  [Enter WM_CHAR, frame 301]
+WIN32_INPUT msg=0x00000101 wparam=0x0000000D count=3  [Enter KeyUp, frame 301]
+FIRST_CHANCE_AV ... ip=0x0046D578 operation=0 address=0x00000068
+AV_REGISTERS ... ecx=0x00000000 ... elapsed_ms=12094
+AV_INPUT_CONTEXT endframe_depth=0 guest_callback_depth=0 last_msg=0x00000101 last_frame=301 last_msg_age_ms=47
+```
+
+The original OEM bytes at `0x0046D572` are
+`8B 0D D0 DC 50 00 8B 41 68`, i.e. it loads the original
+game's pointer at `[0050DCD0]` into ECX and dereferences ECX+0x68.
+The scene pointer had been observed NULL during the heap transition.
+This is a confirmed **game** null-pointer dereference, not a bilinear
+fragment-shader fault: `WORLD_BILINEAR triangles=0,
+filtered_samples=0` before the crash. Its deeper root cause in
+the original game's transition sequencing is **not yet proven**;
+the Enter keyup is temporally correlated, not proof of causality.
+
+### Narrow mitigation, no game EXE patch or input loss
+
+At the *outermost* MSI95 preview Win32 message pump, check **before
+each PeekMessage with PM_REMOVE** whether all of these conditions hold:
+- the OEM executable exhibits the exact instruction signatures at
+  `0x0046D572` and older `0x0046D761/0x0046D76D`, not a different EXE;
+- MSI renderer initialized, at least one original game texture heap
+  remains allocated and its most recent allocation was within
+  **1,500 ms** according to wrap-safe GetTickCount difference;
+- the original scene-global pointer at `0x0050DCD0` is readable
+  and currently **NULL**.
+
+While this strict combination holds, **leave all Win32 messages
+unchanged in the Windows queue** instead of discarding translated
+Enter WM_CHAR/WM_KEYUP during the transient scene gap. The
+condition is reevaluated after every original guest callback:
+a KeyDown can synchronously release a scene while the same message
+pump is still active. Once the pointer is rebuilt, resume the
+original pump, including key ordering. Fail open after 1,500 ms,
+logging a timeout instead of hanging indefinitely. No extra
+polling loops, modifications to game globals, EXE byte patches or
+changes to normal input, original Z-plane/HUD, GameFrame 3dfx,
+texture filters or FPS cap.
+
+Useful runtime records (Debug Log=1):
+```text
+TRANSITION_INPUT_HOLD_BEGIN frame=N heap_age_ms=N
+TRANSITION_INPUT_HOLD kept_win32_queue_intact=1 scene_global=0x00000000
+TRANSITION_INPUT_HOLD_RELEASE frame=N heap_age_ms=N
+TRANSITION_INPUT_HOLD_RELEASE scene_global=0x...
+TRANSITION_INPUT_HOLD_TIMEOUT scene_global_still_null; original_input_delivery_resumed
+AV_GAME_GLOBAL_50DCD0 path=ECX_plus_0x68 ...
+```
+
+A freestanding `msi_transition_hold.h` predicate is checked by
+`test_transition_hold.c` with **10 deterministic tests** for observed
+~94 ms transition timing, 1,500ms boundary, non-OEM signature,
+uninitialized renderer, absent heaps, restored scene, stale state,
+and tick wraparound. The Windows MSI95 x86 compile and previous
+146 synthetic rasterization tests remain unchanged. **These are
+algorithmic tests, not a reproduced in-game crash test.**
+
+Minimal live acceptance: on the new Windows experimental build, use
+the same Matrox OEM and the same one-key **Enter to main menu** action;
+send only the runtime log. A successful main menu and matching
+`TRANSITION_INPUT_HOLD_BEGIN`/`RELEASE` are useful confirmation.
+If the game still crashes, the now extended AV capture identifies
+both known game-global dereference sites without altering the
+exception context. Avoid repeating F12 gameplay tests until the
+startup transition is stable; restore the prior known playable
+artifact if needed.
