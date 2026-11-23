@@ -1028,3 +1028,25 @@ logged over 350k triangles in 900 frames without bilinear), but actual gains
 must be confirmed on Windows with matching scenes. This is not a cure for
 missing Matrox image regions, transparency, slow per-pixel CPU rasterization or
 intermittent original Smacker faults. Keep this PR draft until runtime tested.
+
+## Experimental in-range UV normalization fast path (software rasterizer)
+
+The original nearest texture path wraps each non-clamped UV pixel coordinate with
+`u = u - floor_clipped(u)`. Most interpolated coordinates in world and menu
+geometry are already within `[0,1)`, where the original floor is exactly
+zero. This experimental fast path returns those coordinates directly and keeps
+the original floor logic **unchanged** for negative, exact-one, tiled and
+otherwise out-of-range UVs. For clamped textures it retains the original
+clamp branch; depth, color-key, palette, modulation, bilinear, Z-plane,
+Smacker and game assets are unmodified.
+
+The real x86 MSI95 DLL smoke exercises **120 additional synthetic RGB565
+pixel assertions**, comparing the rendered 8-bit texture output with an
+independent floor-wrap reference for positive, negative, tiled, seam and
+clamped U/V coordinates. The tests also sample varying synthetic colors in
+both texture axes. No 1996 copyrighted pixels are embedded.
+
+As with the vertex-region optimization, **pixel correctness is not a speed
+measurement**: an ON/OFF same-scene benchmark on the same host is necessary
+before claiming a performance gain. Keep this stacked experimental PR
+in draft pending Windows/Wine runtime validation.
