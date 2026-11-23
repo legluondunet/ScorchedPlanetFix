@@ -1028,3 +1028,66 @@ logged over 350k triangles in 900 frames without bilinear), but actual gains
 must be confirmed on Windows with matching scenes. This is not a cure for
 missing Matrox image regions, transparency, slow per-pixel CPU rasterization or
 intermittent original Smacker faults. Keep this PR draft until runtime tested.
+
+## 2026-11-23: Separate 3D shadow darkness from texture and HUD ownership
+
+The original user stress log `ScorchedPlanetFix(20261123-190700).log`
+contains **204** complete shadow/frame snapshots through frame **59,400**
+(22-minute Wine 11.19 session ended normally at 59,482 frames).
+After reconstructing *actual* unsigned-32-bit counters (one rollover
+in `dark_flat_pixels`), the shader's per-pixel branch accounting is:
+
+| Final accounting class | Overdraw-inclusive samples | Share |
+| --- | ---: | ---: |
+| Dark-flat untextured source `0x0841`, candidates | **6,866,802,326** | 100% |
+| 50% dark blend, previously textured transparent-capable world | **3,450,362,054** | 50.247% |
+| No final textured underlay recognized in same-frame map | **3,401,080,838** | 49.529% |
+| Repeated shadow pass, intentionally skipped | **15,359,434** | 0.224% |
+| Shadow blend over nontransparent/opaque world underlay | **0** | 0% |
+
+**Conservation: 3,450,362,054 + 3,401,080,838 + 15,359,434
+= 6,866,802,326, exactly**. Every one of the **203** consecutive
+frame intervals satisfies this equality; the shadow blend total also
+matches the underlay's `candidates_with_texture` and
+`transparent_texture` counters. There are no hidden missing
+candidates or mismatched duplicate shadow writes in the telemetry.
+
+Notably, some very dark-world intervals have **84.66%** of dark-flat
+samples without a tracked textured underlay (frames **41,400–41,700**,
+48,282,056 candidate samples). Another scene (frames **8,400–8,700**)
+has only **0.07%** without it. This is **scene-dependent**; neither
+case alone is proof of a defect. The no-base category means only that
+the last MSI write **in the custom shadow-underlay map** is not an
+eligible textured world pixel, not that nothing was drawn, the game
+requested an invalid operation, or the real Mystique would show a
+different dark patch. Repeated overdraw and changing camera/terrain
+can explain much of this behavior.
+
+**Rendering behavior matters:** `ShadowOnce` is an *experimental*
+optional heuristic for game triangles of flat RGB565 **0x0841**.
+It only blends 50% against a same-frame textured underlay, skips
+repeated overlays at the same pixel, and falls back to original
+opaque rendering for no-base pixels. Exact historic MSI95 blending
+has not been verified on real Matrox silicon; do not alter or enable
+this mode globally based on the counts alone.
+
+The new **read-only** `analyze_shadow_telemetry.py` computes shadow
+candidate conservation per 300-frame snapshot interval, reconstructs
+only credible near-boundary UINT32 counter rollovers, and flags
+resets/violations instead of drawing unsupported conclusions. It
+separates 50% blends, without-underlay, repeated shadows and opaque
+underlay ownership. It also reports the most no-base-heavy period.
+
+```text
+python tools/matrox/analyze_shadow_telemetry.py "ScorchedPlanetFix(20261123-190700).log" --json
+python tools/matrox/test_analyze_shadow_telemetry.py
+```
+
+The user's original log is not committed; CI exercises synthesized
+counter transitions only. There are **zero MSI95 DLL, game, installer,
+configuration, default filter or rendering changes** in this branch.
+Next genuinely useful fidelity evidence is a **same-view original
+Mystique-driver capture vs modern runtime F12** where a 3D dark patch
+or projected shadow is specifically different. Only then consider
+scoped correction; a missing textured underlay in diagnostics does not
+authorize speculative texture/alpha changes.
