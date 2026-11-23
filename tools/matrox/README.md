@@ -987,9 +987,10 @@ WORLD_BILINEAR uniform_neighborhood_samples=N
 ```
 
 The expanded Windows MSI95 x86 **actual-DLL** regression exercises
-**18** existing palette/icon01 cases and **64** bilinear render cases:
+**18** existing palette/icon01 cases and **128** bilinear render cases:
 `WorldBilinear 0/1` × 8/16bpp × transparency off/on × varying/
-constant inverse-W × keyed-neighbor on/off × small/large geometry.
+constant inverse-W × keyed-neighbor on/off × small/large geometry ×
+uniform/nonuniform source texel colors.
 Small triangles exercise the uncached path; large indexed triangles
 exercise predecoded local CLUT tables. Tests use only synthetic red,
 blue and keyed RGB565 texels, not original copyrighted textures.
