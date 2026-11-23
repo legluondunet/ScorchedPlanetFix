@@ -22,4 +22,21 @@ static unsigned msi_smack_change_mask(unsigned before_state,
         change|=MSI_SMACK_EVENT_STATE1_NULL;
     return change;
 }
+/* Always preserve opens/closes, suspicious first-frame NULL and
+ * frame-index jumps/restarts. Ordinary consecutive video frames need
+ * only a few early samples plus one every 60 Smacker frames. The
+ * ceiling applies only to ordinary frame samples, NEVER to important
+ * handle changes or exceptional state transitions. */
+static int msi_smack_should_log(unsigned event,unsigned old_index,
+                                unsigned new_index,unsigned emitted) {
+    if(event&(MSI_SMACK_EVENT_HANDLE_CHANGED|MSI_SMACK_EVENT_STATE1_NULL))
+        return 1;
+    if(!(event&MSI_SMACK_EVENT_STATE_CHANGED))return 0;
+    if(old_index==0xffffffffu || new_index!=old_index+1u)
+        return 1;
+    if(new_index<=3u || new_index%60u==0u)
+        return emitted<64u;
+    return 0;
+}
+
 #endif
