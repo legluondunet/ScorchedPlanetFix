@@ -1143,3 +1143,62 @@ synthetic; no owner's images are used in CI.
 montage alone. Instead, find an independently verified same-scene
 Mystique-vs-current capture showing a **specific, still discrepant
 border segment** and compare it after geometry normalization.
+
+## Cross-scene F12 HUD/Z-plane ownership (2026-11-23)
+
+The owner's **three actual 640x400 gameplay quartets**, `matrox_capture_0005`,
+`0006`, and `0007`, come from different camera directions and (for 0007)
+an active modern optional world filter. These are **NOT** same-camera,
+same-frame 3D image comparisons. However, original MSI95's screen-aligned
+Z-plane HUD can be checked separately: native F12 `_coverage.bmp`
+category 5 or 6 means the last MSI write in that pixel was a Z-plane.
+
+**Direct audit of original user-provided BMP bytes:**
+
+| Sample | Final Z-plane/HUD pixels | Final Z-plane mask vs 0005 | RGB565 changes within shared HUD |
+| --- | ---: | ---: | ---: |
+| 0005, nearest | 122,948 | reference | — |
+| 0006, nearest | 122,948 | **0 changed coordinates** | **88 / 122,948** |
+| 0007, active world bilinear | 122,948 | **0 changed coordinates** | **82 / 122,948** |
+
+All three maps also classify **101,367** last-attempt *unmarked
+nonzero atlas* pixels and **24,801** last-attempt unmarked-zero skips,
+including **8,586** skipped-zero last attempts **over pixels which
+ultimately have an actual final Z-plane write**. Last-attempt zero
+does not mean that the final HUD was erased: overlapping later and
+earlier Z-plane draws can cover the pixel. The current F12 maps record
+no last MSI `hud_missing_texel` ownership in these three frames.
+
+**Practical conclusion:** The *last-write HUD ownership mask is fully
+stable* across three **distinct camera views**; the active world-only
+bilinear does not cause observed HUD geometry or alpha coverage changes
+in these captures. This does **NOT** prove authentic original Matrox
+fidelity, rule out missing elements in other gameplay scenes, or
+establish that the RGB565 pixels match a vintage Mystique VM reference.
+Only same-geometry reference pictures and correct GUI/HUD game state
+can answer that.
+
+The new offline `compare_hud_captures.py` makes the comparison
+repeatable on any two or more same-serial F12 quartets, **including
+different world-camera positions**, without treating changed world
+colors as missing HUD pixels:
+
+```text
+python tools/matrox/compare_hud_captures.py captures/matrox_capture_0005 captures/matrox_capture_0006 captures/matrox_capture_0007 --json
+python tools/matrox/compare_hud_captures.py captures/matrox_capture_0005 captures/matrox_capture_0007 --roi 218,250,420,400
+python tools/matrox/test_compare_hud_captures.py
+```
+
+It counts final HUD ownership, black HUD, last-attempt atlas zero over
+already written HUD versus zero without final HUD write, and
+key/missing-texel-only classes. It reports mask symmetric differences
+and *exact* RGB565 differences restricted to the overlapping final
+HUD mask. It validates exact quartet dimensions and rejects duplicate
+source prefixes, invalid RGB565 diagnostic colors and invalid ROIs.
+The source uses only the Python standard library and the existing
+`analyze_f12_capture.py`; synthetic CI tests require no 1996 assets.
+
+**No game DLL, EXE, INI, texture, cache, filter or frame output is
+modified.** This is evidence triage, not a runtime fix. Never assume
+a screenshot showing a smaller/different HUD is a renderer bug unless
+its original game's view mode and HUD state are also confirmed.
