@@ -196,6 +196,11 @@ static BYTE *g_ownership = NULL;
 static BYTE *g_atlas_provenance=NULL;
 /* F12-only last ordinary world-texture sample, never used for rendering. */
 static BYTE *g_world_provenance=NULL;
+/* F12 only: final MSI shadow-write origin; never read by the rasterizer.
+ * 1=blended with textured base, 2=opaque without textured base,
+ * 3=other dark-flat with base, 4=other dark-flat without base,
+ * 5=unexpected prior-blend sentinel. 0=other final MSI writer. */
+static BYTE *g_shadow_provenance=NULL;
 /* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
  * value matched the hardware color key. This is not a pixel-coverage map:
  * overdraw and triangle overlap can count a texel more than once. */
@@ -1110,9 +1115,11 @@ static void clean(void){
     if(g_ownership)VirtualFree(g_ownership,0,MEM_RELEASE);
     if(g_atlas_provenance)VirtualFree(g_atlas_provenance,0,MEM_RELEASE);
     if(g_world_provenance)VirtualFree(g_world_provenance,0,MEM_RELEASE);
+    if(g_shadow_provenance)VirtualFree(g_shadow_provenance,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
     g_ownership=NULL;g_atlas_provenance=NULL;g_world_provenance=NULL;
+    g_shadow_provenance=NULL;
     g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
@@ -1148,7 +1155,7 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world){
+static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
@@ -1156,15 +1163,17 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world){
         capture_name(coverage,serial,"_coverage.bmp");
         capture_name(atlas,serial,"_atlas.bmp");
         capture_name(world,serial,"_world.bmp");
+        capture_name(shadow,serial,"_shadow.bmp");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
         int atlas_exists=capture_file_present(atlas);
         int world_exists=capture_file_present(world);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0){
+        int shadow_exists=capture_file_present(shadow);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1537,6 +1546,65 @@ static void capture_world_provenance(const char *filename){
     }
 }
 
+/* Shadow-write origins are F12-only metadata. The last actual MSI write
+ * owns the pixel, even when earlier shadow polygons were overdrawn.
+ * Unlike shadow histogram attempts, this map can localize visible stains. */
+static void capture_shadow_provenance(const char *filename){
+    if(!g_manual_capture_active || !g_initialized || !g_shadow_provenance ||
+       g_info.msiColor.BytesPerPixel!=2 || g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width || width>4096u || !height || height>4096u ||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n || n>=1023)return;
+    DWORD i=n;while(i>0 && path[i-1]!='\\' && path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k] && i+k<1022){path[i+k]=filename[k];k++;}
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("SHADOW_CAPTURE WRITE ERROR: open failed");return;}
+    const unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned counts[6];{
+        volatile unsigned *p=(volatile unsigned*)&counts[0];
+        for(unsigned c=0;c<6u;c++)p[c]=0u;
+    }
+    static const WORD colors[6]={0x0000u,0x07E0u,0xF800u,
+                                  0xFFE0u,0x07FFu,0xF81Fu};
+    for(unsigned y=0;y<height && ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_shadow_provenance[y*width+x];
+            if(kind>5u)kind=0u;
+            counts[kind]++;
+            row[x]=colors[kind];
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[400];DWORD p=0;
+    putstr(msg,&p,ok?"SHADOW_CAPTURE OK file=":"SHADOW_CAPTURE WRITE ERROR file=");
+    putstr(msg,&p,filename);
+    putstr(msg,&p," frame=");putunsigned(msg,&p,g_frames);
+    putstr(msg,&p," blended_with_textured_base=");putunsigned(msg,&p,counts[1]);
+    putstr(msg,&p," opaque_no_textured_base=");putunsigned(msg,&p,counts[2]);
+    putstr(msg,&p," other_dark_with_base=");putunsigned(msg,&p,counts[3]);
+    putstr(msg,&p," other_dark_no_base=");putunsigned(msg,&p,counts[4]);
+    putstr(msg,&p," unusual_prior_blend=");putunsigned(msg,&p,counts[5]);
+    msg[p]=0;logtext(msg);
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
@@ -1664,6 +1732,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_ownership=(BYTE*)alloc(g_ownership_bytes);
     g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
     g_world_provenance=(BYTE*)alloc(g_ownership_bytes);
+    g_shadow_provenance=(BYTE*)alloc(g_ownership_bytes);
+    if(!g_shadow_provenance)logtext("SHADOW_CAPTURE disabled: optional diagnostic allocation failed");
     if(!g_world_provenance)logtext("WORLD_CAPTURE disabled: optional diagnostic allocation failed");
     if(!g_atlas_provenance)logtext("ATLAS_CAPTURE disabled: optional diagnostic allocation failed");
     g_shadow_underlay=(g_shadow_underlay_enabled||g_shadow_once_enabled)?(BYTE*)alloc(g_ownership_bytes):NULL;
@@ -1830,6 +1900,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_ownership)zero(g_ownership,g_ownership_bytes);
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
         if(g_world_provenance)zero(g_world_provenance,g_ownership_bytes);
+        if(g_shadow_provenance)zero(g_shadow_provenance,g_ownership_bytes);
         zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
         zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
         g_world_index1_preview_attempts=0;
@@ -1903,12 +1974,16 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100],atlas[100],world[100];
-        if(next_capture_pair(frame,coverage,atlas,world)){
+        char frame[100],coverage[100],atlas[100],world[100],shadow[100];
+        if(next_capture_pair(frame,coverage,atlas,world,shadow)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
             capture_atlas_provenance(atlas);
             capture_world_provenance(world);
+            capture_shadow_provenance(shadow);
+            {char line[160];DWORD n=0;
+             putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
+             line[n]=0;logtext(line);}
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
             putstr(message,&n,frame);
@@ -3031,6 +3106,18 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 color=(nr<<11)|(ng<<5)|nb;
             }
             dst[y*width+x]=(WORD)color;
+            /* Read shadow underlay BEFORE the existing state machine updates
+             * it. No source/raster change, and only record F12 final writes. */
+            if(g_capture_ownership && g_shadow_provenance){
+                unsigned prior=g_shadow_underlay?(unsigned)g_shadow_underlay[j]:0u;
+                unsigned kind=0u;
+                if(candidate){
+                    if(prior==1u||prior==2u)kind=applied_opacity==50u?1u:3u;
+                    else if(prior==0u)kind=applied_opacity==100u?2u:4u;
+                    else kind=5u;
+                }
+                g_shadow_provenance[j]=(BYTE)kind;
+            }
             if(g_shadow_underlay){
                 /* 1 = textured opaque world; 2 = textured, key-transparent
                  * capable world; 3 = dark shadow already blended this frame.
