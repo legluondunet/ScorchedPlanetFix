@@ -256,6 +256,15 @@ static unsigned g_world_blue_diagnostic_count=0;
  * KeyingColor before LUT conversion, rather than post-LUT RGB565 only.
  * OFF by default. Restrict to world triangles with Transparency set. */
 static int g_index_key_enabled=0;
+/* Opt-in authentic-asset experiment. Only original TITLEM icon01 contains
+ * 6,993 source-index-241 background texels. Its live cached atlas is
+ * identified by full 128x128 byte content, never by a hardcoded address.
+ * No original game code or texture is modified. */
+static int g_icon01_opaque_enabled=0;
+static unsigned g_icon01_cache_offset=0xffffffffu;
+static unsigned g_icon01_verified_uploads=0;
+static unsigned g_icon01_opaque_samples=0;
+
 static unsigned g_index_key_candidates=0,g_index_key_skipped=0;
 static unsigned g_index_key_blue_candidates=0,g_index_key_other_candidates=0;
 static unsigned g_index_key_debug=0;
@@ -1386,6 +1395,7 @@ static void capture_atlas_provenance(const char *filename){
  * 8=RGB565 keyed raw 8-bit index zero; 9=keyed source index 1;
  * 10=keyed source index 241; 11=keyed any other nonzero index.
  * 12=EXPERIMENTAL opaque source index 1, resolved RGB565 black (amber).
+ * 13=EXPERIMENTAL original icon01 source index241 opaque (distinct teal).
  * Last textured world sample only; later untextured or CPU writes can cover it.
  * Never feeds this buffer to the rasterizer or the framebuffer. */
 static void capture_world_provenance(const char *filename){
@@ -1413,19 +1423,19 @@ static void capture_world_provenance(const char *filename){
     DWORD written=0;
     BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
     static WORD row[4096];const BYTE pad[3]={0,0,0};
-    unsigned counts[13];
+    unsigned counts[14];
     {volatile unsigned *p=(volatile unsigned*)&counts[0];
-     for(unsigned i=0;i<13u;i++)p[i]=0u;}
+     for(unsigned i=0;i<14u;i++)p[i]=0u;}
     /* Keyed index 0=magenta; 1=yellow; 241=violet; other=white;
      * previewed opaque index1 is amber. */
-    static const WORD colors[13]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
+    static const WORD colors[14]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
                                   0x8010u,0xF800u,0x001Fu,0x07FFu,
                                   0xF81Fu,0xFFE0u,0xA01Fu,0xFFFFu,
-                                  0xFC00u};
+                                  0xFC00u,0x83E0u};
     for(unsigned y=0;y<height&&ok;y++){
         for(unsigned x=0;x<width;x++){
             unsigned kind=g_world_provenance[y*width+x];
-            if(kind>12u)kind=0u;
+            if(kind>13u)kind=0u;
             row[x]=colors[kind];counts[kind]++;
         }
         ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
@@ -1454,6 +1464,7 @@ static void capture_world_provenance(const char *filename){
     putstr(sl,&sn," index241=");putunsigned(sl,&sn,counts[10]);
     putstr(sl,&sn," other_nonzero=");putunsigned(sl,&sn,counts[11]);
     putstr(sl,&sn," index1_opaque_preview=");putunsigned(sl,&sn,counts[12]);
+    putstr(sl,&sn," icon01_index241_opaque=");putunsigned(sl,&sn,counts[13]);
     sl[sn]=0;logtext(sl);
     /* The existing key histogram counts only discarded source samples.
      * This independent F12 histogram counts every source-index match
@@ -1594,6 +1605,13 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_INDEXED_KEY",setting,sizeof(setting));
       g_index_key_enabled=(n==1u && setting[0]=='1');}
     logtext(g_index_key_enabled?"INDEXED_KEY enabled (world 8bit transparent textures only)":"INDEXED_KEY disabled (reference RGB565 color-key)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_ICON01_OPAQUE",setting,sizeof(setting));
+      g_icon01_opaque_enabled=(n==1u && setting[0]=='1');}
+    g_icon01_cache_offset=0xffffffffu;
+    g_icon01_verified_uploads=g_icon01_opaque_samples=0;
+    logtext(g_icon01_opaque_enabled?
+        "ICON01_OPAQUE enabled (EXPERIMENTAL: original 128x128 icon01 index241 black, texture fingerprint verified)":
+        "ICON01_OPAQUE disabled (reference RGB565 keyed icon01 background)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PERSPECTIVE",setting,sizeof(setting));
       g_perspective_enabled=(n==1u && setting[0]=='1');}
     logtext(g_perspective_enabled?"PERSPECTIVE_MODE enabled (world triangles only)":"PERSPECTIVE_MODE disabled (v0.19 reference rasterization)");
@@ -1900,6 +1918,10 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("INDEXED_KEY candidates=",g_index_key_candidates,"skipped=",g_index_key_skipped);
         lognum("INDEXED_KEY blue_candidates=",g_index_key_blue_candidates,"other_candidates=",g_index_key_other_candidates);
         lognum("INDEXED_KEY enabled=",(unsigned)g_index_key_enabled,NULL,0);
+        lognum("ICON01_OPAQUE enabled=",(unsigned)g_icon01_opaque_enabled,
+               " verified_uploads=",g_icon01_verified_uploads);
+        lognum("ICON01_OPAQUE source_index241_opaque_attempts=",g_icon01_opaque_samples,
+               " active_cache_offset=",g_icon01_cache_offset);
         lognum("SHADOW_BLEND dark_flat_pixels=",g_shadow_dark_candidates,"blended_pixels=",g_shadow_dark_blended);
         lognum("SHADOW_BLEND enabled=",(unsigned)g_shadow_blend_enabled,NULL,0);
         lognum("SHADOW_UNDERLAY candidates_with_texture=",g_shadow_underlay_pixels,
@@ -2106,6 +2128,30 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
                 const BYTE *in=p->msiTexture.pMem;
                 for(unsigned j=0;j<size;j++)out[j]=in[j];
                 for(unsigned j=off/256u;j<=(off+size-1)/256u;j++)g_texture_uploaded[j]=1;
+                /* The cache can be reused: never preserve icon01 identity
+                 * after overlapping source bytes have been uploaded. */
+                if(g_icon01_cache_offset!=0xffffffffu &&
+                   off<g_icon01_cache_offset+16384u &&
+                   off+size>g_icon01_cache_offset)
+                    g_icon01_cache_offset=0xffffffffu;
+                if(g_icon01_opaque_enabled && w==128 && h==128 && bpp==8 &&
+                   size==16384u){
+                    unsigned hash=2166136261u,n0=0u,n1=0u,n241=0u;
+                    for(unsigned k=0;k<16384u;k++){
+                        unsigned v=out[k];
+                        hash=(hash^v)*16777619u;
+                        if(v==0u)n0++;
+                        if(v==1u)n1++;
+                        if(v==241u)n241++;
+                    }
+                    if(hash==0x35107cbau && n0==0u && n1==0u &&
+                       n241==6993u){
+                        g_icon01_cache_offset=off;
+                        g_icon01_verified_uploads++;
+                        lognum("ICON01_OPAQUE original_titlem=icon01_FINGERPRINT_MATCH cache_offset=",
+                               off," uploads=",g_icon01_verified_uploads);
+                    }
+                }
                 g_tex_uploads++;
                 if(!p->msiTexture.Enable)g_disabled_tex_uploads++;
                 if(g_tex_uploads<=8 || (g_tex_uploads%10000u)==0){
@@ -2537,10 +2583,22 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     color==0u && g_state.msiTexture.Transparency &&
                     g_state.msiTexture.KeyingColor==0u &&
                     g_state.msiTexture.KeyingColorMask==0xffffu;
+                /* Original TITLEM icon01 holds 6993 index241 background
+                 * texels, confirmed by F12 on native Windows. Restore only
+                 * this specific atlas, not global post-CLUT black aliases.
+                 * Never touch Z-plane/HUD, 16-bit, 4-bit, or other textures. */
+                int preview_icon01_opaque=
+                    g_icon01_opaque_enabled && !g_zplane_draw_context &&
+                    source_index_valid && source_index==241u &&
+                    texW==128u && texH==128u && planes==8u &&
+                    texOffset==g_icon01_cache_offset &&
+                    color==0u && g_state.msiTexture.Transparency &&
+                    g_state.msiTexture.KeyingColor==0u &&
+                    g_state.msiTexture.KeyingColorMask==0xffffu;
                 if(g_state.msiTexture.Transparency &&
                    ((color&g_state.msiTexture.KeyingColorMask)==
                     (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)) &&
-                   !preview_index1_opaque){
+                   !preview_index1_opaque && !preview_icon01_opaque){
                     if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
                         unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
                         g_atlas_provenance[screen]=5u;
@@ -2564,6 +2622,12 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     if(g_world_provenance)
                         g_world_provenance[(unsigned)y*(unsigned)width+
                                            (unsigned)x]=12u;
+                }
+                if(preview_icon01_opaque){
+                    g_icon01_opaque_samples++;
+                    if(g_capture_ownership && g_world_provenance)
+                        g_world_provenance[(unsigned)y*(unsigned)width+
+                                           (unsigned)x]=13u;
                 }
                 /* The 8-bit MSI interface has a palette-index ambiguity:
                  * source pixel index zero can map through the CLUT to blue
