@@ -9,6 +9,11 @@ extern "system" {
     fn LoadLibraryA(name: *const u8) -> *mut c_void;
     fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
     fn FreeLibrary(module: *mut c_void) -> i32;
+    fn VirtualAlloc(addr: *mut c_void, size: usize,
+                    allocation_type: u32, protect: u32) -> *mut c_void;
+    fn VirtualProtect(addr: *mut c_void, size: usize,
+                      new_protect: u32, old_protect: *mut u32) -> i32;
+    fn VirtualFree(addr: *mut c_void, size: usize, free_type: u32) -> i32;
 }
 
 type GuestWndProc = unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isize;
@@ -263,6 +268,51 @@ fn main() {
             assert_eq!(pixel, expected,
                 "Experimental icon01={} case {}: {} expected RGB565 {:#06x}, got {:#06x}",
                 enabled, i, case.label, expected, pixel);
+            if case.label == "128 indexed-5 red stays opaque" {
+                // Exercise all three pointer-validation routes in the *real*
+                // x86 DLL, not an isolated mock of the helper.
+                // Existing [Vertex;3] above resides within one stack region.
+                // Three private Win32 allocations force per-vertex fallback.
+                let mut pages=[ptr::null_mut();3];
+                for j in 0..3 {
+                    pages[j]=VirtualAlloc(ptr::null_mut(),4096,0x3000,0x04);
+                    assert!(!pages[j].is_null(),"VirtualAlloc vertex region {}",j);
+                    ptr::write(pages[j] as *mut Vertex,vertices[j]);
+                }
+                framebuffer.fill(GREEN);
+                assert_ne!(render(pages[0] as *const Vertex,
+                                  pages[1] as *const Vertex,
+                                  pages[2] as *const Vertex,100),0);
+                assert_eq!(framebuffer[50*pitch/2+50],RED,
+                           "Distinct committed vertex regions must render identically");
+
+                // Null, low and inaccessible/mid-record pointers are rejected
+                // without dereferencing or changing the framebuffer.
+                for bad in [ptr::null(), 0x10usize as *const Vertex] {
+                    framebuffer.fill(GREEN);
+                    assert_ne!(render(pages[0] as *const Vertex,bad,
+                                      pages[2] as *const Vertex,100),0);
+                    assert_eq!(framebuffer[50*pitch/2+50],GREEN,
+                               "Invalid vertex must be ignored");
+                }
+                let guarded=VirtualAlloc(ptr::null_mut(),8192,0x3000,0x04);
+                assert!(!guarded.is_null(),"VirtualAlloc guarded vertex pages");
+                let mut previous_protection=0u32;
+                assert_ne!(VirtualProtect((guarded as *mut u8).add(4096) as *mut c_void,
+                                          4096,0x01,&mut previous_protection),0,
+                           "VirtualProtect PAGE_NOACCESS");
+                let crossing=(guarded as *const u8)
+                    .add(4096-std::mem::size_of::<Vertex>()/2) as *const Vertex;
+                framebuffer.fill(GREEN);
+                assert_ne!(render(pages[0] as *const Vertex,crossing,
+                                  pages[2] as *const Vertex,100),0);
+                assert_eq!(framebuffer[50*pitch/2+50],GREEN,
+                           "Vertex crossing PAGE_NOACCESS must be skipped");
+                assert_ne!(VirtualFree(guarded,0,0x8000),0);
+                for page in pages {
+                    assert_ne!(VirtualFree(page,0,0x8000),0);
+                }
+            }
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
         }
@@ -371,6 +421,6 @@ fn main() {
             assert_ne!(exit(),0);
         }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + 128 real bilinear assertions (CLUT cache, direct path, uniform neighbors)");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + 128 real bilinear assertions; triangle vertex same-region, distinct-region and invalid-memory checks");
     }
 }
