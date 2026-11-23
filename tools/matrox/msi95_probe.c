@@ -6,6 +6,7 @@
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_transition_hold.h"
+#include "msi_smack_lifecycle.h"
 #include "msi_world_bilinear.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -401,6 +402,15 @@ static unsigned g_transition_space_char_evaluations = 0;
 static DWORD g_game_50dcd0_last = 0xFFFFFFFFu;
 static DWORD g_game_50dcc0_last = 0xFFFFFFFFu;
 static unsigned g_game_50dcd0_reports = 0;
+/* Passive original-ISO Smacker lifecycle watcher. This never invokes
+ * Smack functions, patches an IAT slot, changes game/video globals,
+ * forwards additional input, or consumes game time outside Log=1.
+ * Record real transitions rather than repeatedly sampling a null scene. */
+static DWORD g_smack_last_state=0xffffffffu;
+static DWORD g_smack_last_handle=0xffffffffu;
+static unsigned g_smack_changes=0,g_smack_state1_null=0;
+static unsigned g_smack_trace_reports=0,g_smack_iat_reported=0;
+static DWORD g_smack_last_change_tick=0;
 /* v0.32: The OEM engine's input handler at 0043BCF9 writes via the object
  * pointer at 004BA4B8. A Wine startup click at frame 1 reaches that handler
  * before the object array is initialized (NULL), causing a write to 00000148.
@@ -663,6 +673,18 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         }else putstr(game,&k,"unreadable");
         game[k]=0;WriteFile(g_log,game,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
+        { char video[290];DWORD v=0;
+          putstr(video,&v,"SMACK_AV_LAST_SNAPSHOT state=");
+          putunsigned(video,&v,g_smack_last_state);
+          putstr(video,&v," handle=");puthex(video,&v,g_smack_last_handle);
+          putstr(video,&v," last_change_age_ms=");
+          putunsigned(video,&v,g_smack_last_change_tick?
+              GetTickCount()-g_smack_last_change_tick:0xffffffffu);
+          putstr(video,&v," state1_null_events=");
+          putunsigned(video,&v,g_smack_state1_null);
+          video[v]=0;WriteFile(g_log,video,v,&wr,NULL);
+          WriteFile(g_log,"\r\n",2,&wr,NULL);
+        }
         if(readable_span((const void*)ctx->Esp,48u)){
           char stack2[360];k=0;
           putstr(stack2,&k,"AV_GAME_STACK first12=");
@@ -773,7 +795,95 @@ static int transition_input_hold_now(void){
         g_heap_count, (unsigned)g_last_heap_alloc_tick,
         (unsigned)GetTickCount(),(unsigned)scene,(unsigned)state);
 }
+static void sample_smack_lifecycle(const char *phase){
+    /* The OEM IAT and callsite signatures were independently decoded
+     * from the owner's original ISO (not redistributed). In the genuine
+     * 0x0046D578 dump, [006A538C] is smackw32!SmackDoFrame, which
+     * gracefully accepts NULL, but the game then dereferences it. */
+    if(!g_log || !game_transition_input_signature_supported() ||
+       !readable_span((const void*)0x0050DCC0u,0x20u))return;
+    if(!g_smack_iat_reported){
+        void *smack_module=GetModuleHandleA("SMACKW32.DLL");
+        if(smack_module && readable_span((const void*)0x006A5388u,20u)){
+            const volatile DWORD *iat=(const volatile DWORD*)0x006A5388u;
+            DWORD base=(DWORD)smack_module;
+            char iatlog[380];DWORD z=0;
+            putstr(iatlog,&z,"SMACK_IAT module_base=");puthex(iatlog,&z,base);
+            putstr(iatlog,&z," SmackWait=");puthex(iatlog,&z,iat[0]);
+            putstr(iatlog,&z," SmackDoFrame=");puthex(iatlog,&z,iat[1]);
+            putstr(iatlog,&z," SmackNextFrame=");puthex(iatlog,&z,iat[2]);
+            putstr(iatlog,&z," SmackClose=");puthex(iatlog,&z,iat[3]);
+            putstr(iatlog,&z," SmackOpen=");puthex(iatlog,&z,iat[4]);
+            iatlog[z]=0;logtext(iatlog);
+            /* Original OEM DLL exports these decorated stdcall APIs by
+             * ordinal, so the exact RVAs also cross-check their identity. */
+            char report[260];z=0;
+            putstr(report,&z,"SMACK_IAT original_oem_rva_match=");
+            putunsigned(report,&z,iat[0]==base+0x2cf0u &&
+                iat[1]==base+0x4180u &&
+                iat[2]==base+0x3ea0u &&
+                iat[3]==base+0x4560u &&
+                iat[4]==base+0x4900u);
+            report[z]=0;logtext(report);
+            g_smack_iat_reported=1;
+        }
+    }
+    const volatile DWORD *global=(const volatile DWORD*)0x0050DCC0u;
+    DWORD state=global[0],handle=global[4];
+    unsigned event=msi_smack_change_mask(g_smack_last_state,
+                    g_smack_last_handle,state,handle);
+    if(!event)return;
+    DWORD old_state=g_smack_last_state,old_handle=g_smack_last_handle;
+    g_smack_last_state=state;g_smack_last_handle=handle;
+    g_smack_last_change_tick=GetTickCount();
+    g_smack_changes++;
+    if(event&MSI_SMACK_EVENT_STATE1_NULL)g_smack_state1_null++;
+    if(g_smack_trace_reports>=192u && !(event&MSI_SMACK_EVENT_STATE1_NULL))
+        return;
+    g_smack_trace_reports++;
+    char out[520];DWORD k=0;
+    putstr(out,&k,"SMACK_LIFECYCLE phase=");putstr(out,&k,phase);
+    putstr(out,&k," frame=");putunsigned(out,&k,g_frames);
+    putstr(out,&k," elapsed_ms=");putunsigned(out,&k,
+                                              GetTickCount()-g_boot_tick);
+    putstr(out,&k," flags=");putunsigned(out,&k,event);
+    putstr(out,&k," prev_state=");putunsigned(out,&k,old_state);
+    putstr(out,&k," state=");putunsigned(out,&k,state);
+    putstr(out,&k," prev_handle=");puthex(out,&k,old_handle);
+    putstr(out,&k," handle=");puthex(out,&k,handle);
+    putstr(out,&k," callback_depth=");putunsigned(out,&k,g_guest_callback_depth);
+    putstr(out,&k," last_input=");puthex(out,&k,g_last_forwarded_msg);
+    putstr(out,&k," last_input_age_ms=");putunsigned(out,&k,
+        g_last_forwarded_tick?
+        GetTickCount()-g_last_forwarded_tick:0xffffffffu);
+    out[k]=0;logtext(out);
+    /* Read only bounded fields of an allocated Smacker handle; we never
+     * dereference the null/freed pointer that caused the original AV. */
+    if(handle && readable_span((const void*)handle,0x6cu)){
+        const volatile DWORD *smack=(const volatile DWORD*)handle;
+        char fields[240];k=0;
+        putstr(fields,&k,"SMACK_HANDLE_FIELDS handle=");puthex(fields,&k,handle);
+        putstr(fields,&k," width=");putunsigned(fields,&k,smack[1]);
+        putstr(fields,&k," height=");putunsigned(fields,&k,smack[2]);
+        putstr(fields,&k," frame_count=");putunsigned(fields,&k,smack[3]);
+        putstr(fields,&k," palette_field_0x68=");
+        puthex(fields,&k,smack[0x68u/4u]);
+        fields[k]=0;logtext(fields);
+    }
+    if(event&MSI_SMACK_EVENT_STATE1_NULL){
+        char danger[240];k=0;
+        putstr(danger,&k,"SMACK_STATE1_NULL_OBSERVED frame=");
+        putunsigned(danger,&k,g_frames);
+        putstr(danger,&k," heap_age_ms=");
+        putunsigned(danger,&k,g_last_heap_alloc_tick?
+                    GetTickCount()-g_last_heap_alloc_tick:0xffffffffu);
+        putstr(danger,&k," event_number=");
+        putunsigned(danger,&k,g_smack_state1_null);
+        danger[k]=0;logtext(danger);
+    }
+}
 static void sample_game_global_50dcd0(const char *phase){
+    sample_smack_lifecycle(phase);
     if(!g_log || g_game_50dcd0_reports>=96u ||
        !game_global_probe_supported() ||
        !readable_span((const void*)0x0050DCC0u,0x14u))return;
@@ -1641,6 +1751,10 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_transition_input_hold_timeouts=0;g_transition_input_hold_active=0;
     g_game_50dcd0_last=g_game_50dcc0_last=0xFFFFFFFFu;
     g_game_50dcd0_reports=0;
+    g_smack_last_state=g_smack_last_handle=0xffffffffu;
+    g_smack_changes=g_smack_state1_null=0;
+    g_smack_trace_reports=g_smack_iat_reported=0;
+    g_smack_last_change_tick=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
     g_swallowed_left_down=g_swallowed_right_down=0;
     g_zplane_draw_context=0;
@@ -1826,6 +1940,10 @@ BOOL __cdecl msiExit(void){
     }
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
+    lognum("SMACK_LIFECYCLE total_changes=",g_smack_changes,
+           " state1_null_transitions=",g_smack_state1_null);
+    lognum("SMACK_LIFECYCLE emitted_reports=",g_smack_trace_reports,
+           " iat_resolved=",g_smack_iat_reported);
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     clean();
