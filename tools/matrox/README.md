@@ -1050,3 +1050,32 @@ As with the vertex-region optimization, **pixel correctness is not a speed
 measurement**: an ON/OFF same-scene benchmark on the same host is necessary
 before claiming a performance gain. Keep this stacked experimental PR
 in draft pending Windows/Wine runtime validation.
+
+## Controlled x86 UV raster microbenchmark (diagnostics PR #63)
+
+Windows CI now includes `tools/matrox/bench_uv.rs`, a benchmark harness for
+the **actual clean-room MSI95 x86 rasterizer**, not a standalone Rust
+approximation of its UV code. The hash-locked production C source remains
+unchanged. Calling `tools/matrox/build-msi95.ps1 -BenchmarkUvReference`
+creates a **benchmark-only**, local, non-packaged
+`target/matrox-msi95-x86/msi95_uv_reference.dll`. A single exact,
+asserted replacement in a temporary source copy removes the UV in-range
+fast conditional, leaving the original floor-based wrap. Both variants are
+built with the same compiler flags, imported Win32 APIs, fixed synthetic
+8bpp texture and memory validation, and the same machine/CI runner.
+
+Each sample draws 1,680 identical triangles per profile on the 640×400
+RGB565 framebuffer. Two profiles exercise mostly normalized `[0,1)` UVs
+and tiled negative/out-of-range UVs. Rendering calls alone are timed using
+Win32 `QueryPerformanceCounter`; frame buffer hashes across 24 batches
+are outside the timing window. Baseline/optimized/optimized/baseline
+(ABBA) alternation reduces warmup drift. **Pixel hash equality** and equal
+triangle counts are hard CI requirements. Timing is informative but **not
+a pass/fail performance threshold**, because shared-host scheduling,
+frequency scaling, cache effects and instrumentation can distort numbers.
+This microbenchmark is not an equivalent end-to-end game FPS test.
+
+Neither reference DLL nor synthetic benchmark textures are distributed in
+the installer. No game binaries, source assets or proprietary Matrox drivers
+are read or shipped. If the timing delta is negligible or adverse, prefer
+keeping the simpler original UV wrap path rather than claiming a win.
