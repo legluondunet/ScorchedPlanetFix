@@ -263,7 +263,78 @@ fn main() {
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
         }
+        // Additional smoke: the ACTUAL DLL should interpolate only opaque
+        // triangles with varying invW. The same 128x128 indices/palette
+        // must be pixel-identical on title-like constant-invW geometry and
+        // on all transparent icon/sprite textures. No original game data.
+        for filter_on in [false, true] {
+            std::env::set_var("MATROX_MSI_WORLD_BILINEAR", if filter_on {"1"} else {"0"});
+            std::env::set_var("MATROX_MSI_ICON01_OPAQUE", "0");
+            let info = init(640,400,16,0,0,guest_wndproc);
+            assert!(!info.is_null(), "Cannot init world bilinear smoke");
+            let pitch=(*info).color.pitch as usize;
+            let framebuffer=std::slice::from_raw_parts_mut(
+                (*info).color.mem as *mut u16, pitch*400/2);
+            for planes in [8usize,16usize] {
+                for transparency in [false,true] {
+                    for varying in [false,true] {
+                        assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
+                        framebuffer.fill(GREEN);
+                        let mut texture=vec![0u8;128*128*(planes/8)];
+                        let mut lut=vec![0u8;512];
+                        lut[2*2]=(RED&255) as u8;lut[2*2+1]=(RED>>8) as u8;
+                        const BLUE:u16=0x001f;
+                        lut[2*3]=(BLUE&255) as u8;lut[2*3+1]=(BLUE>>8) as u8;
+                        for y in 0..128 {
+                            for x in 0..128 {
+                                let pos=y*128+x;
+                                let color=if x<64 { RED } else { BLUE };
+                                if planes==8{
+                                    texture[pos]=if x<64 {2} else {3};
+                                }else{
+                                    texture[2*pos]=(color&255) as u8;
+                                    texture[2*pos+1]=(color>>8) as u8;
+                                }
+                            }
+                        }
+                        let params=Params{
+                            texture:TextureParams{
+                                enable:1,width:128,height:128,planes:planes as i32,
+                                mem:texture.as_mut_ptr(),heap:ptr::null_mut(),
+                                cache_offset:0,
+                                lut:Lut{
+                                    mem:if planes==8{lut.as_mut_ptr()}else{ptr::null_mut()},
+                                    heap:ptr::null_mut(),cache_offset:65536,
+                                },
+                                clamp_u:1,clamp_v:1,modulate:0,decal:0,
+                                transparency:i32::from(transparency),
+                                key_color:0,key_mask:0xffff,
+                                key_alpha:1,key_alpha_mask:0,
+                            },
+                            depth:DepthParams{enable:0,compare:0,protect:0},
+                            color:ColorParams{dither:0,protect:0},
+                        };
+                        assert_ne!(set(&params),0);
+                        let mut vertices=[
+                            Vertex::at(40.0,40.0),
+                            Vertex::at(90.0,40.0),
+                            Vertex::at(40.0,90.0),
+                        ];
+                        if varying {vertices[1].inv_w=0.5;}
+                        assert_ne!(render(&vertices[0],&vertices[1],&vertices[2],100),0);
+                        let actual=framebuffer[50*pitch/2+50];
+                        let expected=if filter_on&&varying&&!transparency{
+                            0x8010 // mid-point 5:6:5 red/blue bilinear
+                        }else{BLUE};
+                        assert_eq!(actual,expected,
+                            "WorldBilinear={} bpp={} transparency={} varying_invw={} expected {:#06x} got {:#06x}",
+                            filter_on,planes,transparency,varying,expected,actual);
+                    }
+                }
+            }
+            assert_ne!(exit(),0);
+        }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen real rasterized baseline/icon01-scoped keying cases");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + sixteen real 3D bilinear raster assertions");
     }
 }
