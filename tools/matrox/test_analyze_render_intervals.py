@@ -79,16 +79,16 @@ class RenderIntervalTests(unittest.TestCase):
     def test_uint32_raster_and_dither_wrap_with_distinct_bilinear_names(self):
         def event(frame, elapsed, render, raster, dither, diff, zpixels):
             return (
-                f"RENDER_PROGRESS pixels= {raster} missing_textures= 0\\n"
-                f"MSI_DITHER candidates= {dither} changed_pixels= {diff}\\n"
-                f"MSI_MODULATE triangles= 300 pixels= {dither}\\n"
-                f"RENDER_ZPLANES pixels= {zpixels} rejected= 0\\n"
-                f"WORLD_BILINEAR filtered_samples= 400 changed_pixels= 100\\n"
-                f"FPS_CAP late_frames= {frame // 2} fallback_frames= 0\\n"
-                f"PERF_WALL elapsed_ms= {elapsed} frames= {frame}\\n"
-                f"PERF_COST render_ms= {render} gdi_ms= 40\\n"
-                f"PERF_COST state_ms= 30 triangles= 1000\\n"
-            ).replace('\\\\n', '\\n')
+                f"RENDER_PROGRESS pixels= {raster} missing_textures= 0\n"
+                f"MSI_DITHER candidates= {dither} changed_pixels= {diff}\n"
+                f"MSI_MODULATE triangles= 300 pixels= {dither}\n"
+                f"RENDER_ZPLANES pixels= {zpixels} rejected= 0\n"
+                f"WORLD_BILINEAR filtered_samples= 400 changed_pixels= 100\n"
+                f"FPS_CAP late_frames= {frame // 2} fallback_frames= 0\n"
+                f"PERF_WALL elapsed_ms= {elapsed} frames= {frame}\n"
+                f"PERF_COST render_ms= {render} gdi_ms= 40\n"
+                f"PERF_COST state_ms= 30 triangles= 1000\n"
+            ).replace('\\\n', '\n')
         start = (1 << 32) - 80
         report = self.run_parser(
             event(300, 10000, 1000, start, start, start-100, start) +
@@ -119,15 +119,15 @@ class RenderIntervalTests(unittest.TestCase):
         self.assertEqual(report['last_snapshot_extended'], {})
 
     def test_short_initial_frames_still_count_in_extended_totals(self):
-        log = ("RENDER_PROGRESS pixels= 5 missing_textures= 0\\n"
-               "PERF_WALL elapsed_ms= 50 frames= 1\\n"
-               "PERF_COST state_ms= 0 triangles= 1\\n"
-               "RENDER_PROGRESS pixels= 1000 missing_textures= 0\\n"
-               "PERF_WALL elapsed_ms= 60 frames= 2\\n"
-               "PERF_COST state_ms= 0 triangles= 2\\n"
-               "RENDER_PROGRESS pixels= 2000 missing_textures= 0\\n"
-               "PERF_WALL elapsed_ms= 10000 frames= 300\\n"
-               "PERF_COST state_ms= 0 triangles= 300\\n").replace('\\\\n', '\\n')
+        log = ("RENDER_PROGRESS pixels= 5 missing_textures= 0\n"
+               "PERF_WALL elapsed_ms= 50 frames= 1\n"
+               "PERF_COST state_ms= 0 triangles= 1\n"
+               "RENDER_PROGRESS pixels= 1000 missing_textures= 0\n"
+               "PERF_WALL elapsed_ms= 60 frames= 2\n"
+               "PERF_COST state_ms= 0 triangles= 2\n"
+               "RENDER_PROGRESS pixels= 2000 missing_textures= 0\n"
+               "PERF_WALL elapsed_ms= 10000 frames= 300\n"
+               "PERF_COST state_ms= 0 triangles= 300\n").replace('\\\n', '\n')
         report = self.run_parser(log)
         self.assertEqual(len(report['intervals']), 1)
         self.assertEqual(report['last_snapshot_extended']['raster_pixels'], 2000)
