@@ -13,6 +13,7 @@ const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
 ; [Matrox] Dither: 0=off, 1=experimental RGB565 dithering (Matrox only)\r\n\
 ; [Matrox] Icon01Opaque: 0=unchanged, 1=experimental original icon01 black background (signature-locked)\r\n\
 ; [Matrox] WorldBilinear: 0=1996 original nearest, 1=optional smooth opaque 3D world textures only\r\n\
+; [Matrox] SmackerCancelGuard: 0=off, 1=experimental exact original OEM video NULL-AV recovery (no EXE patch)\r\n\
 ; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
 ; [Cheats] ALIAH: invulnerability code, manual in-game only; default=0\r\n\
 ; [Cheats] FATAL: all weapons and ammunition, manual in-game only; default=0\r\n\
@@ -28,18 +29,19 @@ pub struct GameSettings{
     pub dither:bool,
     pub icon01_opaque:bool,
     pub world_bilinear:bool,
+    pub smacker_cancel_guard:bool,
     pub unlimited_fuel:bool,
     pub aliah:bool,
     pub fatal:bool,
     pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,smacker_cancel_guard:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
-    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,unlimited_fuel:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,smacker_cancel_guard:bool,unlimited_fuel:bool,
     aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
@@ -122,6 +124,10 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.world_bilinear{return Err("INI: duplicate [Matrox] WorldBilinear".into());}
                 seen.world_bilinear=true;result.world_bilinear=switch(value,"[Matrox] WorldBilinear")?;
             },
+            3 if name.eq_ignore_ascii_case(b"SmackerCancelGuard")=>{
+                if seen.smacker_cancel_guard{return Err("INI: duplicate [Matrox] SmackerCancelGuard".into());}
+                seen.smacker_cancel_guard=true;result.smacker_cancel_guard=switch(value,"[Matrox] SmackerCancelGuard")?;
+            },
             4 if name.eq_ignore_ascii_case(b"UnlimitedFuel")=>{
                 if seen.unlimited_fuel{return Err("INI: duplicate [Cheats] UnlimitedFuel".into());}
                 seen.unlimited_fuel=true;
@@ -167,13 +173,14 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_dither=matrox&&!seen.dither;
     let add_icon01_opaque=matrox&&!seen.icon01_opaque;
     let add_world_bilinear=matrox&&!seen.world_bilinear;
+    let add_smacker_guard=matrox&&!seen.smacker_cancel_guard;
     let add_fuel=!seen.unlimited_fuel;
     let add_aliah=!seen.aliah;
     let add_fatal=!seen.fatal;
     let add_log=!seen.log;
     let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
         .any(|slice|slice==OPTION_HELP_MARKER);
-    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_icon01_opaque&&!add_world_bilinear&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_icon01_opaque&&!add_world_bilinear&&!add_smacker_guard&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
     if add_descriptions {out.extend_from_slice(OPTION_HELP);}
@@ -182,6 +189,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut did_dither=false;
     let mut did_icon01_opaque=false;
     let mut did_world_bilinear=false;
+    let mut did_smacker_guard=false;
     let mut did_fuel=false;
     let mut did_aliah=false;
     let mut did_fatal=false;
@@ -196,6 +204,10 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
         if old==3&&add_world_bilinear&&!did_world_bilinear{
             append(out,b"; Smooth opaque 3D textures only; original Mystique uses nearest (0)");
             append(out,b"WorldBilinear=0");did_world_bilinear=true;
+        }
+        if old==3&&add_smacker_guard&&!did_smacker_guard{
+            append(out,b"; Strict OEM Smacker NULL-AV continuation only; no game patch; opt-in");
+            append(out,b"SmackerCancelGuard=0");did_smacker_guard=true;
         }
         if old==4&&add_fuel&&!did_fuel{append(out,b"UnlimitedFuel=0");did_fuel=true;}
         if old==4&&add_aliah&&!did_aliah{append(out,b"ALIAH=0");did_aliah=true;}
@@ -230,6 +242,10 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_world_bilinear&&!did_world_bilinear{
         append(&mut out,b"; Smooth opaque 3D textures only; original Mystique uses nearest (0)");
         append(&mut out,b"WorldBilinear=0");
+    }
+    if add_smacker_guard&&!did_smacker_guard{
+        append(&mut out,b"; Strict OEM Smacker NULL-AV continuation only; no game patch; opt-in");
+        append(&mut out,b"SmackerCancelGuard=0");
     }
     if !seen.cheats{append(&mut out,b"[Cheats]");}
     if add_fuel&&!did_fuel{append(&mut out,b"UnlimitedFuel=0");}
@@ -322,6 +338,24 @@ mod tests{
         assert!(parse(b"[Debug]\nLog=0\nlog=1").is_err());
     }
     #[test]
+    fn matrox_smacker_cancel_guard_is_opt_in_strict_and_preserves_existing_values(){
+        assert!(!GameSettings::default().smacker_cancel_guard);
+        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=1").unwrap().0.smacker_cancel_guard);
+        assert!(!parse(b"[Matrox]\\nSmackerCancelGuard=0").unwrap().0.smacker_cancel_guard);
+        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=2").is_err());
+        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=1\\nsmackercancelguard=0").is_err());
+        let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Matrox]\\nDither=1\\nWorldBilinear=1\\n").unwrap();
+        ensure_defaults(&ini,true).unwrap();
+        let text=fs::read_to_string(&ini).unwrap();
+        assert_eq!(text.matches("SmackerCancelGuard=0").count(),1);
+        assert!(read_settings(&ini).unwrap().world_bilinear);
+        assert!(!read_settings(&ini).unwrap().smacker_cancel_guard);
+        ensure_defaults(&ini,true).unwrap();
+        assert_eq!(fs::read_to_string(&ini).unwrap(),text);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
     fn legacy_fps_migrates_without_losing_player_values(){
         let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
         let original=b"[scorch]\r\nlanguage=2\r\nFPSLimit=75\r\n[Other]\r\nnotes=\xff\r\n[Matrox]\r\nDither=1\r\n";
@@ -336,10 +370,11 @@ mod tests{
         assert!(out.windows(b"FATAL=0".len()).any(|v|v==b"FATAL=0"));
         assert!(out.windows(b"Icon01Opaque=0".len()).any(|v|v==b"Icon01Opaque=0"));
         assert!(out.windows(b"WorldBilinear=0".len()).any(|v|v==b"WorldBilinear=0"));
+        assert!(out.windows(b"SmackerCancelGuard=0".len()).any(|v|v==b"SmackerCancelGuard=0"));
         assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
         assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,smacker_cancel_guard:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -355,6 +390,7 @@ mod tests{
         assert!(s.contains("Dither=0"));
         assert!(s.contains("Icon01Opaque=0"));
         assert!(s.contains("WorldBilinear=0"));
+        assert!(s.contains("SmackerCancelGuard=0"));
         assert!(s.contains("[Cheats]\r\n"));
         assert!(s.contains("UnlimitedFuel=0"));
         assert!(s.contains("ALIAH=0"));
