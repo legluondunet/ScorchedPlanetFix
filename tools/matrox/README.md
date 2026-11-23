@@ -1028,3 +1028,177 @@ logged over 350k triangles in 900 frames without bilinear), but actual gains
 must be confirmed on Windows with matching scenes. This is not a cure for
 missing Matrox image regions, transparency, slow per-pixel CPU rasterization or
 intermittent original Smacker faults. Keep this PR draft until runtime tested.
+
+## F12 spatial-region triage (experimental offline diagnostic, PR #64)
+
+The existing `analyze_f12_capture.py` now supports **`--regions`** to
+identify connected groups of *candidate* problem pixels in a same-serial F12
+quartet. It does **not** modify the game, MSI95.dll, textures, keying,
+framebuffer, screenshots, or reference images. This extension adds an optional
+report alongside the unchanged aggregate counts.
+
+```text
+python tools/matrox/analyze_f12_capture.py "captures/matrox_capture_0003" --regions --json
+python tools/matrox/analyze_f12_capture.py "captures/matrox_capture_0003" --roi 184,71,455,352 --regions --min-region-pixels 8 --max-regions 8 --json
+```
+
+Each class reports the **number of candidate pixels inside the ROI** and the
+largest four-connected clusters with area and end-exclusive native 640×400
+bounding boxes. Four-connected intentionally keeps diagonal-only touches
+separate. Output is bounded to at most 32 regions per category. Categories
+are intersections of raw framebuffer color, last *MSI write* and last
+*attempted* world/atlas source, rather than just a black-pixel threshold:
+
+- `visible_world_index1_black_preview`: an actual index1 opaque **black
+  world write** (known portrait silhouette, not a missing image)
+- `world_index241_keyed_only`, `world_index1_keyed_only`,
+  `world_other_rgb_keyed_only`: last world sample of a source-index
+  category was discarded by a black RGB565 key, and no later MSI write
+- `zplane_unmarked_zero_black_unowned`: last attempt sampled unmapped zero
+  in a large Z-plane atlas, screen pixel is black, no later MSI write
+- `black_without_final_msi_write`: black pixel with no final MSI write,
+  which may simply be intentional background
+
+**Crucial:** none of these classifications proves a missing graphic. The
+game may write directly to the framebuffer, a last attempted sample may come
+from a different draw from the last visible pixel, and an intended
+transparent region might legitimately reveal black. `--regions` is a
+*triage aid* to find spatial evidence against a matching original Mystique
+screenshot; no automated art restoration or source-index key change is
+authorized by these clusters alone.
+
+Run on the **already captured** owner F12 quartets first. Existing original
+TITLEM.RWB `icon01` fingerprint and same-scene index241 A/B analysis
+remain the strongest confirmed title-asset attribution; the larger
+1024×1024 Z-plane atlas has previously been ruled out for the portrait
+menu scene. No new user screenshot is needed just to exercise the tool.
+
+## Comparison-crop geometry: 9.5% reference zoom (2026-11-23)
+
+This is an **offline** reanalysis of the owner's *previously uploaded*
+`Matrox_premier_correctif_comparaison.png` montage (three labeled
+640x400 crops: "Avant #553", "Après #554", "Capture de référence") and
+the owner's later real F12 `matrox_capture_0001_frame(3).bmp` difficulty
+menu. No screenshots or game artwork are committed.
+
+SIFT features + robust RANSAC affine *similarity* alignment reveal that
+the right-hand **reference** crop is approximately **1.0952× zoomed**
+relative to the middle **after #554** crop. Translation in reference
+crop coordinates is about **(+16.04,+0.41) px**, rotation about
+**−0.04°**. **441 of 459** feature matches agree with this transform
+for the later F12-vs-reference comparison. Comparing the after-#554
+montage crop to the later F12 frame at the same native coordinates
+gives only **917 / 256,000 different screenshot pixels**, due largely
+to pointer movement. That F12 frame is a valid candidate for
+correlating the montage to pixel ownership diagnostics.
+
+After resampling the reference into the same 640x400 candidate geometry,
+mean absolute per-channel image difference is **3.138 levels** over
+**208,050 mutually covered pixels** (8-bit BGR; scaling/interpolation
+and cursor motion included). **2.952%** of overlap pixels have any
+channel difference above 40. This is **not a native RGB565 bit-identical
+claim**. It is evidence that interpreting panel/frame dimensions from the
+unregistered side-by-side montage as missing renderer geometry was unsafe.
+
+For the rectangular central panel perimeter
+`[184,63,455,336)`, **12-pixel-wide border bands** have these
+post-registration any-channel>40 difference rates:
+top **3.659%**, left **1.740%**, right **0.201%**,
+bottom **0.953%**. The corresponding original F12 coverage categories:
+- top: **2,213** flat colored world pixels, **768** textured colored;
+  **271** pixels with no final MSI write but **all visibly colored**;
+- left: **2,988 final MSI writes**, no last-key-only pixels;
+- right: **2,988 final MSI writes**, no last-key-only pixels;
+- bottom: **3,121** final MSI writes, **131** no-MSI-write pixels,
+  but **all colored**.
+
+There are **zero black+no-MSI-write pixel holes**, **zero
+key-discard-only pixels**, and **zero Z-plane final writes** in all
+four bands. This **strongly weakens** a missing-triangle, rejected
+key, or sparse-atlas explanation for the central panel's outer
+borders **in this particular captured scene**. It does **not**
+prove that every other UI frame or 3D game scene matches native
+Mystique hardware; the screenshot reference may have been scaled by
+capture/presentation processing.
+
+The optional tool `align_reference_captures.py` is provided to
+prevent misleading comparisons from differently scaled screenshots.
+It requires `opencv-python-headless` and `numpy` **only for offline
+diagnostics** (neither is shipped to the game runtime):
+
+```text
+python -m pip install opencv-python-headless numpy
+python tools/matrox/align_reference_captures.py candidate.png comparison.png --reference-crop 1334,52,1974,452 --panel 184,63,455,336 --border-width 12 --json --overlay alignment.png
+python tools/matrox/test_align_reference_captures.py
+```
+
+The analyzer rejects featureless/dissimilar scenes and implausible
+scales/rotation, reports geometric evidence and border-band differences,
+and can emit a local comparison montage. It does not claim to recognize
+the original hardware, does not treat all black pixels as missing, and
+does not apply any correction to the game. Its five CI fixtures are
+synthetic; no owner's images are used in CI.
+
+**Disposition:** Do not change center panel raster edge rules on this
+montage alone. Instead, find an independently verified same-scene
+Mystique-vs-current capture showing a **specific, still discrepant
+border segment** and compare it after geometry normalization.
+
+## Cross-scene F12 HUD/Z-plane ownership (2026-11-23)
+
+The owner's **three actual 640x400 gameplay quartets**, `matrox_capture_0005`,
+`0006`, and `0007`, come from different camera directions and (for 0007)
+an active modern optional world filter. These are **NOT** same-camera,
+same-frame 3D image comparisons. However, original MSI95's screen-aligned
+Z-plane HUD can be checked separately: native F12 `_coverage.bmp`
+category 5 or 6 means the last MSI write in that pixel was a Z-plane.
+
+**Direct audit of original user-provided BMP bytes:**
+
+| Sample | Final Z-plane/HUD pixels | Final Z-plane mask vs 0005 | RGB565 changes within shared HUD |
+| --- | ---: | ---: | ---: |
+| 0005, nearest | 122,948 | reference | — |
+| 0006, nearest | 122,948 | **0 changed coordinates** | **88 / 122,948** |
+| 0007, active world bilinear | 122,948 | **0 changed coordinates** | **82 / 122,948** |
+
+All three maps also classify **101,367** last-attempt *unmarked
+nonzero atlas* pixels and **24,801** last-attempt unmarked-zero skips,
+including **8,586** skipped-zero last attempts **over pixels which
+ultimately have an actual final Z-plane write**. Last-attempt zero
+does not mean that the final HUD was erased: overlapping later and
+earlier Z-plane draws can cover the pixel. The current F12 maps record
+no last MSI `hud_missing_texel` ownership in these three frames.
+
+**Practical conclusion:** The *last-write HUD ownership mask is fully
+stable* across three **distinct camera views**; the active world-only
+bilinear does not cause observed HUD geometry or alpha coverage changes
+in these captures. This does **NOT** prove authentic original Matrox
+fidelity, rule out missing elements in other gameplay scenes, or
+establish that the RGB565 pixels match a vintage Mystique VM reference.
+Only same-geometry reference pictures and correct GUI/HUD game state
+can answer that.
+
+The new offline `compare_hud_captures.py` makes the comparison
+repeatable on any two or more same-serial F12 quartets, **including
+different world-camera positions**, without treating changed world
+colors as missing HUD pixels:
+
+```text
+python tools/matrox/compare_hud_captures.py captures/matrox_capture_0005 captures/matrox_capture_0006 captures/matrox_capture_0007 --json
+python tools/matrox/compare_hud_captures.py captures/matrox_capture_0005 captures/matrox_capture_0007 --roi 218,250,420,400
+python tools/matrox/test_compare_hud_captures.py
+```
+
+It counts final HUD ownership, black HUD, last-attempt atlas zero over
+already written HUD versus zero without final HUD write, and
+key/missing-texel-only classes. It reports mask symmetric differences
+and *exact* RGB565 differences restricted to the overlapping final
+HUD mask. It validates exact quartet dimensions and rejects duplicate
+source prefixes, invalid RGB565 diagnostic colors and invalid ROIs.
+The source uses only the Python standard library and the existing
+`analyze_f12_capture.py`; synthetic CI tests require no 1996 assets.
+
+**No game DLL, EXE, INI, texture, cache, filter or frame output is
+modified.** This is evidence triage, not a runtime fix. Never assume
+a screenshot showing a smaller/different HUD is a renderer bug unless
+its original game's view mode and HUD state are also confirmed.
