@@ -766,11 +766,12 @@ static BOOL game_transition_input_signature_supported(void){
 static int transition_input_hold_now(void){
     if(!g_initialized || !g_heap_count || !g_last_heap_alloc_tick ||
        !game_transition_input_signature_supported() ||
-       !readable_span((const void*)0x0050DCD0u,sizeof(DWORD)))return 0;
+       !readable_span((const void*)0x0050DCC0u,0x14u))return 0;
     DWORD scene=*(const volatile DWORD*)0x0050DCD0u;
+    DWORD state=*(const volatile DWORD*)0x0050DCC0u;
     return msi_transition_input_should_hold(1u, (unsigned)g_initialized,
         g_heap_count, (unsigned)g_last_heap_alloc_tick,
-        (unsigned)GetTickCount(),(unsigned)scene);
+        (unsigned)GetTickCount(),(unsigned)scene,(unsigned)state);
 }
 static void sample_game_global_50dcd0(const char *phase){
     if(!g_log || g_game_50dcd0_reports>=96u ||
@@ -1113,7 +1114,10 @@ static void preview_present(void){
          * dispatching Enter KeyDown can synchronously release the old
          * scene and allocate new heaps while still inside this pump.
          * Leaving queued WM_CHAR/WM_KEYUP untouched until scene pointer
-         * is nonzero avoids sending them through the invalid interval. */
+         * is nonzero avoids sending them through the invalid interval.
+ * The original video state at [0050DCC0] MUST also equal 1: latest
+ * successful owner logs show many benign NULL scene intervals with
+ * status 2 or 5, and earlier global-only guard timed out three times. */
         while(pumps<32 && g_preview){
             if(transition_input_hold_now()){
                 g_transition_input_hold_frames++;
@@ -1121,7 +1125,7 @@ static void preview_present(void){
                     g_transition_input_hold_active=1;
                     lognum("TRANSITION_INPUT_HOLD_BEGIN frame=",g_frames,
                            " heap_age_ms=",GetTickCount()-g_last_heap_alloc_tick);
-                    logtext("TRANSITION_INPUT_HOLD kept_win32_queue_intact=1 scene_global=0x00000000");
+                    logtext("TRANSITION_INPUT_HOLD kept_win32_queue_intact=1 scene_global=0x00000000 video_state=1");
                 }
                 if(g_transition_input_hold_frames<=8u ||
                    g_transition_input_hold_frames%120u==0u)
@@ -1133,14 +1137,17 @@ static void preview_present(void){
                 g_transition_input_hold_active=0;
                 g_transition_input_hold_releases++;
                 DWORD age=GetTickCount()-g_last_heap_alloc_tick;
-                DWORD ptr=0xFFFFFFFFu;
-                if(readable_span((const void*)0x0050DCD0u,sizeof(DWORD)))
+                DWORD ptr=0xFFFFFFFFu,video_state=0xFFFFFFFFu;
+                if(readable_span((const void*)0x0050DCC0u,0x14u)){
                     ptr=*(const volatile DWORD*)0x0050DCD0u;
+                    video_state=*(const volatile DWORD*)0x0050DCC0u;
+                }
                 lognum("TRANSITION_INPUT_HOLD_RELEASE frame=",g_frames,
                        " heap_age_ms=",age);
-                { char info[150];DWORD n=0;
+                { char info[160];DWORD n=0;
                   putstr(info,&n,"TRANSITION_INPUT_HOLD_RELEASE scene_global=");
                   puthex(info,&n,ptr);
+                  putstr(info,&n," video_state=");putunsigned(info,&n,video_state);
                   info[n]=0;logtext(info);
                 }
                 if(ptr==0u){
