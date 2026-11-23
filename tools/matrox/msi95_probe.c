@@ -256,6 +256,14 @@ static unsigned g_world_blue_diagnostic_count=0;
  * KeyingColor before LUT conversion, rather than post-LUT RGB565 only.
  * OFF by default. Restrict to world triangles with Transparency set. */
 static int g_index_key_enabled=0;
+/* Narrow experimental A/B: when the original game sets 128x128 indexed
+ * texture RGB565 key=0/mask=0xffff, compare RAW index 0 rather than a
+ * palette-decoded RGB565 black match. This is NOT proven Mystique
+ * hardware behavior: strictly opt-in, world geometry only. */
+static int g_index_source_128_enabled=0;
+static unsigned g_index_source_128_key_zero=0;
+static unsigned g_index_source_128_rgb_alias_opaque=0;
+static unsigned g_index_source_128_index241_opaque=0;
 static unsigned g_index_key_candidates=0,g_index_key_skipped=0;
 static unsigned g_index_key_blue_candidates=0,g_index_key_other_candidates=0;
 static unsigned g_index_key_debug=0;
@@ -1594,6 +1602,13 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_INDEXED_KEY",setting,sizeof(setting));
       g_index_key_enabled=(n==1u && setting[0]=='1');}
     logtext(g_index_key_enabled?"INDEXED_KEY enabled (world 8bit transparent textures only)":"INDEXED_KEY disabled (reference RGB565 color-key)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_INDEX_KEY_128",setting,sizeof(setting));
+      g_index_source_128_enabled=(n==1u && setting[0]=='1');}
+    g_index_source_128_key_zero=g_index_source_128_rgb_alias_opaque=
+        g_index_source_128_index241_opaque=0;
+    logtext(g_index_source_128_enabled?
+        "SOURCE_INDEX_KEY128 enabled (EXPERIMENTAL: key raw 8bit source index 0, preserve black aliases; 128x128 transparent world textures only)":
+        "SOURCE_INDEX_KEY128 disabled (validated index1 preview + RGB565 key remain unchanged)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PERSPECTIVE",setting,sizeof(setting));
       g_perspective_enabled=(n==1u && setting[0]=='1');}
     logtext(g_perspective_enabled?"PERSPECTIVE_MODE enabled (world triangles only)":"PERSPECTIVE_MODE disabled (v0.19 reference rasterization)");
@@ -1900,6 +1915,10 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("INDEXED_KEY candidates=",g_index_key_candidates,"skipped=",g_index_key_skipped);
         lognum("INDEXED_KEY blue_candidates=",g_index_key_blue_candidates,"other_candidates=",g_index_key_other_candidates);
         lognum("INDEXED_KEY enabled=",(unsigned)g_index_key_enabled,NULL,0);
+        lognum("SOURCE_INDEX_KEY128 enabled=",(unsigned)g_index_source_128_enabled,
+               " raw_index0_skips=",g_index_source_128_key_zero);
+        lognum("SOURCE_INDEX_KEY128 rgb_key_alias_opaque=",g_index_source_128_rgb_alias_opaque,
+               " source_index241_opaque=",g_index_source_128_index241_opaque);
         lognum("SHADOW_BLEND dark_flat_pixels=",g_shadow_dark_candidates,"blended_pixels=",g_shadow_dark_blended);
         lognum("SHADOW_BLEND enabled=",(unsigned)g_shadow_blend_enabled,NULL,0);
         lognum("SHADOW_UNDERLAY candidates_with_texture=",g_shadow_underlay_pixels,
@@ -2508,10 +2527,31 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     color==0u && g_state.msiTexture.Transparency &&
                     g_state.msiTexture.KeyingColor==0u &&
                     g_state.msiTexture.KeyingColorMask==0xffffu;
-                if(g_state.msiTexture.Transparency &&
-                   ((color&g_state.msiTexture.KeyingColorMask)==
-                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)) &&
-                   !preview_index1_opaque){
+                /* This one opt-in model changes only the 128x128, 8bpp,
+                 * transparent world path with exact key=0/mask=ffff.
+                 * On real F12 menu samples this means index 241 (CLUT RGB
+                 * black) becomes opaque and index 0 (CLUT blue) is keyed.
+                 * Scope gate is intentionally BEFORE Z-plane/HUD handling.
+                 * No RGB565, 4bpp, other sizes or opaque-state changes. */
+                int use_source_key128=g_index_source_128_enabled &&
+                    !g_zplane_draw_context && source_index_valid &&
+                    texW==128u && texH==128u && planes==8u &&
+                    g_state.msiTexture.Transparency &&
+                    g_state.msiTexture.KeyingColor==0u &&
+                    g_state.msiTexture.KeyingColorMask==0xffffu;
+                int rgbkey_match=g_state.msiTexture.Transparency &&
+                    ((color&g_state.msiTexture.KeyingColorMask)==
+                     (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask));
+                int skip_keyed=use_source_key128 ? (source_index==0u) :
+                    (rgbkey_match && !preview_index1_opaque);
+                if(use_source_key128){
+                    if(source_index==0u)g_index_source_128_key_zero++;
+                    else if(rgbkey_match){
+                        g_index_source_128_rgb_alias_opaque++;
+                        if(source_index==241u)g_index_source_128_index241_opaque++;
+                    }
+                }
+                if(skip_keyed){
                     if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
                         unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
                         g_atlas_provenance[screen]=5u;
