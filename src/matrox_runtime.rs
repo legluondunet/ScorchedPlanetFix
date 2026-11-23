@@ -489,6 +489,23 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
     #[test]
+    fn matrox_smacker_guard_env_is_managed_only_from_root_ini(){
+        let root=std::env::temp_dir().join(format!("smacker-av-env-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let ini=root.join("ScorchedPlanetFix.ini");
+        fs::write(&ini,b"[Matrox]\nSmackerCancelGuard=1\n").unwrap();
+        let mut c=Command::new("unused");
+        configure(&mut c,&root,false).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMACK_GUARD" &&
+            v==Some(std::ffi::OsStr::new("1"))));
+        fs::write(&ini,b"[Matrox]\nSmackerCancelGuard=0\n").unwrap();
+        configure(&mut c,&root,false).unwrap();
+        assert!(c.get_envs().any(|(k,v)|k=="MATROX_MSI_SMACK_GUARD" &&
+            v==Some(std::ffi::OsStr::new("0"))));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
     fn replacing_installer_driver_never_leaves_a_permanent_backup(){
         let root=std::env::temp_dir().join(format!("msi95-upgrade-test-{}",std::process::id()));
         let _=fs::remove_dir_all(&root);
