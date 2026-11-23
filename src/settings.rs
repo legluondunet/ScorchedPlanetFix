@@ -340,12 +340,12 @@ mod tests{
     #[test]
     fn matrox_smacker_cancel_guard_is_opt_in_strict_and_preserves_existing_values(){
         assert!(!GameSettings::default().smacker_cancel_guard);
-        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=1").unwrap().0.smacker_cancel_guard);
-        assert!(!parse(b"[Matrox]\\nSmackerCancelGuard=0").unwrap().0.smacker_cancel_guard);
-        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=2").is_err());
-        assert!(parse(b"[Matrox]\\nSmackerCancelGuard=1\\nsmackercancelguard=0").is_err());
+        assert!(parse(b"[Matrox]\nSmackerCancelGuard=1").unwrap().0.smacker_cancel_guard);
+        assert!(!parse(b"[Matrox]\nSmackerCancelGuard=0").unwrap().0.smacker_cancel_guard);
+        assert!(parse(b"[Matrox]\nSmackerCancelGuard=2").is_err());
+        assert!(parse(b"[Matrox]\nSmackerCancelGuard=1\nsmackercancelguard=0").is_err());
         let p=fixture();let ini=p.join("ScorchedPlanetFix.ini");
-        fs::write(&ini,b"[Matrox]\\nDither=1\\nWorldBilinear=1\\n").unwrap();
+        fs::write(&ini,b"[Matrox]\nDither=1\nWorldBilinear=1\n").unwrap();
         ensure_defaults(&ini,true).unwrap();
         let text=fs::read_to_string(&ini).unwrap();
         assert_eq!(text.matches("SmackerCancelGuard=0").count(),1);
