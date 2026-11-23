@@ -283,6 +283,7 @@ fn main() {
                 for transparency in [false,true] {
                     for varying in [false,true] {
                     for keyed_neighbor in [false,true] {
+                    for small_geometry in [false,true] {
                         assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
                         framebuffer.fill(GREEN);
                         let mut texture=vec![0u8;128*128*(planes/8)];
@@ -330,11 +331,17 @@ fn main() {
                             color:ColorParams{dither:0,protect:0},
                         };
                         assert_ne!(set(&params),0);
-                        let mut vertices=[
-                            Vertex::at(40.0,40.0),
-                            Vertex::at(90.0,40.0),
-                            Vertex::at(40.0,90.0),
-                        ];
+                        let mut vertices=if small_geometry {
+                            // Bounding box 8x8, bypass the palette-table
+                            // setup: the direct RGB565 path must match.
+                            [Vertex::at(48.0,48.0),Vertex::at(56.0,48.0),
+                             Vertex::at(48.0,56.0)]
+                        }else{
+                            // Bounding box 50x50, use the palette-table
+                            // optimization for 8-bit indexed textures.
+                            [Vertex::at(40.0,40.0),Vertex::at(90.0,40.0),
+                             Vertex::at(40.0,90.0)]
+                        };
                         if varying {vertices[1].inv_w=0.5;}
                         assert_ne!(render(&vertices[0],&vertices[1],&vertices[2],100),0);
                         let actual=framebuffer[50*pitch/2+50];
@@ -348,8 +355,9 @@ fn main() {
                             }
                         }else{BLUE};
                         assert_eq!(actual,expected,
-                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} expected {:#06x} got {:#06x}",
-                            filter_on,planes,transparency,varying,keyed_neighbor,expected,actual);
+                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} small_geometry={} expected {:#06x} got {:#06x}",
+                            filter_on,planes,transparency,varying,keyed_neighbor,small_geometry,expected,actual);
+                    }
                     }
                     }
                 }
@@ -357,6 +365,6 @@ fn main() {
             assert_ne!(exit(),0);
         }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + thirty-two real 3D color-key-safe bilinear raster assertions");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + sixty-four real bilinear assertions (predecoded CLUT and direct-path parity)");
     }
 }
