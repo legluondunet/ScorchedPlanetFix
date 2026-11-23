@@ -284,6 +284,7 @@ fn main() {
                     for varying in [false,true] {
                     for keyed_neighbor in [false,true] {
                     for small_geometry in [false,true] {
+                    for uniform_color in [false,true] {
                         assert_ne!(start(1,0.0,0.0,0.0,0,0.0),0);
                         framebuffer.fill(GREEN);
                         let mut texture=vec![0u8;128*128*(planes/8)];
@@ -294,9 +295,11 @@ fn main() {
                         for y in 0..128 {
                             for x in 0..128 {
                                 let pos=y*128+x;
-                                let color=if x<64 { RED } else { BLUE };
+                                let color=if uniform_color { BLUE }
+                                          else if x<64 { RED } else { BLUE };
                                 if planes==8{
-                                    texture[pos]=if x<64 {2} else {3};
+                                    texture[pos]=if uniform_color {3}
+                                                 else if x<64 {2} else {3};
                                 }else{
                                     texture[2*pos]=(color&255) as u8;
                                     texture[2*pos+1]=(color>>8) as u8;
@@ -350,13 +353,16 @@ fn main() {
                                 BLUE // color-keyed neighbor: original nearest
                             } else if keyed_neighbor {
                                 0x0010 // opaque neighbor RGB565 black + blue
+                            } else if uniform_color {
+                                BLUE // four identical neighbors fast path
                             } else {
                                 0x8010 // all four opaque: red + blue midpoint
                             }
                         }else{BLUE};
                         assert_eq!(actual,expected,
-                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} small_geometry={} expected {:#06x} got {:#06x}",
-                            filter_on,planes,transparency,varying,keyed_neighbor,small_geometry,expected,actual);
+                            "WorldBilinear={} bpp={} transparency={} varying_invw={} keyed_neighbor={} small_geometry={} uniform_color={} expected {:#06x} got {:#06x}",
+                            filter_on,planes,transparency,varying,keyed_neighbor,small_geometry,uniform_color,expected,actual);
+                    }
                     }
                     }
                     }
@@ -365,6 +371,6 @@ fn main() {
             assert_ne!(exit(),0);
         }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + sixty-four real bilinear assertions (predecoded CLUT and direct-path parity)");
+        println!("MSI95_PALETTE_SMOKE_PASS eighteen original icon01 + 128 real bilinear assertions (CLUT cache, direct path, uniform neighbors)");
     }
 }
