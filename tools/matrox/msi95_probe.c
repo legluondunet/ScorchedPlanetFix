@@ -2568,7 +2568,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     BYTE bilinear_palette_opaque[256];
     int bilinear_palette_ready=0;
     if(bilinear_triangle && planes==8u && lut &&
-       (unsigned)(right-left)*(unsigned)(bottom-top)>=128u){
+       (unsigned)(right-left)*(unsigned)(bottom-top)>=512u){
         const unsigned trans=(unsigned)g_state.msiTexture.Transparency;
         const unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
         const unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
