@@ -5,6 +5,7 @@
  * Compile with clang targeting i686-pc-windows-msvc and lld-link; no CRT.
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
+#include "msi_world_bilinear.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -245,6 +246,13 @@ static int g_perspective_enabled=0;
 static unsigned g_perspective_triangles=0, g_perspective_pixels=0;
 static unsigned g_world_varying_invw=0, g_world_constant_invw=0;
 static unsigned g_world_invalid_invw=0;
+/* Modern optional rendering experiment: RGB565 bilinear ONLY on opaque
+ * 3D world textures whose vertex invW actually varies. The 1996
+ * Mystique used nearest sampling; default OFF for original fidelity.
+ * Transparent textures, menus (constant invW) and Z-plane HUD bypass. */
+static int g_world_bilinear_enabled=0;
+static unsigned g_world_bilinear_triangles=0;
+static unsigned g_world_bilinear_samples=0,g_world_bilinear_changed=0;
 /* Explicit A/B experiment: the game uses RGB565 0x00FF for some blue
  * sprite borders in the 3D world. Honor the original color key always;
  * only opt-in a second exact-blue key on textured transparent world draws.
@@ -1563,6 +1571,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
 
     g_perspective_triangles=g_perspective_pixels=0;
     g_world_varying_invw=g_world_constant_invw=g_world_invalid_invw=0;
+    g_world_bilinear_triangles=g_world_bilinear_samples=g_world_bilinear_changed=0;
     g_world_blue_samples=g_world_blue_eligible=g_world_blue_skipped=0;
     g_world_blue_diagnostic_count=0;
     g_index_key_candidates=g_index_key_skipped=0;
@@ -1615,6 +1624,11 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PERSPECTIVE",setting,sizeof(setting));
       g_perspective_enabled=(n==1u && setting[0]=='1');}
     logtext(g_perspective_enabled?"PERSPECTIVE_MODE enabled (world triangles only)":"PERSPECTIVE_MODE disabled (v0.19 reference rasterization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_WORLD_BILINEAR",setting,sizeof(setting));
+      g_world_bilinear_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_world_bilinear_enabled?
+        "WORLD_BILINEAR enabled (EXPERIMENTAL modern 3D opaque world filter, UI/HUD bypassed)":
+        "WORLD_BILINEAR disabled (original Mystique nearest texture sampling)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_MODULATE",setting,sizeof(setting));
       g_msi_modulate_enabled=(n==1u && setting[0]=='1');}
     logtext(g_msi_modulate_enabled?"MSI_MODULATE enabled (opt-in per-vertex RGB, textured triangles only; Z-plane HUD excluded)":
@@ -1913,6 +1927,8 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("PERSPECTIVE_UV enabled=",(unsigned)g_perspective_enabled,"triangles=",g_perspective_triangles);
         lognum("PERSPECTIVE_UV adjusted_pixels=",g_perspective_pixels,"varying_invw_world_tris=",g_world_varying_invw);
         lognum("PERSPECTIVE_UV constant_invw_world_tris=",g_world_constant_invw,"invalid_invw_world_tris=",g_world_invalid_invw);
+        lognum("WORLD_BILINEAR enabled=",(unsigned)g_world_bilinear_enabled," triangles=",g_world_bilinear_triangles);
+        lognum("WORLD_BILINEAR filtered_samples=",g_world_bilinear_samples,"changed_pixels=",g_world_bilinear_changed);
         lognum("WORLD_BLUE_KEY samples=",g_world_blue_samples,"transparent_state_samples=",g_world_blue_eligible);
         lognum("WORLD_BLUE_KEY skipped=",g_world_blue_skipped,"enabled=",(unsigned)g_world_blue_key_enabled);
         lognum("INDEXED_KEY candidates=",g_index_key_candidates,"skipped=",g_index_key_skipped);
@@ -2282,6 +2298,18 @@ static unsigned rgb565_modulate_ordered(unsigned color,unsigned mr,unsigned mg,
     return (r<<11)|(g<<5)|b;
 }
 static float cross2(float ax,float ay,float bx,float by){return ax*by-ay*bx;}
+/* Same source texel decoder as the nearest path, used only by optional
+ * opaque world bilinear after original cache-residency checks. */
+static unsigned world_texel_rgb565(const BYTE*tex,const BYTE*lut,unsigned planes,unsigned pos){
+    if(planes==16u)return (unsigned)tex[2u*pos]|((unsigned)tex[2u*pos+1u]<<8);
+    unsigned idx=(unsigned)tex[pos]; /* only 8bpp supported by this filter */
+    return (unsigned)lut[2u*idx]|((unsigned)lut[2u*idx+1u]<<8);
+}
+static unsigned bilinear_texcoord(int p,unsigned limit,int clamp){
+    if(p<0)return clamp?0u:limit-1u;
+    if((unsigned)p>=limit)return clamp?limit-1u:0u;
+    return (unsigned)p;
+}
 static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,const T_msiVertex*c,BYTE opacity){
     if(!g_state_valid || !g_color || g_info.msiColor.BytesPerPixel!=2 || opacity==0)return;
     float x0=a->x,y0=a->y,x1=b->x,y1=b->y,x2=c->x,y2=c->y;
@@ -2320,7 +2348,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     int sparseAtlas=0;
     int sparseZeroWouldBeKeyed=0; /* diagnostic only; never affects a skip */
     unsigned texOffset=0;
-    int perspective=0;
+    int perspective=0,world_depth_varying=0,bilinear_triangle=0;
     float aow=a->invW, bow=b->invW, cow=c->invW;
     float auw=0.f, buw=0.f, cuw=0.f, avw=0.f,bvw=0.f,cvw=0.f;
     if(textured){
@@ -2338,6 +2366,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 if(bow>mx)mx=bow;if(cow>mx)mx=cow;
                 if(mx-mn>mx*0.00001f){
                     g_world_varying_invw++;
+                    world_depth_varying=1;
                     if(g_perspective_enabled){
                         perspective=1;g_perspective_triangles++;
                         auw=a->u*aow;buw=b->u*bow;cuw=c->u*cow;
@@ -2373,6 +2402,13 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             g_missing_textures++;return;
         }
         texture=(const BYTE*)g_texture+texOffset;
+        /* Every transparent texture keeps the exact nearest-key path:
+         * no blended alpha masks, no icon01 or portrait edge halos.
+         * Varying invW selects true 3D triangles, not title menu quads. */
+        bilinear_triangle=g_world_bilinear_enabled && world_depth_varying &&
+            !g_zplane_draw_context && !g_state.msiTexture.Transparency &&
+            (planes==8u || planes==16u) && texW>=2u && texH>=2u;
+        if(bilinear_triangle)g_world_bilinear_triangles++;
         if(g_capture_ownership && !g_zplane_draw_context && g_world_texture_samples<8u){
             char binfo[400];DWORD n=0;
             putstr(binfo,&n,"WORLD_TEXTURE_BIND frame=");putunsigned(binfo,&n,g_frames);
@@ -2739,6 +2775,30 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         if(!g_ownership[j])g_ownership[j]=8;
                     }
                     continue;
+                }
+                /* Modern optional bilinear RGB565 for OPAQUE 3D only.
+                 * u/v have already undergone the original clamp/wrap.
+                 * Texel-center convention (u*width-0.5) preserves original
+                 * samples at texel centers and wraps correctly at tile seams.
+                 * DO NOT use for 2D, HUD, transparent artwork or 4bpp. */
+                if(bilinear_triangle){
+                    float sx=u*(float)texW-0.5f,sy=v*(float)texH-0.5f;
+                    int ix0=floor_clipped(sx),iy0=floor_clipped(sy);
+                    unsigned ix1=bilinear_texcoord(ix0+1,texW,(int)g_state.msiTexture.Clamp_u);
+                    unsigned iy1=bilinear_texcoord(iy0+1,texH,(int)g_state.msiTexture.Clamp_v);
+                    unsigned ix=bilinear_texcoord(ix0,texW,(int)g_state.msiTexture.Clamp_u);
+                    unsigned iy=bilinear_texcoord(iy0,texH,(int)g_state.msiTexture.Clamp_v);
+                    float fracx=sx-(float)ix0,fracy=sy-(float)iy0;
+                    unsigned wx=(unsigned)(fracx*256.0f+0.5f);
+                    unsigned wy=(unsigned)(fracy*256.0f+0.5f);
+                    unsigned c00=world_texel_rgb565(texture,lut,planes,iy*texW+ix);
+                    unsigned c10=world_texel_rgb565(texture,lut,planes,iy*texW+ix1);
+                    unsigned c01=world_texel_rgb565(texture,lut,planes,iy1*texW+ix);
+                    unsigned c11=world_texel_rgb565(texture,lut,planes,iy1*texW+ix1);
+                    unsigned filtered=msi_bilinear_mix_rgb565(c00,c10,c01,c11,wx,wy);
+                    g_world_bilinear_samples++;
+                    if(filtered!=color)g_world_bilinear_changed++;
+                    color=filtered;
                 }
                 /* Apply MSI texture color after source-index / RGB565 keying,
                  * preserving the validated transparency behavior. Never
