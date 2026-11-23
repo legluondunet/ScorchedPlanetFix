@@ -2,7 +2,7 @@ name: ScorchedPlanetFix Windows CLI
 
 on:
   push:
-    branches: [main]
+    branches: [main, diagnostics/matrox-native-effects-atlas-zero-20261121]
     tags: ["v*"]
   pull_request:
     branches: [main]
