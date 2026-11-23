@@ -196,6 +196,15 @@ static BYTE *g_world_provenance=NULL;
  * value matched the hardware color key. This is not a pixel-coverage map:
  * overdraw and triangle overlap can count a texel more than once. */
 static unsigned g_world_rgbkey_index_hist[256];
+/* F12-only CLUT alias analysis, no influence on keying/rasterizer:
+ * count ALL original RGB565 key matches BEFORE palette index 1 preview
+ * exempts its black source pixel. This includes draws/overdraw, not
+ * unique pixels nor proof that a palette entry is used in this frame. */
+static unsigned g_world_key_candidate_hist[256];
+static unsigned g_world_index1_preview_attempts=0;
+static unsigned g_key_alias_bind_reports=0;
+static unsigned g_key_alias_seen[24][4]; /* texture offset, CLUT offset, key, mask */
+
 static unsigned g_ownership_bytes = 0;
 static int g_capture_ownership = 0;
 static unsigned g_world_texture_samples = 0;
@@ -1446,6 +1455,25 @@ static void capture_world_provenance(const char *filename){
     putstr(sl,&sn," other_nonzero=");putunsigned(sl,&sn,counts[11]);
     putstr(sl,&sn," index1_opaque_preview=");putunsigned(sl,&sn,counts[12]);
     sl[sn]=0;logtext(sl);
+    /* The existing key histogram counts only discarded source samples.
+     * This independent F12 histogram counts every source-index match
+     * BEFORE the optional index-1 preview exception suppresses a skip. */
+    {
+        unsigned total=0,distinct=0;
+        for(unsigned ix=0;ix<256u;ix++){
+            total+=g_world_key_candidate_hist[ix];
+            if(g_world_key_candidate_hist[ix])distinct++;
+        }
+        char ab[400];DWORD an=0;
+        putstr(ab,&an,"F12_PALETTE_KEY_CANDIDATES frame=");putunsigned(ab,&an,g_frames);
+        putstr(ab,&an," attempts=");putunsigned(ab,&an,total);
+        putstr(ab,&an," distinct_source_indices=");putunsigned(ab,&an,distinct);
+        putstr(ab,&an," source_index0=");putunsigned(ab,&an,g_world_key_candidate_hist[0]);
+        putstr(ab,&an," source_index1=");putunsigned(ab,&an,g_world_key_candidate_hist[1]);
+        putstr(ab,&an," source_index241=");putunsigned(ab,&an,g_world_key_candidate_hist[241]);
+        putstr(ab,&an," index1_preview_attempts=");putunsigned(ab,&an,g_world_index1_preview_attempts);
+        ab[an]=0;logtext(ab);
+    }
     /* Top eight RGB565-keyed 8-bit source indices, counted at sample time.
      * A single screen pixel can be sampled multiple times by overlapping
      * triangles, so sample counts need not match the colored BMP counts. */
@@ -1759,6 +1787,9 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
         if(g_world_provenance)zero(g_world_provenance,g_ownership_bytes);
         zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
+        zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
+        g_world_index1_preview_attempts=0;
+        g_key_alias_bind_reports=0;
         g_world_texture_samples=0;
     }
     /* Tracker is per-frame, never inherited from a preceding frame. */
@@ -2320,6 +2351,51 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 g_missing_textures++;return;
             }
             lut=(const BYTE*)g_texture+(unsigned)loff;
+            /* At most 24 distinct F12 world CLUT+texture+key states.
+             * Palettes are reusable independently of texture data, so
+             * count *all* RGB565 key aliases and report 0/1/241 values.
+             * This is passive; the actual transparency rule below stays
+             * exactly as it was. Do not assume unused palette slots are
+             * sampled or that key aliases prove hardware semantics. */
+            if(planes==8u && !g_zplane_draw_context && g_capture_ownership &&
+               g_state.msiTexture.Transparency && g_key_alias_bind_reports<24u){
+                unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+                unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+                unsigned fingerprint[4]={texOffset,(unsigned)loff,key,mask};
+                int already=0;
+                for(unsigned p=0;p<g_key_alias_bind_reports;p++){
+                    if(g_key_alias_seen[p][0]==fingerprint[0] &&
+                       g_key_alias_seen[p][1]==fingerprint[1] &&
+                       g_key_alias_seen[p][2]==fingerprint[2] &&
+                       g_key_alias_seen[p][3]==fingerprint[3]){already=1;break;}
+                }
+                if(!already){
+                    for(unsigned j=0;j<4;j++)
+                        g_key_alias_seen[g_key_alias_bind_reports][j]=fingerprint[j];
+                    ++g_key_alias_bind_reports;
+                    unsigned aliases=0;
+                    for(unsigned ix=0;ix<256u;ix++){
+                        unsigned rgb=(unsigned)lut[2u*ix]|((unsigned)lut[2u*ix+1u]<<8);
+                        if((rgb&mask)==(key&mask))aliases++;
+                    }
+                    unsigned ix0=(unsigned)lut[0]|((unsigned)lut[1]<<8);
+                    unsigned ix1=(unsigned)lut[2]|((unsigned)lut[3]<<8);
+                    unsigned ix241=(unsigned)lut[482]|((unsigned)lut[483]<<8);
+                    char ab[560];DWORD an=0;
+                    putstr(ab,&an,"F12_PALETTE_BIND frame=");putunsigned(ab,&an,g_frames);
+                    putstr(ab,&an," wh=");putunsigned(ab,&an,texW);
+                    putstr(ab,&an,"x");putunsigned(ab,&an,texH);
+                    putstr(ab,&an," texture_offset=");putunsigned(ab,&an,texOffset);
+                    putstr(ab,&an," lut_offset=");putunsigned(ab,&an,(unsigned)loff);
+                    putstr(ab,&an," key=");puthex(ab,&an,key);
+                    putstr(ab,&an," mask=");puthex(ab,&an,mask);
+                    putstr(ab,&an," palette_key_alias_indices=");putunsigned(ab,&an,aliases);
+                    putstr(ab,&an," lut0=");puthex(ab,&an,ix0);
+                    putstr(ab,&an," lut1=");puthex(ab,&an,ix1);
+                    putstr(ab,&an," lut241=");puthex(ab,&an,ix241);
+                    ab[an]=0;logtext(ab);
+                }
+            }
         }
         if(sparseAtlas){
             /* Classify a zero-valued *sample* after palette lookup, but do
@@ -2421,6 +2497,11 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                  * become black. Keep index 241 keyed, but let index 1 render
                  * its black palette color when using 128x128 indexed menu
                  * textures. A/B against PR #39; never apply to Z-planes. */
+                if(g_capture_ownership && !g_zplane_draw_context &&
+                   source_index_valid && g_state.msiTexture.Transparency &&
+                   ((color&g_state.msiTexture.KeyingColorMask)==
+                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)))
+                    g_world_key_candidate_hist[source_index]++;
                 int preview_index1_opaque=
                     !g_zplane_draw_context && source_index_valid &&
                     source_index==1u && texW==128u && texH==128u &&
@@ -2449,10 +2530,12 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     }
                     continue;
                 }
-                if(preview_index1_opaque && g_capture_ownership &&
-                   g_world_provenance)
-                    g_world_provenance[(unsigned)y*(unsigned)width+
-                                       (unsigned)x]=12u;
+                if(preview_index1_opaque && g_capture_ownership){
+                    g_world_index1_preview_attempts++;
+                    if(g_world_provenance)
+                        g_world_provenance[(unsigned)y*(unsigned)width+
+                                           (unsigned)x]=12u;
+                }
                 /* The 8-bit MSI interface has a palette-index ambiguity:
                  * source pixel index zero can map through the CLUT to blue
                  * RGB565 0x00FF. Record source index for every blue texel,
