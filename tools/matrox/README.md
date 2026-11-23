@@ -853,3 +853,59 @@ baseline. Check all four source-241 icon backgrounds plus the
 unchanged index-1 icon backgrounds. Do not enable by default, merge,
 or assume exact original-driver RGB values without matching historical
 hardware reference.
+
+
+## Optional modern 3D bilinear texture filtering (2026-11-23)
+
+**This is a visual enhancement, NOT an original Mystique hardware behavior.**
+The 1996 Mystique used nearest-neighbor texture sampling. The existing
+`WorldBilinear=0` default preserves that native look. Set
+`[Matrox] WorldBilinear=1` only when explicitly choosing a
+smoother 3D surface appearance.
+
+The experimental implementation intentionally filters **only**
+128x128-or-any-size opaque indexed-8 / RGB565-16 world triangles
+whose three vertex `invW` values differ (a geometric indication of
+perspective/depth variation). The MSI95 renderer uses its original UV
+clamp/repeat behavior and palette CLUT to read the four nearest
+**valid opaque** source texels, then blends 5/6/5 channels with 8-bit
+fixed fractional weights at texel centers. Filtering happens after
+all original native key tests, before optional vertex modulation.
+It does **not** alter the original game EXE, CD/ISO, texture uploads
+or native game textures.
+
+No filtering is performed on:
+- constant-invW flat title/options/difficulty menu quads;
+- transparent textures of **any** kind (including portrait
+  `index1` and `icon01` black background exceptions), so no
+  interpolation across a keyed edge/transparent-black atlas;
+- original sparse Z-plane/HUD/text, 4-bit paletted textures,
+  untextured Gouraud/shadow layers, or retail 3dfx / GameFrame.
+
+The runtime logs:
+```text
+WORLD_BILINEAR enabled=1 triangles=N
+WORLD_BILINEAR filtered_samples=N changed_pixels=N
+```
+These are **cumulative draw/sample counts** (overdraw is counted),
+not unique final framebuffer pixels. An idle title menu should
+report both counters as zero even with the option enabled.
+Performance impact is possible because each eligible sample reads
+four RGB565 colors rather than one. If needed, disable the option
+without reinstalling.
+
+A standalone pure freestanding `msi_world_bilinear.h` implements
+the RGB565 interpolation. The actual x86 Windows DLL synthetic
+smoke verifies both 8-bit-CLUT and 16-bit textures with both
+`WorldBilinear=0` and `1`, each with transparency on/off
+and constant/varying vertex inverse-W. Only opaque varying-W
+3D fragments are permitted to change; all other cases must
+remain byte-identical.
+
+**Minimal comparison:** with the icon01 correction retained, test
+a settled *in-game 3D terrain* scene under Windows/Wine, not
+the title menu, with `WorldBilinear=1` and `Log=1`.
+One F12 (or same-scene screenshot) and a runtime log is enough to
+show visual effect/performance; previous title menu baseline remains
+valid. Turning this option on is not claimed to increase fidelity
+to the actual original hardware.
