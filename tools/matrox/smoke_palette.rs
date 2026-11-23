@@ -167,6 +167,8 @@ fn main() {
         let render: Triangle = require(module, b"msiRenderTriangle\0");
         let exit: Exit = require(module, b"msiExit\0");
 
+        for source_mode in [false, true] {
+        std::env::set_var("MATROX_MSI_INDEX_KEY_128",if source_mode{"1"}else{"0"});
         let info = init(640, 400, 16, 0, 0, guest_wndproc);
         assert!(!info.is_null(), "MSI95 failed to allocate framebuffer");
         assert_eq!((*info).color.bytes_per_pixel, 2);
@@ -203,6 +205,11 @@ fn main() {
             let mut lut = vec![0u8; 512];
             // Both palette entries 1 and 241 intentionally resolve to
             // RGB565 0x0000. Entry 5 is opaque red.
+            // In source-key A/B mode index0 resolves to BLUE but MUST
+            // still be rejected by its raw source index before the CLUT.
+            if source_mode && case.index==0 && case.planes==8{
+                lut[0]=0xff;
+            }
             lut[2 * 5] = (RED & 0xff) as u8;
             lut[2 * 5 + 1] = (RED >> 8) as u8;
             let params = Params {
@@ -232,12 +239,17 @@ fn main() {
             assert_ne!(render(&vertices[0], &vertices[1], &vertices[2], 100), 0,
                 "msiRenderTriangle failed for {}", case.label);
             let pixel = framebuffer[50 * pitch / 2 + 50];
-            assert_eq!(pixel, case.expected,
-                "Case {}: {} expected RGB565 {:#06x}, got {:#06x}",
-                i, case.label, case.expected, pixel);
+            let expected=if source_mode && case.width==128 && case.planes==8 &&
+                case.transparency {
+                match case.index {0=>GREEN,241=>0,_=>case.expected}
+            } else {case.expected};
+            assert_eq!(pixel, expected,
+                "Mode={} case {}: {} expected RGB565 {:#06x}, got {:#06x}",
+                source_mode, i, case.label, expected, pixel);
         }
         assert_ne!(exit(), 0, "msiExit failed after palette smoke");
+        }
         assert_ne!(FreeLibrary(module), 0, "Cannot unload MSI95 x86 DLL");
-        println!("MSI95_PALETTE_SMOKE_PASS seven real rasterized palette/keying cases");
+        println!("MSI95_PALETTE_SMOKE_PASS fourteen real rasterized baseline/source-key cases");
     }
 }
