@@ -442,7 +442,7 @@ fn main() {
             for x in 0..8usize {
                 // Match x=0 and x=7 so floating point interpolation near
                 // exactly u=1.0 remains visually seam-safe on x86 SSE.
-                texture[y*8+x]=2+((x%7+3*y)%3) as u8;
+                texture[y*8+x]=2+((x%7+2*y)%3) as u8;
             }
         }
         let mut vertices=[
