@@ -658,3 +658,49 @@ Automated tests use **synthetic 2×2 BMP fixtures only**, validate top-down
 and bottom-up ordering, clipping/ROI, corrupt/wrong-format files, renamed
 suffixes, and exact cross-layer semantics. The CI test step does not need
 nor redistribute any copyrighted game data.
+
+## F12-only CLUT color-key collision diagnosis (2026-11-23)
+
+The authentic original MSI95 tutorial (`MSI95/msitutor/msitutor.c`,
+`ShowLUT8`) uses 128×128 8-bit indexed textures and two separate
+RGB565 CLUT uploads. Its example enables `msiTexture.Transparency`
+with `KeyingColor=0` and `KeyingColorMask=0xffff`.
+This authentic SDK usage proves that CLUT selection and RGB565 key state
+must be recorded **together**. It does NOT prove whether real Mystique
+hardware keys indexed pixels before or after palette lookup.
+
+On any explicitly requested F12 frame, this branch logs:
+
+- `F12_PALETTE_BIND`: up to **24 distinct** 8bpp transparent world
+  `(texture_offset,lut_offset,key,mask)` combinations and for each the
+  CLUT's RGB565 values at source indices 0, 1 and 241. The diagnostic
+  also counts how many of all 256 CLUT entries match the current RGB565
+  key after applying its mask. This **does not** mean all matching
+  indices are present in the texture or sampled in the frame.
+- `F12_PALETTE_KEY_CANDIDATES`: counts all real **sample attempts**
+  whose resolved RGB565 value matches the active key **before** the
+  experimental index-1-opaque bypass. Reports total, distinct sampled
+  raw indices, source 0/1/241 and the count of actual 128×128
+  preview-sample attempts. These are cumulative **sample attempts,
+  not distinct final screen pixels**.
+- Existing `WORLD_KEY_INDEX_HIST` counts only **discarded** sample
+  attempts (after the preview exclusion). The F12 `_world.bmp`
+  remains the **last attempted** indexed source map; neither histogram
+  overrides the final-write `_coverage.bmp`.
+
+The source-index-1 opacity exception remains unchanged, the original
+RGB565 key predicate remains unchanged, and **no new filter, hook or
+rendering modification is enabled**. The extra 256-entry CLUT scan is
+gated strictly to an F12 frame, 8-bit transparent world draws and a
+bounded 24 **distinct bind** maximum per frame. No additional BMPs or
+game-data copies are produced.
+
+### How to interpret
+
+If indices 1 and 241 both resolve to key-colored black under the **same
+binding**, but only 1 is experimentally rendered opaque, that shows
+a palette alias and precisely quantifies our exception. It does **not**
+establish what original MSI95 silicon did with those aliases. True
+hardware equivalence still requires aligned original Mystique driver
+reference scenes. Avoid making all RGB565-black pixels opaque or blindly
+switching every texture to pre-CLUT source-index keying.
