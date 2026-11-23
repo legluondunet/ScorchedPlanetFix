@@ -1001,3 +1001,128 @@ is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
 a F12 capture and the session timing summary. If the game is still
 too CPU-bound, do not enable bilinear by default; the historic Mystique
 nearest mode is always available.
+
+## Input-pump deferral during null-scene reload (23 November 2026; startup AV mitigation)
+
+The owner reported a **real native Windows access violation** immediately
+after pressing Enter to leave the introductory screen, from the
+experimental optimized-bilinear 2026-11-23 build. The original
+`ScorchedPlanetFix(20261123-130517).log` shows:
+
+```text
+WIN32_INPUT msg=0x00000100 wparam=0x0000000D count=1  [Enter KeyDown, frame ~297]
+GAME_GLOBAL_50DCD0 phase=texture_alloc frame=298 ptr=0x00000000 prior_ptr=0x01550940
+HEAP_ALLOC elapsed_ms=12000 frame=298
+WIN32_INPUT msg=0x00000102 wparam=0x0000000D count=2  [Enter WM_CHAR, frame 301]
+WIN32_INPUT msg=0x00000101 wparam=0x0000000D count=3  [Enter KeyUp, frame 301]
+FIRST_CHANCE_AV ... ip=0x0046D578 operation=0 address=0x00000068
+AV_REGISTERS ... ecx=0x00000000 ... elapsed_ms=12094
+AV_INPUT_CONTEXT endframe_depth=0 guest_callback_depth=0 last_msg=0x00000101 last_frame=301 last_msg_age_ms=47
+```
+
+The original OEM bytes at `0x0046D572` are
+`8B 0D D0 DC 50 00 8B 41 68`, i.e. it loads the original
+game's pointer at `[0050DCD0]` into ECX and dereferences ECX+0x68.
+The scene pointer had been observed NULL during the heap transition.
+This is a confirmed **game** null-pointer dereference, not a bilinear
+fragment-shader fault: `WORLD_BILINEAR triangles=0,
+filtered_samples=0` before the crash. Its deeper root cause in
+the original game's transition sequencing is **not yet proven**;
+the Enter keyup is temporally correlated, not proof of causality.
+
+### Narrow mitigation, no game EXE patch or input loss
+
+At the *outermost* MSI95 preview Win32 message pump, check **before
+each PeekMessage with PM_REMOVE** whether all of these conditions hold:
+- the OEM executable exhibits the exact instruction signatures at
+  `0x0046D572` and older `0x0046D761/0x0046D76D`, not a different EXE;
+- MSI renderer initialized, at least one original game texture heap
+  remains allocated and its most recent allocation was within
+  **1,500 ms** according to wrap-safe GetTickCount difference;
+- the original scene-global pointer at `0x0050DCD0` is readable
+  and currently **NULL**.
+
+While this strict combination holds, **leave all Win32 messages
+unchanged in the Windows queue** instead of discarding translated
+Enter WM_CHAR/WM_KEYUP during the transient scene gap. The
+condition is reevaluated after every original guest callback:
+a KeyDown can synchronously release a scene while the same message
+pump is still active. Once the pointer is rebuilt, resume the
+original pump, including key ordering. Fail open after 1,500 ms,
+logging a timeout instead of hanging indefinitely. No extra
+polling loops, modifications to game globals, EXE byte patches or
+changes to normal input, original Z-plane/HUD, GameFrame 3dfx,
+texture filters or FPS cap.
+
+Useful runtime records (Debug Log=1):
+```text
+TRANSITION_INPUT_HOLD_BEGIN frame=N heap_age_ms=N
+TRANSITION_INPUT_HOLD kept_win32_queue_intact=1 scene_global=0x00000000
+TRANSITION_INPUT_HOLD_RELEASE frame=N heap_age_ms=N
+TRANSITION_INPUT_HOLD_RELEASE scene_global=0x...
+TRANSITION_INPUT_HOLD_TIMEOUT scene_global_still_null; original_input_delivery_resumed
+AV_GAME_GLOBAL_50DCD0 path=ECX_plus_0x68 ...
+```
+
+A freestanding `msi_transition_hold.h` predicate is checked by
+`test_transition_hold.c` with **12 deterministic tests** (including benign video states 2 and 5) for observed
+~94 ms transition timing, 1,500ms boundary, non-OEM signature,
+uninitialized renderer, absent heaps, restored scene, stale state,
+and tick wraparound. The Windows MSI95 x86 compile and previous
+146 synthetic rasterization tests remain unchanged. **These are
+algorithmic tests, not a reproduced in-game crash test.**
+
+Minimal live acceptance: on the new Windows experimental build, use
+the same Matrox OEM and the same one-key **Enter to main menu** action;
+send only the runtime log. A successful main menu and matching
+`TRANSITION_INPUT_HOLD_BEGIN`/`RELEASE` are useful confirmation.
+If the game still crashes, the now extended AV capture identifies
+both known game-global dereference sites without altering the
+exception context. Avoid repeating F12 gameplay tests until the
+startup transition is stable; restore the prior known playable
+artifact if needed.
+
+### Real native Windows follow-up, 13:28: narrower video-state gate
+
+The owner's new full `ScorchedPlanetFix(20261123-132828).log`
+confirms the initial PR #56 build **did not crash**. It ran
+**624 frames / 103,582 triangles / 12,855 Z-plane calls**,
+then shut down cleanly after **15,625 ms** with **zero live
+texture allocations**, no `FIRST_CHANCE_AV`.
+
+However, the initial scene-pointer-only input hold was triggered
+**three times** and all three ended in **1.5 s timeout with the
+pointer still zero**. It deferred **184** message-pump attempts
+cumulatively. The runs' normal renderer kept functioning:
+- frame **35→105**: after normal menu loading; prior original
+  `[0050DCC0]` state observed as **2** at frame 31;
+- frame **367→412**: during Z-plane/3D load, after an earlier
+  original `[0050DCC0]` state observed as **5** at frame 259;
+- frame **464→533**: another title/menu transition; no fatal AV.
+
+The previous genuine **crash dump** and failure log, by contrast,
+show `[0050DCC0]=1` at the exact original Smacker dereference
+`0x0046D578` while `[0050DCD0]=NULL`. The original game's
+state-1 branch executes `smackw32.dll` logic then reads
+`[scene+0x68]`. This is a much stronger differentiator than
+`scene=NULL` alone. **A clean session does not establish that
+holding keys caused its success.** Moreover repeated 1.5s
+timeouts are an undesirable UX cost.
+
+The revised draft guard therefore demands **video state exactly
+1** in addition to unchanged OEM byte signatures, recent real
+texture allocation, NULL scene pointer and 1500ms upper bound.
+The original owner source-attributed state2/state5 transitions
+are explicitly excluded. Status is now logged on release;
+queued Win32 messages remain unmodified, with no game-EXE edits.
+This narrowing still does **not** prove whether the actual cause
+is the timing of input events or the original Smacker object's
+lifetime and closing semantics.
+
+The freestanding synthetic regression expands from **10 to 12**
+predicate cases including explicit rejection of statuses 2 and 5,
+then compiles as part of the normal Windows build. After a green
+CI only one original Enter startup transition needs a repeat,
+checking that menu/game access is responsive, without the
+unnecessary three timeout delays. Do not enable or merge until
+the owner confirms the behavior on original game data.

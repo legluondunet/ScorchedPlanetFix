@@ -5,6 +5,7 @@
  * Compile with clang targeting i686-pc-windows-msvc and lld-link; no CRT.
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
+#include "msi_transition_hold.h"
 #include "msi_world_bilinear.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -369,6 +370,20 @@ static unsigned g_focus_filtered_events = 0;
  * that nested msiEndFrame; messages stay in the Win32 queue for the next
  * outermost frame. This prevents a proven triple WndProc reentry path. */
 static unsigned g_inner_input_pumps_deferred = 0;
+/* The original OEM game nulls [0050DCD0] during a menu/scene reload.
+ * A KeyDown(Enter) at frame 297 triggered allocations and a transient
+ * scene pointer NULL; translated Enter WM_CHAR and WM_KEYUP were then
+ * dispatched while it remained NULL, preceding AV 0046D578
+ * (mov eax,[ecx+68], ecx=0). Defer the outermost Win32 message pump
+ * for <=1500ms only when this exact OEM instruction signature,
+ * a recent heap allocation and the NULL scene pointer all agree.
+ * PeekMessage must NOT remove messages while deferred: preserve order
+ * and all original user input. Unverified timing workaround; not a
+ * claim that keyboard delivery is the sole cause of the game AV. */
+static unsigned g_transition_input_hold_frames=0;
+static unsigned g_transition_input_hold_releases=0;
+static unsigned g_transition_input_hold_timeouts=0;
+static int g_transition_input_hold_active=0;
 /* On the Windows 4:3 trial, two rapid Space presses preceded a buffered
  * WM_CHAR=Space inside a scene reload, then the OEM game dereferenced its
  * transiently NULL global [0050DCD0] at 0046D76D. Suppress ONLY this
@@ -631,9 +646,11 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
         events[k]=0;WriteFile(g_log,events,k,&wr,NULL);
         WriteFile(g_log,"\r\n",2,&wr,NULL);
       }
-      if(ctx->Eip==0x0046D76Du){
+      if(ctx->Eip==0x0046D76Du || ctx->Eip==0x0046D578u){
         char game[410];k=0;
         putstr(game,&k,"AV_GAME_GLOBAL_50DCD0 ");
+        putstr(game,&k,ctx->Eip==0x0046D578u?
+               "path=ECX_plus_0x68 ":"path=EDX_plus_0x0C ");
         if(readable_span((const void*)0x0050DCC0u,0x18u)){
           const volatile DWORD *p=(const volatile DWORD*)0x0050DCC0u;
           putstr(game,&k,"counter_50DCC0=");puthex(game,&k,p[0]);
@@ -733,6 +750,28 @@ static BOOL game_global_probe_supported(void){
         load[2]==0xD0u && load[3]==0xDCu &&
         load[4]==0x50u && load[5]==0x00u &&
         cmp[0]==0x39u && cmp[1]==0x42u && cmp[2]==0x0Cu;
+}
+static BOOL game_transition_input_signature_supported(void){
+    /* Original hash-locked OEM splanetw.exe at 0x0046D572:
+     * mov ecx,[0x0050DCD0]; mov eax,[ecx+0x68].
+     * Also demand the independent older instruction signature at
+     * 0x0046D761 so a different executable never enters this guard. */
+    const BYTE *code=(const BYTE*)0x0046D572u;
+    const BYTE signature[9]={0x8Bu,0x0Du,0xD0u,0xDCu,0x50u,0x00u,
+                             0x8Bu,0x41u,0x68u};
+    if(!game_global_probe_supported()||!readable_span(code,9u))return FALSE;
+    for(unsigned i=0;i<9u;i++)if(code[i]!=signature[i])return FALSE;
+    return TRUE;
+}
+static int transition_input_hold_now(void){
+    if(!g_initialized || !g_heap_count || !g_last_heap_alloc_tick ||
+       !game_transition_input_signature_supported() ||
+       !readable_span((const void*)0x0050DCC0u,0x14u))return 0;
+    DWORD scene=*(const volatile DWORD*)0x0050DCD0u;
+    DWORD state=*(const volatile DWORD*)0x0050DCC0u;
+    return msi_transition_input_should_hold(1u, (unsigned)g_initialized,
+        g_heap_count, (unsigned)g_last_heap_alloc_tick,
+        (unsigned)GetTickCount(),(unsigned)scene,(unsigned)state);
 }
 static void sample_game_global_50dcd0(const char *phase){
     if(!g_log || g_game_50dcd0_reports>=96u ||
@@ -1071,7 +1110,52 @@ static void preview_present(void){
      * Leave all pending messages untouched until the outer game frame.
      * Framebuffer presentation remains unchanged even on nested calls. */
     if(g_endframe_depth==1u && g_guest_callback_depth==0u){
-        while(pumps<32 && g_preview && PeekMessageA(&msg,g_preview,0,0,PM_REMOVE)){
+        /* Reevaluate before EACH peek, not just before the first:
+         * dispatching Enter KeyDown can synchronously release the old
+         * scene and allocate new heaps while still inside this pump.
+         * Leaving queued WM_CHAR/WM_KEYUP untouched until scene pointer
+         * is nonzero avoids sending them through the invalid interval.
+ * The original video state at [0050DCC0] MUST also equal 1: latest
+ * successful owner logs show many benign NULL scene intervals with
+ * status 2 or 5, and earlier global-only guard timed out three times. */
+        while(pumps<32 && g_preview){
+            if(transition_input_hold_now()){
+                g_transition_input_hold_frames++;
+                if(!g_transition_input_hold_active){
+                    g_transition_input_hold_active=1;
+                    lognum("TRANSITION_INPUT_HOLD_BEGIN frame=",g_frames,
+                           " heap_age_ms=",GetTickCount()-g_last_heap_alloc_tick);
+                    logtext("TRANSITION_INPUT_HOLD kept_win32_queue_intact=1 scene_global=0x00000000 video_state=1");
+                }
+                if(g_transition_input_hold_frames<=8u ||
+                   g_transition_input_hold_frames%120u==0u)
+                    lognum("TRANSITION_INPUT_HOLD deferred_pumps=",g_transition_input_hold_frames,
+                           " frame=",g_frames);
+                break;
+            }
+            if(g_transition_input_hold_active){
+                g_transition_input_hold_active=0;
+                g_transition_input_hold_releases++;
+                DWORD age=GetTickCount()-g_last_heap_alloc_tick;
+                DWORD ptr=0xFFFFFFFFu,video_state=0xFFFFFFFFu;
+                if(readable_span((const void*)0x0050DCC0u,0x14u)){
+                    ptr=*(const volatile DWORD*)0x0050DCD0u;
+                    video_state=*(const volatile DWORD*)0x0050DCC0u;
+                }
+                lognum("TRANSITION_INPUT_HOLD_RELEASE frame=",g_frames,
+                       " heap_age_ms=",age);
+                { char info[160];DWORD n=0;
+                  putstr(info,&n,"TRANSITION_INPUT_HOLD_RELEASE scene_global=");
+                  puthex(info,&n,ptr);
+                  putstr(info,&n," video_state=");putunsigned(info,&n,video_state);
+                  info[n]=0;logtext(info);
+                }
+                if(ptr==0u){
+                    g_transition_input_hold_timeouts++;
+                    logtext("TRANSITION_INPUT_HOLD_TIMEOUT scene_global_still_null; original_input_delivery_resumed");
+                }
+            }
+            if(!PeekMessageA(&msg,g_preview,0,0,PM_REMOVE))break;
             TranslateMessage(&msg);DispatchMessageA(&msg);pumps++;
         }
     }else{
@@ -1553,6 +1637,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_last_left_click_ms=0;
     g_last_heap_alloc_tick=0;g_transition_space_char_ignored=0;
     g_transition_space_char_evaluations=0;
+    g_transition_input_hold_frames=g_transition_input_hold_releases=0;
+    g_transition_input_hold_timeouts=0;g_transition_input_hold_active=0;
     g_game_50dcd0_last=g_game_50dcc0_last=0xFFFFFFFFu;
     g_game_50dcd0_reports=0;
     g_early_mouse_ignored=g_early_mouse_ready_logs=0;
@@ -1927,6 +2013,9 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     }
     if(g_frames<=6 || g_frames%300==0){
         lognum("RENDER_PROGRESS frame=",g_frames,"drawn_triangles=",g_drawn_triangles);
+        lognum("TRANSITION_INPUT_HOLD deferred_pumps=",g_transition_input_hold_frames,
+               " released=",g_transition_input_hold_releases);
+        lognum("TRANSITION_INPUT_HOLD timeout_count=",g_transition_input_hold_timeouts,NULL,0);
         lognum("RENDER_PROGRESS pixels=",g_drawn_pixels,"missing_textures=",g_missing_textures);
         lognum("RENDER_UPLOAD textures=",g_tex_uploads,"palettes=",g_palette_uploads);
         lognum("CACHE_UPLOAD_WHILE_DISABLED textures=",g_disabled_tex_uploads,"palettes=",g_disabled_lut_uploads);
