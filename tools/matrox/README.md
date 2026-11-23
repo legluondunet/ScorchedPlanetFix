@@ -602,3 +602,59 @@ same-scene authentic Mystique VM comparison to determine which skipped
 pixels are wrong before changing opacity or adding smooth filtering.
 The special-case indexed black portrait fill from PR #40 concerns world
 triangles and must not be conflated with large Z-plane atlas residency.
+
+## Reproducible F12 cross-layer pixel triage (2026-11-23)
+
+The independent Python standard-library-only analyzer
+[`analyze_f12_capture.py`](analyze_f12_capture.py) reads the four **same-frame,
+same-serial** 16-bit RGB565 / BI_BITFIELDS captures emitted when the user
+presses F12: `_frame.bmp`, `_coverage.bmp`, `_atlas.bmp`, `_world.bmp`.
+It does **not** run alongside the game or modify renderer code, original
+game assets, images or any captured file. All 13 world, 10 coverage and 6
+sparse-atlas colors are decoded using the exact source constants in
+`msi95_probe.c` (not rounded RGB24). It accepts one optional `(1)` file
+suffix after a browser rename but refuses ambiguous duplicate filenames,
+truncation, wrong RGB565 masks, different image dimensions or unknown debug
+colors. Capture serial naming and dimensions must still be independently
+checked if user files were manually renamed.
+
+Example, from a directory holding one unique quartet:
+
+```powershell
+python tools/matrox/analyze_f12_capture.py "C:\captures\matrox_capture_0003"
+python tools/matrox/analyze_f12_capture.py "C:\captures\matrox_capture_0003" --roi 184,71,455,352 --json
+python tools/matrox/test_analyze_f12_capture.py
+```
+
+Coordinates are original 640×400 image pixels; ROI is
+`x0,y0,x1,y1` **end-exclusive**. JSON includes the current framebuffer's
+black/color counts; last MSI write ownership; last attempted world and atlas
+provenance; and a critical cross-check for every pixel whose *last attempted*
+sparse-atlas sample was an unmarked zero: whether the actual final framebuffer
+is colored or black and which world/Z-plane layer last wrote it. No per-frame
+buffer writes, texture sampling or keying rules are changed.
+
+**Semantic warning:** An atlas red pixel means the last *attempted* atlas
+texel was unmarked zero; it does **not** mean a final missing pixel. A later
+world triangle may have drawn a fully colored result there. Likewise coverage
+black means *no MSI write*, **not** necessarily a black actual framebuffer
+(the game may draw via CPU). The reported
+`black_without_final_msi_write` is a possible investigation target, not
+proof of missing graphics or incorrect game assets.
+
+**Verified owner capture comparison (raw F12 difficulty menu)**:
+`matrox_capture_0003` versus `0004` (EdgeTopLeft=0 vs 1).
+Within central panel `ROI=184,71,455,352` (76,151 pixels), the
+indexed-1 opaque-preview source positions were **18,760 vs 18,762**.
+Both atlas provenance maps had **zero sampled atlas pixels** in that region.
+Every **black** framebuffer pixel in the panel (18,474 vs 18,476) had
+**a valid final MSI texture write**, not an uncovered/hole marker. Thus no
+atlas-Z residency explanation can be inferred for the portraits in those
+frames. This corroborates the narrower source-index-1 and source-index-241
+palette-key distinction, but not yet exact authentic Matrox transparency
+semantics or missing border fragment origins.
+
+Automated tests use **synthetic 2×2 BMP fixtures only**, validate top-down
+and bottom-up ordering, clipping/ROI, corrupt/wrong-format files, renamed
+suffixes, and exact cross-layer semantics. The CI test step does not need
+nor redistribute any copyrighted game data.
