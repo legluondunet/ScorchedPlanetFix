@@ -132,6 +132,12 @@ jobs:
             Pop-Location
           }
 
+      - name: Benchmark real x86 Matrox UV floor versus optimized wrap (ABBA)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/matrox/bench_uv.ps1
+
       - name: Smoke test MSI95 x86 dynamic texture-heap growth past 256 live allocations
         shell: pwsh
         run: |
