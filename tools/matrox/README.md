@@ -855,57 +855,86 @@ or assume exact original-driver RGB values without matching historical
 hardware reference.
 
 
-## Optional modern 3D bilinear texture filtering (2026-11-23)
+## Optional modern 3D bilinear texture filtering (2026-11-23; corrected after live owner test)
 
-**This is a visual enhancement, NOT an original Mystique hardware behavior.**
-The 1996 Mystique used nearest-neighbor texture sampling. The existing
-`WorldBilinear=0` default preserves that native look. Set
-`[Matrox] WorldBilinear=1` only when explicitly choosing a
-smoother 3D surface appearance.
+**Modern opt-in enhancement, NOT original Mystique silicon.** The 1996
+Mystique used nearest texture sampling. `WorldBilinear=0` remains the
+unchanged default. `[Matrox] WorldBilinear=1` tests smoother world
+textures at an additional per-pixel CPU cost.
 
-The experimental implementation intentionally filters **only**
-128x128-or-any-size opaque indexed-8 / RGB565-16 world triangles
-whose three vertex `invW` values differ (a geometric indication of
-perspective/depth variation). The MSI95 renderer uses its original UV
-clamp/repeat behavior and palette CLUT to read the four nearest
-**valid opaque** source texels, then blends 5/6/5 channels with 8-bit
-fixed fractional weights at texel centers. Filtering happens after
-all original native key tests, before optional vertex modulation.
-It does **not** alter the original game EXE, CD/ISO, texture uploads
-or native game textures.
+### Critical correction after actual Windows gameplay (2026-11-23 12:05)
 
-No filtering is performed on:
-- constant-invW flat title/options/difficulty menu quads;
-- transparent textures of **any** kind (including portrait
-  `index1` and `icon01` black background exceptions), so no
-  interpolation across a keyed edge/transparent-black atlas;
-- original sparse Z-plane/HUD/text, 4-bit paletted textures,
-  untextured Gouraud/shadow layers, or retail 3dfx / GameFrame.
+The owner's genuine Windows-native runtime log
+`ScorchedPlanetFix(20261123-120532).log` with F12 quartets `0005`
+(frame 3390) and `0006` (frame 3591) revealed an unintended
+**zero-effect** implementation in the initial PR #55 build:
 
-The runtime logs:
+```text
+WORLD_BILINEAR enabled=1 triangles=0
+WORLD_BILINEAR filtered_samples=0 changed_pixels=0
+PERSPECTIVE_UV enabled=1 triangles=453430
+PERSPECTIVE_UV adjusted_pixels=345493542
+```
+
+The originally overconservative restriction
+`!g_state.msiTexture.Transparency` excluded *every* eligible 3D
+terrain texture in this real session, even though the game requests
+transparency on these textures and their actual interior texels are
+opaque. The original 0005/0006 screenshots therefore remain
+nearest-neighbor despite the INI switch; **do not claim they visually
+validate bilinear**. This is corrected on the next branch commit.
+
+### Current filtering algorithm and safety
+
+- Only 8-bit indexed (CLUT) or 16-bit RGB565 **world** textured
+  triangles with valid **varying inverse-W across vertices**, valid
+  original cache binding and full `opacity=100`. No 4-bit palette,
+  untextured, Z-plane/HUD/text, constant-invW title icon quad, or
+  3dfx/GameFrame path can enter the filter.
+- UV interpolation, wrap/clamp, perspective and the original **nearest
+  center pixel's key/discard decision** are computed normally first.
+- Regardless of whether the game's state requests transparency,
+  retrieve the four RGB565 neighboring source samples. Only if **all
+  four taps are opaque under the current native RGB565 color-key,
+  optional indexed-source key and optional world-blue key** does the
+  filter blend their RGB565 channels with 8-bit fixed-point fractions.
+- **If any neighboring tap is color-keyed or transparency-discarded**,
+  do NOT blend it and preserve the original center nearest color.
+  Conservatively treat original index1 and icon01 black exemptions
+  as keys for the neighbor test, so silhouettes and icon edges cannot
+  acquire colored halos. Existing index1/icon01 center-pixel behavior
+  is unchanged.
+- No original EXE or textures are patched or copied. Color modulation
+  continues after filtering, as before. The existing 640x400 HUD, sparse
+  1024x1024 Z-plane atlas, icon01 title correction and native 3dfx
+  renderer all remain isolated.
+
+The runtime logs cumulative overdraw-inclusive stats:
+
 ```text
 WORLD_BILINEAR enabled=1 triangles=N
 WORLD_BILINEAR filtered_samples=N changed_pixels=N
+WORLD_BILINEAR keyed_neighbor_bypass=N
 ```
-These are **cumulative draw/sample counts** (overdraw is counted),
-not unique final framebuffer pixels. An idle title menu should
-report both counters as zero even with the option enabled.
-Performance impact is possible because each eligible sample reads
-four RGB565 colors rather than one. If needed, disable the option
-without reinstalling.
 
-A standalone pure freestanding `msi_world_bilinear.h` implements
-the RGB565 interpolation. The actual x86 Windows DLL synthetic
-smoke verifies both 8-bit-CLUT and 16-bit textures with both
-`WorldBilinear=0` and `1`, each with transparency on/off
-and constant/varying vertex inverse-W. Only opaque varying-W
-3D fragments are permitted to change; all other cases must
-remain byte-identical.
+`keyed_neighbor_bypass` quantifies safe nearest-neighbor fallbacks on
+would-be filterable 3D triangle pixels, not a count of missing art.
 
-**Minimal comparison:** with the icon01 correction retained, test
-a settled *in-game 3D terrain* scene under Windows/Wine, not
-the title menu, with `WorldBilinear=1` and `Log=1`.
-One F12 (or same-scene screenshot) and a runtime log is enough to
-show visual effect/performance; previous title menu baseline remains
-valid. Turning this option on is not claimed to increase fidelity
-to the actual original hardware.
+Native Windows DLL smoke uses **18** original icon01/palette pixel
+cases plus **32** bilinear cases: filter 0/1 × 8/16 bpp × game
+transparency on/off × constant/varying invW × keyed-neighbor absent/
+present. The transparent-keyed neighbor must always force the
+reference nearest pixel, while opaque neighborhoods smooth even
+when the game's transparency flag is enabled. Zero copyrighted
+original texture assets.
+
+**Next user test:** one F12 in a playable terrain scene on this
+corrected experimental compilation (`WorldBilinear=1`,
+`Icon01Opaque=1`, `[Debug] Log=1`). The previous 0005/0006
+screens already provide useful *nearest* visual references but are
+not the same camera position as a prospective capture. The immediate
+acceptance check is that `WORLD_BILINEAR filtered_samples > 0` and
+`changed_pixels > 0` with sharp cockpit/HUD; only compare exact
+pixel differences if captured at the same game frame and viewpoint.
+Performance may be noticeably slower due to 4 texel reads per sample;
+return to `WorldBilinear=0` to recover original 1996 nearest look.
