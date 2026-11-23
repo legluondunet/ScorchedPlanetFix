@@ -35,7 +35,7 @@ class ShadowTelemetryTests(unittest.TestCase):
         report=self.check_log(
             "SHADOW_ONCE enabled (experimental 50pct dark-flat)\n"+
             self.snapshot(300,10000,base,base//2,base//2-20,20)+
-            self.snapshot(600,20000,250,base//2+120,base//2+130,0,
+            self.snapshot(600,20000,250,base//2+120,base//2+130,100,
                           resets=20))
         self.assertEqual(report['shadow_once'],'enabled')
         self.assertEqual(report['valid_intervals'],1)
