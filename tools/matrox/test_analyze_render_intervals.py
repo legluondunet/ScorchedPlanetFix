@@ -21,11 +21,12 @@ class RenderIntervalTests(unittest.TestCase):
     @staticmethod
     def sample(frame, milliseconds, render, bilinear, late, keyed, unkeyed=0):
         return (f"RENDER_PROGRESS pixels= {frame * 100} missing_textures= 0\n"
-                f"PERF_COST render_ms= {render} gdi_ms= 2\n"
                 f"FPS_CAP late_frames= {late} fallback_frames= 0\n"
                 f"WORLD_BILINEAR filtered_samples= {bilinear} changed_pixels= {bilinear // 2}\n"
                 f"LARGE_Z_ATLAS zero_skips_color_keyed= {keyed} zero_skips_not_keyed= {unkeyed}\n"
-                f"PERF_WALL elapsed_ms= {milliseconds} frames= {frame}\n")
+                f"PERF_WALL elapsed_ms= {milliseconds} frames= {frame}\n"
+                f"PERF_COST render_ms= {render} gdi_ms= 2\n"
+                f"PERF_COST state_ms= 0 triangles= {frame * 10}\n")
 
     def test_consecutive_intervals_use_deltas_not_totals(self):
         log = (self.sample(300,10000,1000,100000,20,400)
@@ -48,6 +49,21 @@ class RenderIntervalTests(unittest.TestCase):
         self.assertEqual(b["deltas"]["filtered_samples"], 1200000)
         self.assertEqual(b["deltas"]["zero_skips_not_keyed"], 0)
 
+    def test_perf_cost_after_wall_marker_is_not_one_snapshot_late(self):
+        # This is the true native MSI95 log order: wall first, render/state
+        # counters follow it, then the next frame starts.
+        report = self.run_parser(self.sample(300,10000,1000,30000,20,500)
+                                 + self.sample(600,20000,4000,80000,120,2000))
+        self.assertEqual(len(report["intervals"]), 1)
+        self.assertEqual(report["intervals"][0]["render_ms_per_frame"], 10.0)
+        self.assertEqual(report["intervals"][0]["deltas"]["render_ms"], 3000)
+
+    def test_unfinished_wall_sample_does_not_reuse_previous_frame_cost(self):
+        report = self.run_parser(self.sample(300,10000,1000,30000,20,500)
+                                 + "PERF_WALL elapsed_ms=20000 frames=600\n")
+        self.assertEqual(report["snapshots"], 1)
+        self.assertEqual(report["snapshot_last_frame"], 300)
+
     def test_short_intervals_are_ignored(self):
         report = self.run_parser(self.sample(1,100,0,0,0,0) +
                                  self.sample(5,200,2,0,0,0))
@@ -67,8 +83,11 @@ class RenderIntervalTests(unittest.TestCase):
 
     def test_missing_counter_and_zero_wall_time(self):
         report = self.run_parser("PERF_WALL elapsed_ms=1000 frames=300\n"
+                                 "PERF_COST state_ms=0 triangles=3000\n"
                                  "PERF_WALL elapsed_ms=1000 frames=600\n"
-                                 "PERF_WALL elapsed_ms=5000 frames=900\n")
+                                 "PERF_COST state_ms=0 triangles=6000\n"
+                                 "PERF_WALL elapsed_ms=5000 frames=900\n"
+                                 "PERF_COST state_ms=0 triangles=9000\n")
         self.assertEqual(len(report["intervals"]), 1)
         self.assertEqual(report["intervals"][0]["observed_fps"], 75.0)
         self.assertIsNone(report["intervals"][0]["render_ms_per_frame"])
@@ -80,9 +99,11 @@ class RenderIntervalTests(unittest.TestCase):
     def test_zplane_blue_skip_counter_does_not_collide(self):
         report = self.run_parser(self.sample(300,10000,1000,0,20,400) +
                                  "ZPLANE_BLUE_KEY rgb565=0x00FF skipped_pixels=100\n"
-                                 "PERF_WALL elapsed_ms=12000 frames=400\n" +
+                                 "PERF_WALL elapsed_ms=12000 frames=400\n"
+                                 "PERF_COST state_ms=0 triangles=4000\n" +
                                  "ZPLANE_BLUE_KEY rgb565=0x00FF skipped_pixels=250\n"
-                                 "PERF_WALL elapsed_ms=14000 frames=500\n", minimum=50)
+                                 "PERF_WALL elapsed_ms=14000 frames=500\n"
+                                 "PERF_COST state_ms=0 triangles=5000\n", minimum=50)
         self.assertEqual(report["intervals"][1]["deltas"]["z_blue_skips"], 150)
 
 if __name__ == "__main__":
