@@ -938,3 +938,65 @@ acceptance check is that `WORLD_BILINEAR filtered_samples > 0` and
 pixel differences if captured at the same game frame and viewpoint.
 Performance may be noticeably slower due to 4 texel reads per sample;
 return to `WorldBilinear=0` to recover original 1996 nearest look.
+
+### CPU optimization after native Windows #0007 validation (2026-11-23)
+
+The owner confirmed on native Windows that the corrected bilinear filter is
+**actually active** in playable 3D: `WorldBilinear=1`,
+445,661 eligible world triangles, **363,544,261 filtered samples**,
+**209,190,528** changed RGB565 sample colors, and **16,436**
+key-neighbor nearest fallbacks in the last periodic diagnostic snapshot.
+The HUD and cockpit Z-plane remain in their own native draw path.
+The session took 18.88 ms of renderer time per frame on average,
+versus 12.25 ms in an earlier *different* 3D session in which the
+filter had been a no-op. This suggests a possible significant CPU
+cost, **not a controlled same-scene speed measurement**.
+
+The optimized draft branch now improves only the inner filter hot path:
+
+- For an eligible **8-bit indexed world** triangle with projected
+  bounding rectangle at least **512** pixels, predecode its currently
+  bound, original **256-entry RGB565 CLUT** and a parallel 256-entry
+  *original key-aware opacity* table **once per triangle**, using the
+  current transparency flag, key/mask, optional source-index key and
+  optional blue-key fallback.
+- For every shaded sample, read four raw indices and use the two local
+  tables rather than decoding four RGB565 palette entries and
+  reevaluating four key predicates repeatedly.
+- For smaller triangles (and for all 16-bit RGB565 textures), retain
+  the previous directly decoded/color-key-checked path. This avoids
+  making tiny polygons pay for a full 256-entry CLUT predecode.
+- When the four opaque neighboring RGB565 colors are identical,
+  preserve the exact same result without doing twelve channel
+  multiplications. The `filtered_samples` and `changed_pixels`
+  counters retain their former meaning.
+- **No cross-triangle / global palette cache**: every eligible large
+  triangle re-reads the current palette. In particular, another
+  texture/CLUT upload or an original direct CLUT change cannot leave
+  stale cache entries affecting later triangles.
+- The **original nearest center key/discard check happens first**, and
+  every potential bilinear neighbor must still be opaque. The
+  existing `icon01`, original portrait index1 and cockpit/HUD
+  boundaries are unchanged; `WorldBilinear=0` remains default.
+
+Additional log counters:
+
+```text
+WORLD_BILINEAR palette_cached_triangles=N palette_cached_samples=N
+WORLD_BILINEAR uniform_neighborhood_samples=N
+```
+
+The expanded Windows MSI95 x86 **actual-DLL** regression exercises
+**18** existing palette/icon01 cases and **64** bilinear render cases:
+`WorldBilinear 0/1` × 8/16bpp × transparency off/on × varying/
+constant inverse-W × keyed-neighbor on/off × small/large geometry.
+Small triangles exercise the uncached path; large indexed triangles
+exercise predecoded local CLUT tables. Tests use only synthetic red,
+blue and keyed RGB565 texels, not original copyrighted textures.
+
+**Performance remains to be verified in actual gameplay** before
+claiming a measured FPS gain or merging. The correct minimal next step
+is a single playable 3D scene with `WorldBilinear=1` and `Log=1`,
+a F12 capture and the session timing summary. If the game is still
+too CPU-bound, do not enable bilinear by default; the historic Mystique
+nearest mode is always available.
