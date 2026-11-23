@@ -36,7 +36,7 @@ foreach ($lib in @("kernel32", "user32", "gdi32")) {
 }
 
 $obj = Join-Path $build $(if ($BenchmarkUvReference) { "msi95_uv_reference.obj" } else { "msi95_probe.obj" })
-& clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -c $source -o $obj
+& clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -I $sourceRoot -c $source -o $obj
 if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 
 $def = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.def")).Path
