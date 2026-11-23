@@ -103,6 +103,16 @@ jobs:
           python tools/gameframe/audit_exports.py $dll 'third_party/game-frame/wrappers/glide/glide2x.def'
           if ($LASTEXITCODE -ne 0) { throw 'GameFrame Glide ABI audit failed' }
 
+      - name: Verify read-only Matrox Smacker lifecycle classification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'MatroxSmackLifecycleSmoke.exe'
+          clang -O2 -Wall -Wextra -Werror tools/matrox/test_smack_lifecycle.c -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile Smacker lifecycle classifier smoke' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Smacker lifecycle classifier regression failed' }
+
       - name: Verify OEM null-scene input-queue hold (synthetic C cases)
         shell: pwsh
         run: |
