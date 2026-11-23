@@ -35,6 +35,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage tests failed' }
           python -m py_compile tools/matrox/analyze_runtime_log.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage syntax check failed' }
+          python tools/matrox/test_analyze_render_intervals.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox periodic render interval regression failed' }
+          python -m py_compile tools/matrox/analyze_render_intervals.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox interval analyzer syntax check failed' }
 
       - name: Test F12 BMP spatial triage (synthetic RGB565 fixtures only)
         shell: pwsh
