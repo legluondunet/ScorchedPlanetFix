@@ -2424,9 +2424,11 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             g_missing_textures++;return;
         }
         texture=(const BYTE*)g_texture+texOffset;
-        /* Every transparent texture keeps the exact nearest-key path:
-         * no blended alpha masks, no icon01 or portrait edge halos.
-         * Varying invW selects true 3D triangles, not title menu quads. */
+        /* The original nearest center-key path always runs first.
+         * Even with game Transparency=1, fully opaque source neighborhoods
+         * in perspective-varying 3D world can be filtered safely.
+         * Each of four taps is rechecked; keyed neighbors fall back to
+         * nearest so sprites, icon01 and silhouettes never gain halos. */
         bilinear_triangle=g_world_bilinear_enabled && world_depth_varying &&
             !g_zplane_draw_context && opacity==100u &&
             (planes==8u || planes==16u) && texW>=2u && texH>=2u;
