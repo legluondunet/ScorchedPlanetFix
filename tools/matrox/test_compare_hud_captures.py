@@ -64,8 +64,10 @@ class HudComparisonTests(unittest.TestCase):
                 'atlas_last_zero_skip_without_hud_write'], 1)
             self.assertEqual(result['per_capture'][str(first)][
                 'hud_black_final_pixels'], 1)
-            self.assertEqual(analyze([first, second], '0,0,4,2')[
-                'comparisons'][0]['common_hud_pixels'], 4)
+            # Source image is 6 wide; the ROI is exclusive on its x/y end.
+            # x in [0,2), y in [0,2) contains only indices 1 and 7.
+            self.assertEqual(analyze([first, second], '0,0,2,2')[
+                'comparisons'][0]['common_hud_pixels'], 2)
 
     def test_detect_hud_mask_shift_and_missing_samples(self):
         with tempfile.TemporaryDirectory() as folder:
