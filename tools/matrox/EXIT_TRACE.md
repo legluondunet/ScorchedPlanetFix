@@ -1,85 +1,101 @@
-# Experimental original Matrox OEM exit-code trace
+# Matrox OEM original WinMain exit-code investigation
 
-The original 1996 Matrox Mystique OEM **SPLANETW.EXE** can return process
-status **1** after a normal menu exit on both Windows and Wine. The launcher
-already accepts it. We want the **exact last Windows message** behind that
-status without changing the game executable, MSI95 renderer or retail 3dfx.
+## Result: original exit code 1 explained (Windows native, 23 November 2026)
 
-## Static evidence from the owner's authentic 1996 CD
+The original 1996 Matrox Mystique OEM `SPLANETW.EXE` may return **0 or 1
+after a normal menu Quit**. Hardware-register-only tracing of its *unmodified*
+original executable proves why: `WinMain` returns the **`wParam` of its
+last retrieved Windows `MSG`**, not a dedicated success/error return status.
 
-Verified independently from the original 840,704-byte OEM SPLANETW.EXE,
-SHA-256: 1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894
-(PE32, ImageBase 0x00400000; never redistributed).
+**Confirmed session returning 1** (native Windows, PID 32900, TID 34720):
 
-- 0x00416A73 calls PeekMessageA with MSG* at [esp+0x1C].
-- 0x00416A79 checks PeekMessageA's EAX return value (message available).
-- 0x00416A7D reads MSG.message at [esp+0x20].
-- 0x00416A84 branches on WM_QUIT (0x12).
-- 0x00416CB6 reads the game's own quit flag at 0x00691B28,
-  allowing exit without WM_QUIT.
-- 0x00416CEC reads [esp+0x24], exactly MSG.wParam (MSG at +0x1C, wParam at +8).
-- 0x00416CFA returns this EAX from WinMain; the original CRT
-  calls WinMain at 0x004A712B, then passes EAX at 0x004A7130
-  into its process exit routine.
+```text
+WINMAIN_RETURN pid=32900 tid=34720 at 0x00416cec current quit_flag=Some(1)
+MSG message=0x0201 WM_LBUTTONDOWN hwnd=0x000905ac wParam=0x00000001 (1) lParam=0x00df0261 time=342873125 pt=(609, 223)
+PREDICTED_CRT_EXIT_CODE=1 source=WinMain_MSG_wParam_at_ESP_plus_0x24
+CRT_WINMAIN_RESULT tid=34720 eax=1 (0x00000001); original CRT about to push WinMain return
+CRT_EXITPROCESS_ARGUMENT tid=34720 esi=1 (0x00000001) before push esi / imported ExitProcess
+PROCESS_EXIT raw_code=1 (0x00000001) captured_winmain=true crt_result_seen=true crt_exit_seen=true
+```
 
-This demonstrates the return **mechanism**, not the actual message that had
-wParam=1 during a user's observed session. Possibilities include key flags
-from mouse events and activation messages, but none is yet confirmed.
+The `WM_LBUTTONDOWN` message uses `wParam=0x0001` because the left mouse
+button is down (`MK_LBUTTON`). The original `WinMain` returned this value,
+the CRT passed it unchanged to `ExitProcess`, and Windows reported
+`PROCESS_EXIT raw_code=1`. This is **not**, in that session, a renderer
+failure, Wine-specific fault or launcher-invented error code.
 
-## Live one-shot verification, no patch to OEM code or data
+**Confirmed contrasting session returning 0** (native Windows, PID 34460):
 
-The optional, standalone **MatroxExitTrace.exe** is compiled for Windows
-**x86**, from trace_oem_exit.rs. It is not bundled with the normal launcher.
+```text
+WINMAIN_RETURN pid=34460 tid=16196 at 0x00416cec current quit_flag=Some(1)
+MSG message=0x0200 WM_MOUSEMOVE hwnd=0x00680a84 wParam=0x00000000 (0)
+CRT_WINMAIN_RESULT tid=16196 eax=0 (0x00000000)
+CRT_EXITPROCESS_ARGUMENT tid=16196 esi=0 (0x00000000)
+PROCESS_EXIT raw_code=0 (0x00000000) captured_winmain=true crt_result_seen=true crt_exit_seen=true
+```
 
-It attaches with Windows debugger APIs, verifies three exact OEM instruction
-signatures in memory and uses **CPU hardware execution breakpoints DR0/DR1**.
-It does not write or replace game instructions, IAT entries, files,
-or process exit status. It clears the debug registers and detaches after
-the original WinMain return is captured.
+The matching launcher log independently reported game PID 34460 and
+`CLI: The game exited with code 0.`
 
-1. Start the installed Matrox edition with the normal ScorchedPlanetFix.exe,
-   wait for the game menu.
-2. In a second Windows or Wine terminal running in the **same Wine prefix**
-   as the game, simply execute:
+**Project policy (owner-approved):** Do not patch or distribute modified
+original `SPLANETW.EXE`; do not artificially force its exit code to 0.
+For the Matrox OEM edition, both 0 and 1 are accepted *as possible normal
+menu-exit statuses*, while the actual value remains visible in the log.
+If a separate crash or abnormal shutdown is observed, it must still be
+investigated: accepting status 1 is **not** a universal proof of success.
+Access violation `0xC0000005` (Smacker issue #41), unknown exit codes and
+retail 3dfx behavior remain independently classified.
 
-       MatroxExitTrace.exe
+Launcher reporting PR: #43. Diagnostic trace PR: #52. This separate
+experiment is not bundled in the normal installer.
 
-   The tracer enumerates **Windows** processes, finds exactly one original
-   SPLANETW.EXE, authenticates the known WinMain bytes and prints
-   AUTO_DETECTED Matrox OEM Windows PID=... . For a more detailed history,
-   optionally run MatroxExitTrace.exe --messages (slower).
-   Supplying a PID is still supported, but Unix/Linux host PIDs under Wine
-   are **not Windows process IDs**. Passing a Unix PID such as 35798 can
-   make OpenProcess fail with ERROR_INVALID_PARAMETER (87). The tracer
-   now uses its unique verified OEM Windows PID automatically if possible.
-3. Return to the game and select the normal Quit menu. Save console output
-   and installer log. The trace now follows three confirmed original OEM
-   stages without touching game code: WINMAIN_RETURN reads the actual last
-   MSG.wParam, CRT_WINMAIN_RESULT reads EAX after WinMain has returned,
-   and CRT_EXITPROCESS_ARGUMENT reads ESI immediately before the CRT passes
-   it to the imported ExitProcess. Finally, the debugger observes the real
-   PROCESS_EXIT event and its actual raw status. Only then does the tracer
-   exit itself. These values distinguish "WinMain returned 1" from "the CRT
-   received 0 but process exited differently". Optional --messages shows
-   the last twelve successfully retrieved PeekMessageA messages.
+## Authentic OEM static analysis
 
-The optional --messages mode traps every PeekMessageA return, which can
-reduce game performance. The default (without --messages) observes the WinMain return, the two
-original CRT handoff stages and the final exit event, with much less overhead.
+From the owner's original 840,704-byte Matrox OEM `SPLANETW.EXE`, PE32,
+ImageBase `0x00400000`, SHA-256:
+`1f2684205f4aa349183acfef6eb660e92e6bb24732e5c56278f0df1111108894`.
+The proprietary EXE is never committed or redistributed.
 
-**Limits:** External Windows debugger / CPU hardware breakpoints might not
-work under all Wine versions. This has been compiled and unit-tested in CI,
-not yet executed attached to a real Matrox game. Do not run two debuggers
-at once. Do not kill the tracer while the game is running: hardware
-breakpoints could remain armed in game threads. The old tracer detached
-immediately after WinMain and only predicted the process code; the new
-trace stays attached until EXIT_PROCESS_DEBUG_EVENT and prints the observed
-code. ERROR_SEM_TIMEOUT (121) from WaitForDebugEvent after 30 seconds is
-normal while the game remains open, not a game error. Prefer a short run
-and Quit.
-This does not investigate the separate Smacker crash 0xC0000005 at
-0x0046D76D tracked in issue #41.
+- `0x00416A73`: calls `PeekMessageA` with a local `MSG` at `[esp+0x1C]`.
+- `0x00416A79`: tests `PeekMessageA` result to determine if a message exists.
+- `0x00416A7D`: reads `MSG.message` from `[esp+0x20]`.
+- `0x00416A84`: branches when it sees `WM_QUIT` (`0x12`).
+- `0x00416CB6`: reads the game's internal quit flag at `0x00691B28`,
+  which also permits exiting without having received `WM_QUIT`.
+- `0x00416CEC`: executes `mov eax,[esp+0x24]`, which is `MSG.wParam`
+  because `MSG` begins at `esp+0x1C` and `wParam` is at offset +8.
+- `0x00416CFA`: returns EAX from `WinMain`; original CRT startup calls
+  `WinMain` at `0x004A712B` and uses its result at `0x004A7130`.
+- `0x004AC416`: original CRT passes the stored exit value via ESI to the
+  imported `ExitProcess`. Both values and the final exit event were
+  verified by live, external, hardware-breakpoint tracing.
 
-The Windows CI tests x86 structure layout and decoding without game media,
-and uploads a standalone diagnostic artifact. No proprietary data is
-committed, and main is not modified by this experimental branch.
+## Optional standalone trace reproduction
+
+`tools/matrox/trace_oem_exit.rs` builds the independent, native Windows
+**x86** `MatroxExitTrace.exe` debugger. It is not part of the launcher.
+It validates original OEM instruction signatures and uses CPU debug registers
+(DR0/DR1) rather than editing game code, data, IAT, original DLL or on-disk
+assets. It observes `WinMain`, CRT handoff and `EXIT_PROCESS_DEBUG_EVENT`.
+
+1. Launch the original Matrox edition normally and leave it in its menu.
+2. Run `MatroxExitTrace.exe` in another Windows terminal (or same Wine
+   prefix if applicable). It auto-detects exactly one signature-verified
+   `SPLANETW.EXE` **Windows PID**. A Linux/Unix host PID under Wine is not
+   a Windows PID; an incorrect PID can yield Win32 error 87.
+3. Exit the game via its normal menu and retain the tracer console output
+   and the matching `ScorchedPlanetFix_installer.log`.
+4. To see up to twelve recent retrieved Windows messages, use optional
+   `MatroxExitTrace.exe --messages` (slower, more intrusive).
+   The default traces only the WinMain / CRT / ExitProcess stages.
+
+`WAITING_FOR_GAME_QUIT debugger wait timeout is normal while game runs.`
+is informational; a 30-second debugger wait timeout is not a game crash.
+The tool was built and unit-tested by Windows x86 CI and **successfully
+attached to the real Matrox OEM game on native Windows**. A live Wine
+debug-attach test has not separately been established. Do not attach a
+second debugger or forcibly interrupt the tracing process while debug
+registers are active; finish by quitting normally.
+
+No proprietary game assets are committed. The main branch is unaffected
+until the diagnostic PR is explicitly merged.
