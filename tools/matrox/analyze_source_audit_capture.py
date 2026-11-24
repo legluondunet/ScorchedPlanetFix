@@ -24,12 +24,11 @@ from analyze_f12_capture import (
     parse_roi, resolve_inputs, connected_regions,
 )
 from analyze_final_texel_capture import (
-    BLACK_SOURCE_CATEGORIES, SOURCE_RGB565, analyze as check_final_texel,
+    SOURCE_RGB565, analyze as check_final_texel,
 )
 
 FORMATS = {0x4000: 'indexed_8bpp', 0x2000: 'native_16bpp',
            0x1000: 'indexed_4bpp'}
-VALID_BIT_MASK = 0x7fff
 # Same 4x4 threshold ordering as the opt-in native RGB565 modulator.
 BAYER_4X4 = (0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5)
 
