@@ -2207,7 +2207,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             capture_final_texel_source(texel);
             capture_final_source_audit(audit);
             capture_undithered_reference(nodither);
-            {char line[160];DWORD n=0;
+            {char line[320];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
              putstr(line,&n," texel=");putstr(line,&n,texel);
              putstr(line,&n," sourceaudit=");putstr(line,&n,audit);
