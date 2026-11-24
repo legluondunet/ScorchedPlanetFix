@@ -215,6 +215,13 @@ static BYTE *g_final_texel_source=NULL;
  * Zero=not an ordinary final world-texture write. This must NEVER influence
  * the rasterizer, palette keying, colors, or any game pixels. */
 static WORD *g_final_source_audit=NULL;
+/* One-frame, F12-only "same last MSI writer without ordered dither" RGB565.
+ * For each FINAL dithered world-texture draw, store the existing undithered
+ * modulation reference, with the SAME actual framebuffer underlay for alpha
+ * blending. Untracked/overwritten/non-dither final writers clear to zero.
+ * The _sourceaudit.bmp bit10 identifies where zero is a valid reference.
+ * Never read this array when rasterizing or presenting actual game pixels. */
+static WORD *g_undithered_reference=NULL;
 /* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
  * value matched the hardware color key. This is not a pixel-coverage map:
  * overdraw and triangle overlap can count a texel more than once. */
@@ -1132,10 +1139,12 @@ static void clean(void){
     if(g_shadow_provenance)VirtualFree(g_shadow_provenance,0,MEM_RELEASE);
     if(g_final_texel_source)VirtualFree(g_final_texel_source,0,MEM_RELEASE);
     if(g_final_source_audit)VirtualFree(g_final_source_audit,0,MEM_RELEASE);
+    if(g_undithered_reference)VirtualFree(g_undithered_reference,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
     g_ownership=NULL;g_atlas_provenance=NULL;g_world_provenance=NULL;
     g_shadow_provenance=NULL;g_final_texel_source=NULL;g_final_source_audit=NULL;
+    g_undithered_reference=NULL;
     g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
@@ -1171,7 +1180,7 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit){
+static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
@@ -1182,6 +1191,7 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         capture_name(shadow,serial,"_shadow.bmp");
         capture_name(texel,serial,"_texel.bmp");
         capture_name(audit,serial,"_sourceaudit.bmp");
+        capture_name(undithered,serial,"_nodither.bmp");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
         int atlas_exists=capture_file_present(atlas);
@@ -1189,11 +1199,12 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         int shadow_exists=capture_file_present(shadow);
         int texel_exists=capture_file_present(texel);
         int audit_exists=capture_file_present(audit);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0){
+        int nodither_exists=capture_file_present(undithered);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1737,6 +1748,75 @@ static void capture_final_source_audit(const char*filename){
     message[p]=0;logtext(message);
 }
 
+/* F12-only counterfactual image: no dither for the LAST successful MSI
+ * world-texture write, same other settings and prior framebuffer underlay.
+ * IMPORTANT this is NOT a full-frame no-dither replay, since earlier draws
+ * and their underlays may have been dithered. Only sourceaudit bit10 pixels
+ * have a valid reference; all other pixels encode zero. */
+static void capture_undithered_reference(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_undithered_reference||
+       !g_final_source_audit||g_info.msiColor.BytesPerPixel!=2||
+       g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("UNDITHERED_CAPTURE WRITE ERROR: open failed");return;}
+    unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);
+    put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned tracked=0u,changed=0u,actual_black_ref_nonblack=0u;
+    unsigned actual_black_ref_black=0u,actual_nonblack_ref_black=0u;
+    const WORD *displayed=(const WORD*)g_color;
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned pos=y*width+x;
+            unsigned tracked_here=(g_final_source_audit[pos]&0x0400u)!=0u;
+            unsigned raw=(unsigned)g_undithered_reference[pos];
+            row[x]=(WORD)(tracked_here?raw:0u);
+            if(tracked_here){
+                unsigned actual=(unsigned)displayed[pos];
+                tracked++;
+                if(actual!=raw)changed++;
+                if(actual==0u){
+                    if(raw)actual_black_ref_nonblack++;
+                    else actual_black_ref_black++;
+                }else if(raw==0u)actual_nonblack_ref_black++;
+            }
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[490];DWORD q=0;
+    putstr(msg,&q,ok?"UNDITHERED_CAPTURE OK file=":"UNDITHERED_CAPTURE WRITE ERROR file=");
+    putstr(msg,&q,filename);putstr(msg,&q," frame=");putunsigned(msg,&q,g_frames);
+    putstr(msg,&q," tracked=");putunsigned(msg,&q,tracked);
+    putstr(msg,&q," changed_by_dither=");putunsigned(msg,&q,changed);
+    putstr(msg,&q," actual_black_ref_nonblack=");putunsigned(msg,&q,actual_black_ref_nonblack);
+    putstr(msg,&q," actual_black_ref_black=");putunsigned(msg,&q,actual_black_ref_black);
+    putstr(msg,&q," actual_nonblack_ref_black=");putunsigned(msg,&q,actual_nonblack_ref_black);
+    msg[q]=0;logtext(msg);
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
@@ -1867,6 +1947,9 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_shadow_provenance=(BYTE*)alloc(g_ownership_bytes);
     g_final_texel_source=(BYTE*)alloc(g_ownership_bytes);
     g_final_source_audit=(WORD*)alloc(g_ownership_bytes*2u);
+    g_undithered_reference=(WORD*)alloc(g_ownership_bytes*2u);
+    if(!g_undithered_reference)
+        logtext("UNDITHERED_CAPTURE disabled: optional reference allocation failed");
     if(!g_final_source_audit)
         logtext("SOURCE_AUDIT_CAPTURE disabled: optional metadata allocation failed");
     if(!g_final_texel_source)logtext("FINAL_TEXEL_CAPTURE disabled: diagnostic allocation failed");
@@ -2040,6 +2123,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_shadow_provenance)zero(g_shadow_provenance,g_ownership_bytes);
         if(g_final_texel_source)zero(g_final_texel_source,g_ownership_bytes);
         if(g_final_source_audit)zero(g_final_source_audit,g_ownership_bytes*2u);
+        if(g_undithered_reference)zero(g_undithered_reference,g_ownership_bytes*2u);
         zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
         zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
         g_world_index1_preview_attempts=0;
@@ -2113,8 +2197,8 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100],audit[100];
-        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel,audit)){
+        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100],audit[100],nodither[100];
+        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel,audit,nodither)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
             capture_atlas_provenance(atlas);
@@ -2122,10 +2206,12 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             capture_shadow_provenance(shadow);
             capture_final_texel_source(texel);
             capture_final_source_audit(audit);
+            capture_undithered_reference(nodither);
             {char line[160];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
              putstr(line,&n," texel=");putstr(line,&n,texel);
              putstr(line,&n," sourceaudit=");putstr(line,&n,audit);
+             putstr(line,&n," nodither=");putstr(line,&n,nodither);
              line[n]=0;logtext(line);}
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
@@ -2851,6 +2937,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             float w0=1.f-w1-w2;
             if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
             unsigned color=0, source_index=0, source_index_valid=0;
+            unsigned undithered_color=0u;
             unsigned prelight_rgb565=0u;
             if(textured){
                 float u=w0*a->u+w1*b->u+w2*c->u;
@@ -3179,6 +3266,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     unsigned gg=(((color>>5)&63u)*mg+127u)/255u;
                     unsigned bb=((color&31u)*mb+127u)/255u;
                     unsigned reference=(rr<<11)|(gg<<5)|bb;
+                    if(g_capture_ownership && g_undithered_reference)
+                        undithered_color=reference;
                     if(g_msi_dither_enabled && g_state.msiColor.Dither){
                         color=rgb565_modulate_ordered(color,mr,mg,mb,(unsigned)x,(unsigned)y);
                         g_dither_candidates++;
@@ -3254,8 +3343,26 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 unsigned ng=((((color>>5)&63)*ar)+(((old>>5)&63)*br)+50)/100;
                 unsigned nb=(((color&31)*ar)+((old&31)*br)+50)/100;
                 color=(nr<<11)|(ng<<5)|nb;
+                if(g_capture_ownership && g_undithered_reference &&
+                   !g_zplane_draw_context && textured && modulate &&
+                   g_msi_dither_enabled && g_state.msiColor.Dither){
+                    /* Same source-over blend against the ACTUAL old dst.
+                     * Not a full-frame replay without dither: earlier
+                     * writes to old dst may themselves have used dither. */
+                    unsigned r0=((((undithered_color>>11)&31u)*ar)+(((old>>11)&31u)*br)+50u)/100u;
+                    unsigned g0=((((undithered_color>>5)&63u)*ar)+(((old>>5)&63u)*br)+50u)/100u;
+                    unsigned b0=(((undithered_color&31u)*ar)+((old&31u)*br)+50u)/100u;
+                    undithered_color=(r0<<11)|(g0<<5)|b0;
+                }
             }
             dst[y*width+x]=(WORD)color;
+            if(g_capture_ownership && g_undithered_reference){
+                /* This does not change actual color; later writes must clear
+                 * the hypothetical reference just like source attribution. */
+                unsigned eligible=!g_zplane_draw_context && textured && modulate &&
+                                  g_msi_dither_enabled && g_state.msiColor.Dither;
+                g_undithered_reference[j]=(WORD)(eligible?undithered_color:0u);
+            }
             if(g_capture_ownership && g_final_source_audit){
                 unsigned metadata=0u;
                 if(!g_zplane_draw_context && textured){
