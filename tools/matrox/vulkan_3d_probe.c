@@ -186,10 +186,10 @@ static double coord(double u,int clamp){return clamp?(u<0?0:u>1?1:u):u-floor(u);
 static unsigned mod(unsigned v,unsigned m,unsigned threshold,int dither){
     unsigned n=v*m;return dither?n/255+(n%255>threshold):(n+127)/255;
 }
-static uint16_t refpixel(double *w,double x,double y,unsigned f){
+static uint16_t refpixel_offset(double *w,double x,double y,unsigned f,double du,double dv){
     double u=0,v=0,iw=0,m[3]={0};
     for(int i=0;i<3;i++){double t=w[i]*((f&1)?tri[i].iw:1);iw+=t;u+=t*tri[i].uv[0];v+=t*tri[i].uv[1];for(int k=0;k<3;k++)m[k]+=w[i]*tri[i].m[k];}
-    u=coord(u/iw,f&2);v=coord(v/iw,f&4);
+    u=coord(u/iw+du,f&2);v=coord(v/iw+dv,f&4);
     unsigned color;
     if(f&8){double sx=u*2-.5,sy=v*2-.5;int ix=(int)floor(sx),iy=(int)floor(sy);
         unsigned wx=(unsigned)((sx-ix)*256+.5),wy=(unsigned)((sy-iy)*256+.5);
@@ -202,12 +202,37 @@ static uint16_t refpixel(double *w,double x,double y,unsigned f){
     }
     return (uint16_t)color;
 }
+static uint16_t refpixel(double *w,double x,double y,unsigned f){return refpixel_offset(w,x,y,f,0,0);}
+/* Only accept exact alternate texel colors within a tiny normalized UV
+ * interval at nearest-sampling discontinuities in this 2x2 fixture. */
+static int nearest_boundary_match(double *w,double x,double y,unsigned f,uint16_t actual){
+    if(f&8)return 0;
+    const double eps=0.000002;
+    uint16_t base=refpixel(w,x,y,f);
+    for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++){
+        if(!i&&!j)continue;
+        uint16_t alt=refpixel_offset(w,x,y,f,i*eps,j*eps);
+        if(alt!=base&&actual==alt)return 1;
+    }
+    return 0;
+}
+static void oracle_selftest(void){
+    double w[3],far[3];
+    double x=1083.5*640/1440,y=295.5*400/1080;
+    weights(x,y,w);weights(200.5,150.5,far);
+    NEED(refpixel(w,x,y,0)==0x001f);
+    NEED(nearest_boundary_match(w,x,y,0,0xf800));
+    NEED(!nearest_boundary_match(w,x,y,0,0x07e0));
+    NEED(!nearest_boundary_match(w,x,y,8,0xf800));
+    NEED(!nearest_boundary_match(far,200.5,150.5,0,0xdead));
+    puts("VULKAN_3D_ORACLE_SELFTEST_PASS");
+}
 static int absdiff(unsigned a,unsigned b){return a>b?(int)(a-b):(int)(b-a);}
 static int channel_error(uint16_t a,uint16_t b){
     int r=absdiff(a>>11,b>>11),g=absdiff((a>>5)&63,(b>>5)&63),bl=absdiff(a&31,b&31);
     return r>g?(r>bl?r:bl):(g>bl?g:bl);
 }
-static void test(uint32_t w,uint32_t h,unsigned flags){
+static int test(uint32_t w,uint32_t h,unsigned flags){
     Image out=image(w,h,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
@@ -225,37 +250,39 @@ static void test(uint32_t w,uint32_t h,unsigned flags){
     VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(c,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(c);
     void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
-    unsigned interior=0,exact=0,one=0,bad=0,outside=0,coverage=0,edges=0;
+    unsigned interior=0,exact=0,one=0,boundary=0,bad=0,outside=0,coverage=0,edges=0;
     for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h,b[3];weights(lx,ly,b);
         double mn=fmin(b[0],fmin(b[1],b[2]));uint16_t actual=p[(size_t)y*w+x];
         /* exclude a thin geometric edge band from strict interior checks */
-        if(mn>.002){interior++;uint16_t ref=refpixel(b,lx,ly,flags);int e=channel_error(actual,ref);if(!e)exact++;else if(e==1)one++;else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
+        if(mn>.002){interior++;uint16_t ref=refpixel(b,lx,ly,flags);int e=channel_error(actual,ref);if(!e)exact++;else if(e==1)one++;else if(nearest_boundary_match(b,lx,ly,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
         else if(mn<-.002){outside++;if(actual!=0xdead)coverage++;}
         else edges++;
     }
-    printf("VULKAN_3D_CASE %ux%u flags=%u interior=%u exact=%u one_lsb=%u bad=%u outside=%u coverage_errors=%u edge_band=%u\n",w,h,flags,interior,exact,one,bad,outside,coverage,edges);
+    printf("VULKAN_3D_CASE %ux%u flags=%u interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u\n",w,h,flags,interior,exact,one,boundary,bad,outside,coverage,edges);
     vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);freeimage(out);freebuf(read);
-    /* The CPU oracle uses doubles; interpolation at integer quantization
-       boundaries can differ by one LSB. No larger mismatch is accepted. */
-    NEED(interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u);
+    /* Keep strict error checks, but collect all cases before returning. */
+    return interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u&&boundary*10000u<=interior;
 }
 int main(void){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v1 / embedded opaque world shaders");
+    puts("MatroxVulkan3DProbe x86 v2 / embedded opaque world shaders");
     if(!load_world_vk())return 1;
 #endif
+    oracle_selftest();
     setup();
     const unsigned modes[]={0,1,7,9,15,25,63};
-    for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){test(640,400,modes[i]);test(1440,1080,modes[i]);}
+    unsigned failures=0;
+    for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
-    puts("VULKAN_3D_OFFSCREEN_PASS cases=14");
+    if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=14");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
-    return 0;
+    return failures?1:0;
 }
