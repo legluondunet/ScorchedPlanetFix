@@ -6,6 +6,7 @@
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_world_bilinear.h"
+#include "vulkan_present.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -444,6 +445,8 @@ static int g_swallowed_right_down = 0;
 
 static int g_preview_created = 0;
 static int g_viewport_reported=0;
+static int g_vk_requested=0,g_vk_active=0,g_vk_attempted=0;
+static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0;
 static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
@@ -831,6 +834,16 @@ static void zero(void*ptr,unsigned n){BYTE*p=(BYTE*)ptr;for(unsigned i=0;i<n;i++
 static void* alloc(unsigned n){return n?VirtualAlloc(NULL,n,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE):NULL;}
 /* GDI presents the original CPU RGB565 framebuffer plus experimental
  * software-rasterized MSI triangles. No exclusive display-mode change. */
+static void vk_report(const char *message,int code){
+    if(!g_log)return;
+    char buf[380];DWORD n=0;
+    putstr(buf,&n,"PREVIEW_VULKAN ");putstr(buf,&n,message);
+    putstr(buf,&n," code=");puthex(buf,&n,(unsigned)code);
+    buf[n]=0;logtext(buf);
+}
+static void vk_stop(void){
+    if(g_vk_active){matrox_vk_close();g_vk_active=0;}
+}
 static void preview_blit(HDC dc){
     if(!g_initialized || !g_color || !dc || !g_info.msiColor.pMem)return;
     if(g_info.msiColor.BytesPerPixel!=2 || g_info.msiColor.Pitch<=0)return;
@@ -921,14 +934,14 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
     if(msg==WM_PAINT){
         PAINTSTRUCT_MIN ps;zero(&ps,sizeof(ps));
         HDC dc=BeginPaint(hwnd,&ps);
-        if(dc){preview_blit(dc);EndPaint(hwnd,&ps);}
+        if(dc){if(!g_vk_active)preview_blit(dc);EndPaint(hwnd,&ps);}
         return 0;
     }
     if(msg==WM_CLOSE){
         logtext("PREVIEW_WINDOW CLOSED by user");
-        DestroyWindow(hwnd);return 0;
+        vk_stop();DestroyWindow(hwnd);return 0;
     }
-    if(msg==WM_DESTROY){if(g_preview==hwnd)g_preview=NULL;return 0;}
+    if(msg==WM_DESTROY){if(g_preview==hwnd){vk_stop();g_preview=NULL;}return 0;}
     /* Do not reenter the OEM WndProc while MSI heaps and framebuffers are torn down. */
     if(g_shutdown_started)return DefWindowProcA(hwnd,msg,wparam,lparam);
     /* The original game WNDPROC (written for the Win95 MSI full-screen
@@ -1147,7 +1160,7 @@ static void preview_open(void){
       putstr(buf,&n,g_borderless_active?"borderless-desktop":"windowed");
       putstr(buf,&n," window_width=");putunsigned(buf,&n,(unsigned)winw);
       putstr(buf,&n," window_height=");putunsigned(buf,&n,(unsigned)winh);
-      putstr(buf,&n," source=640x400 display_aspect=4:3 pixel_aspect=5:6 pillarbox=black; GDI RGB565, input forwarded");
+      putstr(buf,&n," source=640x400 display_aspect=4:3 pixel_aspect=5:6 pillarbox=black; RGB565, input forwarded");
       buf[n]=0;logtext(buf);
     }
 }
@@ -1177,11 +1190,35 @@ static void preview_present(void){
         }
     }
     if(!g_preview)return;
-    HDC dc=GetDC(g_preview);
-    if(dc){preview_blit(dc);ReleaseDC(g_preview,dc);}
+    /* Initialize lazily on the rendering thread, after window creation and
+     * outside the guest message callback. Never draw GDI into a live Vulkan
+     * swapchain. Failed initialization or presentation keeps native game
+     * memory intact and permanently falls back to GDI for this session. */
+    if(g_vk_requested&&!g_vk_attempted&&g_endframe_depth==1u&&g_guest_callback_depth==0u){
+        g_vk_attempted=1;
+        if(g_info.msiColor.BytesPerPixel==2&&g_info.msiColor.Pitch==1280&&g_info.msiColor.MemSize==512000){
+            int status=matrox_vk_open(g_preview,g_presentation_smooth_enabled,vk_report);
+            g_vk_active=(status==0);
+            if(g_vk_active)logtext("PREVIEW_RENDERER active=vulkan (CPU raster + GPU presentation)");
+            else vk_report("initialization failed; active=software",status);
+        }else logtext("PREVIEW_VULKAN unsupported native framebuffer; active=software");
+    }
+    if(g_vk_active){
+        DWORD t=GetTickCount();
+        int status=matrox_vk_present((const WORD*)g_color,(DWORD)g_info.msiColor.Pitch);
+        g_vk_ms+=GetTickCount()-t;
+        if(status==0){g_vk_frames++;g_preview_presented++;}
+        else if(status==2){g_vk_skipped++;}
+        else{vk_stop();logtext("PREVIEW_RENDERER Vulkan present failed; active=software for this session");}
+    }
+    if(!g_vk_active){
+        HDC dc=GetDC(g_preview);
+        if(dc){preview_blit(dc);ReleaseDC(g_preview,dc);}
+    }
     g_preview_ms += GetTickCount()-preview_tick;
     if(g_frames==5||g_frames==60||g_frames==240||g_frames%600==0){
         lognum("PREVIEW_PRESENT frames=",g_frames,"successful_blits=",g_preview_presented);
+        if(g_vk_requested){lognum("PREVIEW_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("PREVIEW_VULKAN present_ms=",g_vk_ms,"active=",g_vk_active); }
         lognum("GAME_WINDOW_EVENTS forwarded=",g_guest_messages,"input_msgs=",g_input_messages);
         lognum("FOCUS_FILTER_STATS ignored_for_guest=",g_focus_filtered_events,NULL,0);
         lognum("INPUT_PUMP_STATS nested_deferred=",g_inner_input_pumps_deferred,
@@ -1189,6 +1226,7 @@ static void preview_present(void){
     }
 }
 static void clean(void){
+    vk_stop();
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i])VirtualFree(g_heaps[i],0,MEM_RELEASE);
     if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
     g_heaps=NULL;
@@ -2060,7 +2098,14 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PRESENTATION_SMOOTH",setting,sizeof(setting));
       g_presentation_smooth_enabled=(n==1u && setting[0]=='1');}
     g_presentation_smooth_failed=g_presentation_smooth_reported=0;
-    logtext(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy");
+    g_vk_requested=g_vk_attempted=g_vk_active=0;g_vk_frames=g_vk_skipped=g_vk_ms=0;
+    {char setting[16]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_RENDERER",setting,sizeof(setting));
+      g_vk_requested=(n==4u&&setting[0]=='a'&&setting[1]=='u'&&setting[2]=='t'&&setting[3]=='o')||
+        (n==6u&&setting[0]=='v'&&setting[1]=='u'&&setting[2]=='l'&&setting[3]=='k'&&setting[4]=='a'&&setting[5]=='n');
+    }
+    logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");
+    logtext(g_vk_requested?(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=GPU linear (GDI HALFTONE fallback)":"PREVIEW_SCALER requested=GPU nearest (GDI legacy fallback)"):
+        (g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy"));
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
@@ -2173,6 +2218,7 @@ BOOL __cdecl msiExit(void){
     log_opacity_histogram("exit");
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
+    if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,NULL,0);}
     clean();
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);

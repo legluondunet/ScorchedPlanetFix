@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, diagnostics/matrox-f12-lighting-input-20261124]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,14 @@ jobs:
           repository: tanepiper/game-frame
           ref: f195a074a63cc150673c38becdec696163b0b3d1
           path: third_party/game-frame
+          persist-credentials: false
+
+      - name: Check out pinned Khronos Vulkan headers
+        uses: actions/checkout@v5
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: b379292b2ab6df5771ba9870d53cf8b2c9295daf
+          path: third_party/vulkan-headers
           persist-credentials: false
 
       - name: Test offline MSI95 log triage (synthetic fixtures, no game data)
@@ -195,13 +203,14 @@ jobs:
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
           $env:MATROX_MSI_RGB888_LIGHTING = '0'
           $env:MATROX_MSI_PRESENTATION_SMOOTH = '0'
+          $env:MATROX_MSI_RENDERER = 'software'
           Push-Location $folder
           try {
             & '.\MatroxLightingProbe.exe'
             if ($LASTEXITCODE -ne 0) { throw "Synthetic lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING','PRESENTATION_SMOOTH')) {
+            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING','PRESENTATION_SMOOTH','RENDERER')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
@@ -239,6 +248,7 @@ jobs:
           $env:MATROX_MSI_DITHER = '1'
           $env:MATROX_MSI_RGB888_LIGHTING = '1'
           $env:MATROX_MSI_PRESENTATION_SMOOTH = '1'
+          $env:MATROX_MSI_RENDERER = 'auto'
           $env:MATROX_MSI_LOG = '1'
           $env:MATROX_MSI_FPS_LIMIT = '0'
           $env:MATROX_MSI_BORDERLESS = '0'
@@ -249,16 +259,22 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG')) {
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG','RENDERER')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
           $runtime = Get-Content (Join-Path (Split-Path $folder -Parent) 'ScorchedPlanetFix.log') -Raw
-          if (!$runtime.Contains('PREVIEW_SCALER HALFTONE blit succeeded') -or $runtime.Contains('HALFTONE unavailable')) { throw 'Optional HALFTONE presentation path was not successfully exercised' }
+          if (!$runtime.Contains('PREVIEW_RENDERER requested=vulkan')) { throw 'Vulkan request not passed' }
+          if ($runtime.Contains('PREVIEW_RENDERER active=vulkan')) {
+            if ($runtime -notmatch 'SESSION_VULKAN frames=\s*[1-9][0-9]*') { throw 'Vulkan selected but no presented frames' }
+          } elseif (!$runtime.Contains('active=software') -or !$runtime.Contains('PREVIEW_SCALER HALFTONE blit succeeded')) {
+            throw 'Automatic Vulkan fallback did not preserve GDI presentation'
+          }
           python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software --rgb888
           if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
 
       - name: Upload standalone Matrox lighting comparison probe
+        if: github.base_ref != 'diagnostics/matrox-f12-lighting-input-20261124'
         uses: actions/upload-artifact@v6
         with:
           name: MatroxLightingProbe-x86
@@ -502,6 +518,7 @@ jobs:
           Copy-Item README.md dist/README.md
           Copy-Item docs/release-notes-v2.0.2.md dist/RELEASE-NOTES.txt
           Copy-Item docs/gameframe-experiment.md dist/GAMEFRAME-INFO.txt
+          Add-Content dist/GAMEFRAME-INFO.txt '\nMatrox Vulkan presentation: built with Vulkan-Headers, Copyright 2015-2024 The Khronos Group Inc., Apache-2.0 (see LICENSE-APACHE.txt), pinned b379292b2ab6df5771ba9870d53cf8b2c9295daf. Runtime loader provided by system.'
           $hash = (Get-FileHash dist/ScorchedPlanetFix.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ScorchedPlanetFix.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
           $files = @(Get-ChildItem dist -File)

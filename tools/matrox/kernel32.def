@@ -16,3 +16,6 @@ EXPORTS
  VirtualFree
  AddVectoredExceptionHandler
  VirtualQuery
+ LoadLibraryExW
+ FreeLibrary
+ GetModuleHandleW

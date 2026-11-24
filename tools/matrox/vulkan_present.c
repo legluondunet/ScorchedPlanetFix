@@ -9,6 +9,26 @@
 #include <vulkan/vulkan.h>
 #include <string.h>
 #include "vulkan_present.h"
+/* The MSI95 object is linked without CRT. Keep large scratch buffers in
+ * static storage (one owning thread) and supply compiler-generated memory
+ * intrinsics locally, not a new redistributable dependency. */
+#ifdef MATROX_VK_FREESTANDING
+void *memset(void *p,int c,size_t n){
+    volatile unsigned char *d=(volatile unsigned char*)p;
+    while(n--)*d++=(unsigned char)c;
+    return p;
+}
+void *memcpy(void *p,const void *q,size_t n){
+    volatile unsigned char *d=(volatile unsigned char*)p;
+    const unsigned char *s=(const unsigned char*)q;
+    while(n--)*d++=*s++;
+    return p;
+}
+#endif
+static int same_string(const char *a,const char *b){
+    while(*a&&*a==*b){a++;b++;}
+    return *a==*b;
+}
 typedef struct {uint32_t x,y,w,h;} View;
 static View viewport(uint32_t w,uint32_t h){
     View v={0,0,w,w*3/4};
@@ -147,25 +167,25 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     VkWin32SurfaceCreateInfoKHR si={VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
     si.hinstance=GetModuleHandleW(NULL);si.hwnd=hwnd;
     CHECK(vkCreateWin32SurfaceKHR(instance,&si,NULL,&surface));
-    VkPhysicalDevice devices[32],physical=VK_NULL_HANDLE;
+    static VkPhysicalDevice devices[32];VkPhysicalDevice physical=VK_NULL_HANDLE;
     VkSurfaceCapabilitiesKHR caps;
     VkSurfaceFormatKHR chosen={VK_FORMAT_UNDEFINED,VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     uint32_t n=32,family=0;
     CHECK(vkEnumeratePhysicalDevices(instance,&n,devices));
     for(uint32_t i=0;i<n&&!physical;i++){
-        VkPhysicalDeviceProperties prop;vkGetPhysicalDeviceProperties(devices[i],&prop);
+        static VkPhysicalDeviceProperties prop;vkGetPhysicalDeviceProperties(devices[i],&prop);
         report(prop.deviceName,(int)prop.deviceType);
         if(prop.deviceType==VK_PHYSICAL_DEVICE_TYPE_CPU)continue;
         VkFormatProperties fmt;vkGetPhysicalDeviceFormatProperties(devices[i],VK_FORMAT_R8G8B8A8_UNORM,&fmt);
         VkFormatFeatureFlags need=VK_FORMAT_FEATURE_BLIT_SRC_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
         if((fmt.optimalTilingFeatures&need)!=need)continue;
-        VkExtensionProperties ex[256];uint32_t en=256;int has_swap=0;
+        static VkExtensionProperties ex[256];uint32_t en=256;int has_swap=0;
         if(vkEnumerateDeviceExtensionProperties(devices[i],NULL,&en,ex)!=VK_SUCCESS)continue;
-        for(uint32_t j=0;j<en;j++)if(!strcmp(ex[j].extensionName,VK_KHR_SWAPCHAIN_EXTENSION_NAME))has_swap=1;
+        for(uint32_t j=0;j<en;j++)if(same_string(ex[j].extensionName,VK_KHR_SWAPCHAIN_EXTENSION_NAME))has_swap=1;
         if(!has_swap)continue;
         if(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(devices[i],surface,&caps)!=VK_SUCCESS||
            !(caps.supportedUsageFlags&VK_IMAGE_USAGE_TRANSFER_DST_BIT))continue;
-        VkSurfaceFormatKHR formats[64];uint32_t fn=64;
+        static VkSurfaceFormatKHR formats[64];uint32_t fn=64;
         if(vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i],surface,&fn,formats)!=VK_SUCCESS)continue;
         chosen.format=VK_FORMAT_UNDEFINED;
         for(uint32_t j=0;j<fn;j++){
@@ -176,7 +196,7 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
             if(fmt.optimalTilingFeatures&VK_FORMAT_FEATURE_BLIT_DST_BIT){chosen=f;break;}
         }
         if(chosen.format==VK_FORMAT_UNDEFINED)continue;
-        VkQueueFamilyProperties queues[64];uint32_t qn=64;
+        static VkQueueFamilyProperties queues[64];uint32_t qn=64;
         vkGetPhysicalDeviceQueueFamilyProperties(devices[i],&qn,queues);
         for(uint32_t j=0;j<qn;j++){
             VkBool32 support=0;
@@ -232,7 +252,7 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     sc.presentMode=VK_PRESENT_MODE_FIFO_KHR;sc.clipped=VK_TRUE;
     CHECK(vkCreateSwapchainKHR(device,&sc,NULL,&swap));
     count=32;CHECK(vkGetSwapchainImagesKHR(device,swap,&count,images));
-    VkPhysicalDeviceMemoryProperties mp;vkGetPhysicalDeviceMemoryProperties(physical,&mp);
+    static VkPhysicalDeviceMemoryProperties mp;vkGetPhysicalDeviceMemoryProperties(physical,&mp);
     VkBufferCreateInfo bc={VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bc.size=W*H*4;bc.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;bc.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     CHECK(vkCreateBuffer(device,&bc,NULL,&buffer));
@@ -270,7 +290,8 @@ done:
 int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
     if(!ready||!native_pixels||pitch<W*2u||pitch%2u)return 1;
     RECT client;
-    if(!IsWindow(hwnd)||IsIconic(hwnd)||!GetClientRect(hwnd,&client))return 1;
+    if(!IsWindow(hwnd)||!GetClientRect(hwnd,&client))return 1;
+    if(IsIconic(hwnd)||client.right<=client.left||client.bottom<=client.top)return 2;
     if((uint32_t)(client.right-client.left)!=extent.width||(uint32_t)(client.bottom-client.top)!=extent.height){
         report("Vulkan surface extent changed; recreate or fallback",1);return 1;
     }
@@ -280,8 +301,8 @@ int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
         for(uint32_t x=0;x<W;x++)pixels[y*W+x]=rgba565(row[x]);
     }
     if(submitted){CHECK(vkResetFences(device,1,&fence));CHECK(vkResetCommandBuffer(cmd,0));}
-    uint32_t index=0;VkResult ar=vkAcquireNextImageKHR(device,swap,5000000000ull,acquired,VK_NULL_HANDLE,&index);
-    if((ar!=VK_SUCCESS&&ar!=VK_SUBOPTIMAL_KHR)||index>=count)goto done;
+    uint32_t index=0;VkResult ar=vkAcquireNextImageKHR(device,swap,1000000000ull,acquired,VK_NULL_HANDLE,&index);
+    if((ar!=VK_SUCCESS&&ar!=VK_SUBOPTIMAL_KHR)||index>=count){report("vkAcquireNextImageKHR",(int)ar);goto done;}
     VkCommandBufferBeginInfo cb={VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CHECK(vkBeginCommandBuffer(cmd,&cb));
     VkImageSubresourceRange range={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
