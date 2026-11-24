@@ -51,6 +51,8 @@ typedef BOOL (__cdecl *Blend)(DWORD);
 static Init init; static Start start; static Set set; static Draw draw;
 static End end; static Exit finish; static Alloc alloc; static Free release;
 static Blend blend;
+typedef BOOL (__cdecl *DitherEnable)(BOOL);
+static DitherEnable dither_enable;
 static Params p;
 static Vertex v[4];
 static BYTE pixels[640u*400u*2u];
@@ -101,12 +103,65 @@ static BOOL save(const char *name){
     if(!ok)DeleteFileA(name);
     return ok;
 }
+/* Independent fresh-frame tests at exactly the same pixel coordinates.
+ * DITHER.BIN: 8-byte magic, then records of 4-byte condition header and
+ * 2048 little-endian RGB565 pixels (8 rows x 16 cols x 4 y x 4 x).
+ * Explicit override 255 means no direct setter call. No game assets. */
+static BOOL dither_matrix(Info *info,BYTE *tex,BYTE *lut){
+    static const BYTE request[8]={0,1,1,0,0,0,1,1};
+    static const BYTE override[8]={255,255,255,255,0,1,0,1};
+    static BYTE sample[4096];
+    unsigned count=dither_enable?8u:4u;
+    HANDLE h=CreateFileA("DITHER.BIN",0x40000000ul,0,0,1,0x80,0);
+    BOOL ok=0;
+    if(h==(HANDLE)-1)return 0;
+    if(!write_exact(h,"M95DITH1",8))goto out;
+    trace_text(dither_enable?"DITHER direct setter present\r\n":"DITHER direct setter absent\r\n");
+    for(unsigned f=0;f<count;f++){
+        BYTE header[4]={(BYTE)f,request[f],override[f],0};
+        unsigned pos=0;
+        trace_number("DITHER frame=",f);
+        trace_number("DITHER requested=",request[f]);
+        trace_number("DITHER override=",override[f]);
+        if(!start(1,80.f,80.f,80.f,0,0.f))goto out;
+        p.texture.enable=1;p.texture.mem=p.texture.heap=tex;
+        p.texture.lut.mem=p.texture.lut.heap=lut;
+        p.color.dither=request[f];
+        if(!set(&p))goto out;
+        if(override[f]!=255u && !dither_enable(override[f]))goto out;
+        for(unsigned row=0;row<8;row++)for(unsigned col=0;col<16;col++){
+            if(!rect((float)(16+38*col),(float)(8+22*row),32.f,18.f,
+                     ((float)row+.5f)/8.f,levels[col],levels[col]))goto out;
+        }
+        if(!set(0))goto out;
+        if(info->color.bpp!=2||info->color.rd!=5||info->color.gd!=6||info->color.bd!=5||
+           info->color.rs!=11||info->color.gs!=5||info->color.bs!=0||
+           !info->color.mem||info->color.pitch<1280||info->color.pitch>65536||
+           info->color.size<info->color.pitch*400)goto out;
+        for(unsigned row=0;row<8;row++)for(unsigned col=0;col<16;col++)
+            for(unsigned y=8+22*row+3;y<8+22*row+7;y++)
+                for(unsigned x=16+38*col+5;x<16+38*col+9;x++){
+                    volatile BYTE *src=info->color.mem+y*(DWORD)info->color.pitch+2*x;
+                    sample[pos++]=src[0];sample[pos++]=src[1];
+                }
+        p.texture.enable=0;p.texture.mem=p.texture.heap=0;
+        p.texture.lut.mem=p.texture.lut.heap=0;
+        if(!set(&p)||!end(0,0,1))goto out;
+        if(pos!=sizeof(sample)||!write_exact(h,header,4)||!write_exact(h,sample,pos)||!FlushFileBuffers(h))goto out;
+        trace_text("DITHER frame saved\r\n");
+    }
+    ok=1;
+out:
+    if(!CloseHandle(h))ok=0;
+    /* Keep partial records for diagnostics if a later condition fails. */
+    return ok;
+}
 void __cdecl probe_main(void){
     HANDLE lib=0;Info *info=0;BYTE *tex=0,*lut=0;
     unsigned rc=1,i,x,y,d,row,col,mode;
     const char *status; HANDLE report;
     trace=CreateFileA("PROBE.LOG",0x40000000ul,0,0,2,0x80,0); /* CREATE_ALWAYS */
-    trace_text("MatroxLightingProbe v4 / Pentium i586 diagnostic\r\n");
+    trace_text("MatroxLightingProbe v5 / Pentium i586 diagnostic\r\n");
     trace_text("CALL LoadLibraryA .\\msi95.dll\r\n");
     lib=LoadLibraryA(".\\msi95.dll");
     if(!lib){DWORD error=GetLastError();trace_number("LoadLibraryA error=",error);goto done;}
@@ -117,6 +172,7 @@ void __cdecl probe_main(void){
     end=(End)GetProcAddress(lib,"msiEndFrame");finish=(Exit)GetProcAddress(lib,"msiExit");
     alloc=(Alloc)GetProcAddress(lib,"msiAllocTextureHeap");release=(Free)GetProcAddress(lib,"msiFreeTextureHeap");
     blend=(Blend)GetProcAddress(lib,"msiSetTextureBlend");
+    dither_enable=(DitherEnable)GetProcAddress(lib,"msiSetDitherEnable");
     rc=2;
     if(!init)trace_text("MISSING msiInit\r\n");
     if(!start)trace_text("MISSING msiStartFrame\r\n");
@@ -190,6 +246,9 @@ void __cdecl probe_main(void){
     rc=9;trace_text("CALL save BMP\r\n");if(!save(mode?"msi95_lighting_blend.bmp":"msi95_lighting_flag.bmp"))goto done;
     trace_text("OK BMP saved\r\n");
     }
+    rc=13;trace_text("CALL independent dither matrix\r\n");
+    if(!dither_matrix(info,tex,lut))goto done;
+    trace_text("OK independent dither matrix\r\n");
     rc=12;
     status=blend?"msiSetTextureBlend=present; MODULATE calls succeeded\r\n":"msiSetTextureBlend=absent; flag-only frame generated\r\n";
     report=CreateFileA("msi95_lighting_probe.txt",0x40000000ul,0,0,1,0x80,0);
