@@ -25,8 +25,10 @@ if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 
 $vkSource = Join-Path $sourceRoot "vulkan_present.c"
 $vkHeader = Join-Path $sourceRoot "vulkan_present.h"
-if ((Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant() -cne "57a54024eb9d806dd434a11e2949c4e0c2b86ad4a399e4414aed6e129f54f12b") { throw "Vulkan presenter source checksum mismatch" }
-if ((Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant() -cne "e4b1ad268d245f08e4dedfa6146f8f5bf3e4e9857e20b776567d6fdcb590cd08") { throw "Vulkan presenter header checksum mismatch" }
+$vkSourceHash = (Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($vkSourceHash -cne "57a54024eb9d806dd434a11e2949c4e0c2b86ad4a399e4414aed6e129f54f12b") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
+$vkHeaderHash = (Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($vkHeaderHash -cne "e4b1ad268d245f08e4dedfa6146f8f5bf3e4e9857e20b776567d6fdcb590cd08") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
 $vkRoot = Join-Path $projectRoot "third_party/vulkan-headers"
 if (!(Test-Path (Join-Path $vkRoot "include/vulkan/vulkan.h"))) { throw "Pinned Vulkan-Headers checkout required" }
 $vkCommit = (& git -C $vkRoot rev-parse HEAD).Trim()

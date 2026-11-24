@@ -1,3 +1,5 @@
 # Reproducible SHA-256 for the Matrox MSI95 clean-room C source on Windows CI.
 tools/matrox/msi95_probe.c text eol=lf
 tools/matrox/*.def text eol=lf
+tools/matrox/vulkan_present.c text eol=lf
+tools/matrox/vulkan_present.h text eol=lf
