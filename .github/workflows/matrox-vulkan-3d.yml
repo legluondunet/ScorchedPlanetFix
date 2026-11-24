@@ -6,6 +6,7 @@ on:
       - 'tools/matrox/shaders/**'
       - 'tools/matrox/vulkan_3d_probe.c'
       - 'tools/matrox/embed_world_spv.py'
+      - 'tools/matrox/gen_world_vk_dispatch.py'
       - '.github/workflows/matrox-vulkan-3d.yml'
 permissions:
   contents: read
@@ -18,7 +19,7 @@ jobs:
       - name: Install build-only GLSL and SPIR-V validators
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends glslang-tools spirv-tools libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers
+          sudo apt-get install -y --no-install-recommends glslang-tools spirv-tools libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers gcc-mingw-w64-i686-posix
           glslangValidator --version
       - name: Compile and validate both shaders
         run: |
@@ -41,3 +42,22 @@ jobs:
           cat /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=14' /tmp/matrox-spv/probe.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
+      - name: Cross-compile standalone Win32 x86 GPU verification executable
+        run: |
+          set -eu
+          python3 tools/matrox/gen_world_vk_dispatch.py tools/matrox/vulkan_3d_probe.c /tmp/matrox-spv/world_vk_dispatch.h
+          mkdir -p /tmp/matrox-vkinclude
+          cp -r /usr/include/vulkan /tmp/matrox-vkinclude/
+          if test -d /usr/include/vk_video; then cp -r /usr/include/vk_video /tmp/matrox-vkinclude/; fi
+          i686-w64-mingw32-gcc-posix -std=c11 -O2 -D_WIN32_WINNT=0x0602 -static-libgcc -I/tmp/matrox-spv -I/tmp/matrox-vkinclude tools/matrox/vulkan_3d_probe.c -o /tmp/matrox-spv/MatroxVulkan3DProbe.exe -lm
+          i686-w64-mingw32-strip /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          file /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          file /tmp/matrox-spv/MatroxVulkan3DProbe.exe | grep -q 'PE32 executable.*Intel 80386'
+          i686-w64-mingw32-objdump -p /tmp/matrox-spv/MatroxVulkan3DProbe.exe | grep 'DLL Name:'
+      - name: Upload one small standalone hardware proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: MatroxVulkan3DProbe-x86
+          path: /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          retention-days: 3
+          if-no-files-found: error

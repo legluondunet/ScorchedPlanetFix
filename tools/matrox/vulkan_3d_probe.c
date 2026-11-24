@@ -2,6 +2,12 @@
  * Standalone offscreen shader proof. No game assets or MSI ABI changes.
  * Run in a fresh process. Fatal errors exit; process owns all Vulkan objects.
  */
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define VK_NO_PROTOTYPES
+#include <windows.h>
+#include <io.h>
+#endif
 #include <vulkan/vulkan.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,6 +17,9 @@
 #include <string.h>
 #include "world_spv.h"
 #include "msi_world_bilinear.h"
+#ifdef _WIN32
+#include "world_vk_dispatch.h"
+#endif
 #define OK(x) do { VkResult r_=(x); if(r_!=VK_SUCCESS){fprintf(stderr,"%s: %d\n",#x,r_);exit(1);} }while(0)
 #define NEED(x) do {if(!(x)){fprintf(stderr,"check failed: %s\n",#x);exit(1);}}while(0)
 #define S(t) {.sType=VK_STRUCTURE_TYPE_##t}
@@ -103,6 +112,11 @@ static void setup(void){
     uint32_t n=0;OK(vkEnumeratePhysicalDevices(inst,&n,0));NEED(n>0);
     VkPhysicalDevice *p=calloc(n,sizeof(*p));NEED(p);OK(vkEnumeratePhysicalDevices(inst,&n,p));
     for(uint32_t i=0;i<n&&!phys;i++){
+#ifdef _WIN32
+        VkPhysicalDeviceProperties candidate;vkGetPhysicalDeviceProperties(p[i],&candidate);
+        printf("VULKAN_3D_CANDIDATE %s type=%u\n",candidate.deviceName,candidate.deviceType);
+        if(candidate.deviceType==VK_PHYSICAL_DEVICE_TYPE_CPU)continue;
+#endif
         VkFormatProperties f;vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R16_UINT,&f);
         VkFormatFeatureFlags want=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
         if((f.optimalTilingFeatures&want)!=want)continue;
@@ -227,10 +241,21 @@ static void test(uint32_t w,uint32_t h,unsigned flags){
     NEED(interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u);
 }
 int main(void){
+#ifdef _WIN32
+    if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
+    if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
+    setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
+    puts("MatroxVulkan3DProbe x86 v1 / embedded opaque world shaders");
+    if(!load_world_vk())return 1;
+#endif
     setup();
     const unsigned modes[]={0,1,7,9,15,25,63};
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){test(640,400,modes[i]);test(1440,1080,modes[i]);}
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
-    puts("VULKAN_3D_OFFSCREEN_PASS cases=14");return 0;
+    puts("VULKAN_3D_OFFSCREEN_PASS cases=14");
+#ifdef _WIN32
+    FreeLibrary(world_vk_loader);
+#endif
+    return 0;
 }
