@@ -82,6 +82,24 @@ def compare_pixels(pix):
                                     "phase":[px,py],"matches":sum(matches),
                                     "no_dither_matches":matches[0],
                                     "dither_matches":matches[1]})
+    # On the owner's Win95 / 86Box 6.0 / MSI API 1.4 capture, the
+    # constant cells with requested Dither=0 exhibit the 2x2 pattern,
+    # while requested Dither=1 is uniform. Treat polarity as an observed
+    # hypothesis, not a physical hardware or universal API guarantee.
+    for rounding in ("nearest","truncate"):
+        for py in range(2):
+            for px in range(2):
+                matches=[0,0]
+                for d,row,col,s,l,x,y,actual in data:
+                    m=int(l+.5) if rounding=="nearest" else int(l)
+                    expected=model_8bit(s,m,x+px,y+py,1-d)
+                    matches[d]+=int(actual==expected)
+                results.append({"model":"rgb888_div256",
+                                "dither_polarity":"inverted_request",
+                                "coefficient_rounding":rounding,
+                                "phase":[px,py],"matches":sum(matches),
+                                "no_dither_matches":matches[0],
+                                "dither_matches":matches[1]})
     results.sort(key=lambda a:-a["matches"])
     return {"sample_pixels":len(data),"ranked_models":results,
             "interpretation":"Fit to constant-cell interior pixels only. "
@@ -102,6 +120,12 @@ def self_test():
     assert result["ranked_models"][0]["matches"]==result["sample_pixels"]
     assert result["ranked_models"][0]["model"]=="rgb888_div256"
     assert result["ranked_models"][0]["phase"]==[1,0]
+    for d,row,col,s,l,x,y in samples():
+        pix[y*640+x]=model_8bit(s,int(l),x,y,1-d)
+    result=compare_pixels(pix)
+    assert result["ranked_models"][0]["matches"]==4096
+    assert result["ranked_models"][0]["dither_polarity"]=="inverted_request"
+    assert result["ranked_models"][0]["phase"]==[0,0]
     for d,row,col,s,l,x,y in samples():
         pix[y*640+x]=s
     result=compare_pixels(pix)

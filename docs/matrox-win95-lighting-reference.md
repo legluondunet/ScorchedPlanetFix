@@ -1,0 +1,9 @@
+# First independent-driver synthetic lighting capture
+
+Owner-provided FAT12 image transfert.img, 2026-11-24. Environment: Windows 95, 86Box 6.0 build 9001, emulated Matrox Mystique (per preceding owner screenshots). Original MSI95 DLL provenance as reported by owner; binary not supplied in this capture. PROBE.LOG records probe v4 Pentium i586, MSI API 1.4, 640x400 RGB565, pitch 1280, size 512000, both blend methods successful, exit 0.
+
+Both BMPs are byte-identical (SHA-256 c7bdcd99cbacca01fc9d350c5e1bb32b01dd52b729b7c3e7e49bdf965b63597c). PROBE.LOG SHA-256 3e61111514182325e8fea7cb46ff76cf03e8826b2969693ff014c96e4b487ec9.
+
+Independent Python extraction and arithmetic: 4096 constant-cell control pixels; current native565 /255 nearest and 4x4 Bayer matches 1608/2048 for requested dither=0, 980/2048 for requested dither=1, total 2588/4096. RGB888 shift-expand (not bit replication), multiply /256 truncated, then 565 quantization with 2x2 phase ((0,3),(2,1)), rank increments 2*rank for red/blue, rank for green, matches 4096/4096 **if observed dither polarity is inverted**: requested 0 enables pattern, requested 1 gives uniform cells. Expanded check inside all rectangles (x +2..29, y +2..15): 50176/50176 each mode, 100352/100352 total. 82/128 cells vary spatially with requested dither=0; 0/128 with requested dither=1. Coefficient nearest vs truncate not distinguished by these constant cells. Both Gouraud ramps contain nonuniform gradient; their interpolation is not established by the constant-cell fit.
+
+This is a driver+emulator observation, not physical hardware proof. Do not change renderer defaults or invert API semantics yet. A follow-up isolated test should compare msiSetParameters and optional msiSetDitherEnable with independent fresh frames and reversed order to distinguish driver polarity, state persistence and emulator behavior. No game data bundled.
