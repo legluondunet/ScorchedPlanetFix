@@ -1679,3 +1679,10 @@ system or game driver. Exit codes: 1 DLL load, 2 exports, 3 init, 4 start,
 5 heap, 6 render/state, 7 direct-readback/format, 8 restore/end, 9 file,
 10 cleanup. A failure is not evidence of arithmetic mismatch. Driver/hardware
 compatibility, original palette conversion and raster phase remain to verify.
+
+To compare the original-driver BMP against the experimental constant-cell
+models, run `python tools/matrox/check_lighting_probe.py --compare PATH.bmp`.
+The JSON ranks native RGB565 and 8-bit /256 arithmetic with coefficient
+rounding/truncation and all dither phases. It rejects blank/misaligned
+endpoint cells and reports matches, not a claim of hardware equivalence.
+The synthetic model self-test runs in Windows CI.

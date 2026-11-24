@@ -203,6 +203,8 @@ jobs:
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
+          python tools/matrox/check_lighting_probe.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Lighting comparison model self-test failed' }
           python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_probe.bmp')
           if ($LASTEXITCODE -ne 0) { throw 'Lighting probe pixel validation failed' }
           Copy-Item (Join-Path $folder 'msi95_lighting_probe.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
