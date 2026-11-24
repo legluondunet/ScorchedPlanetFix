@@ -30,6 +30,8 @@ from analyze_final_texel_capture import (
 FORMATS = {0x4000: 'indexed_8bpp', 0x2000: 'native_16bpp',
            0x1000: 'indexed_4bpp'}
 VALID_BIT_MASK = 0x7fff
+# Same 4x4 threshold ordering as the opt-in native RGB565 modulator.
+BAYER_4X4 = (0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5)
 
 
 def _expected_class(fmt: int, index: int, black: bool) -> int:
@@ -78,6 +80,10 @@ def analyze(prefix: Path, roi: str | None = None,
         'nonblack_to_black_dither_enabled',
         'nonblack_to_black_alpha_enabled')}
     by_idx={}
+    # Derived from final successful textured writes only: do not use
+    # candidate draws or dark-flat shadow overlays for the denominator.
+    bayer_dithered=[0]*16
+    bayer_black=[0]*16
     other_black_mask=bytearray(width*height)
     new_black_mask=bytearray(width*height)
     raw_black_mask=bytearray(width*height)
@@ -104,6 +110,10 @@ def analyze(prefix: Path, roi: str | None = None,
             malformed.append((p,'source/coverage/FX mismatch',word))
             continue
         table['final_textured_pixels']+=1
+        if modulate and dither:
+            rank=BAYER_4X4[((p//width)&3)*4 + ((p%width)&3)]
+            bayer_dithered[rank]+=1
+            if final_black:bayer_black[rank]+=1
         if final_black:
             table['final_black_textured_pixels']+=1
             if modulate:table['final_black_modulate_enabled']+=1
@@ -143,6 +153,26 @@ def analyze(prefix: Path, roi: str | None = None,
     if table['final_black_textured_pixels']!=base['final_textured_black_pixels']:
         raise ValueError('final source-audit black pixel count inconsistent')
     ranking=sorted(by_idx.items(),key=lambda x:(-x[1]['final_black'],x[0]))
+    bayer_ranks=[
+        {'rank':rank,'textured_modulated_dithered':bayer_dithered[rank],
+         'black_final':bayer_black[rank],
+         'black_rate_percent':round(100*bayer_black[rank]/bayer_dithered[rank],3)
+               if bayer_dithered[rank] else None}
+        for rank in range(16)]
+    bayer_quartiles=[]
+    for q in range(4):
+        first=q*4
+        count=sum(bayer_dithered[first:first+4])
+        dark=sum(bayer_black[first:first+4])
+        bayer_quartiles.append({
+            'rank_range':[first,first+3],
+            'textured_modulated_dithered':count,
+            'black_final':dark,
+            'black_rate_percent':round(100*dark/count,3) if count else None
+        })
+    if sum(bayer_dithered)!=table['final_black_dither_enabled']+sum(
+            bayer_dithered)-sum(bayer_black):
+        raise ValueError('Bayer black numerator diverges from dithered finals')
     region_args=(width,bounds,min_region_pixels,max_regions)
     return {
         'capture':str(prefix),
@@ -153,6 +183,8 @@ def analyze(prefix: Path, roi: str | None = None,
             {'source_index':index,**counts}
             for index,counts in ranking[:top_indices]],
         'distinct_final_black_8bpp_indices':len(by_idx),
+        'ordered_dither_bayer_ranks':bayer_ranks,
+        'ordered_dither_bayer_quartiles':bayer_quartiles,
         'regions':{
             'other_indices_final_black':connected_regions(other_black_mask,*region_args),
             'prelight_black_remains_black':connected_regions(raw_black_mask,*region_args),
@@ -193,6 +225,11 @@ def main() -> int:
             print('  index {source_index}: final_black={final_black}, '
                   'prelight_black={prelight_black}, '
                   'prelight_nonblack={prelight_nonblack}'.format(**row))
+        print('Bayer 4x4 final-black rates (only modulated+dithered world texture):')
+        for row in out['ordered_dither_bayer_quartiles']:
+            print('  ranks {}-{}: {}/{} black ({}%)'.format(
+                  *row['rank_range'],row['black_final'],
+                  row['textured_modulated_dithered'],row['black_rate_percent']))
         print(out['interpretation'])
     return 0
 
