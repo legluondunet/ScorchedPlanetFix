@@ -68,6 +68,8 @@ static VkQueue queue;
 static uint32_t count,finish_count;
 static unsigned submitted;
 static int ready,linear_filter;
+static VkFormat upload_format;
+static unsigned upload_bytes;
 static HWND hwnd;
 static void *mapped;
 static VkExtent2D extent;
@@ -154,14 +156,14 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     I(vkCreateWin32SurfaceKHR);I(vkEnumeratePhysicalDevices);
     I(vkGetPhysicalDeviceProperties);I(vkGetPhysicalDeviceQueueFamilyProperties);
     I(vkGetPhysicalDeviceSurfaceSupportKHR);I(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
-    I(vkGetPhysicalDeviceSurfaceFormatsKHR);I(vkGetPhysicalDeviceFormatProperties);
+    I(vkGetPhysicalDeviceSurfaceFormatsKHR);I(vkGetPhysicalDeviceFormatProperties);I(vkGetPhysicalDeviceImageFormatProperties);
     I(vkEnumerateDeviceExtensionProperties);I(vkGetPhysicalDeviceMemoryProperties);I(vkCreateDevice);
     destroy_surface=(PFN_vkDestroySurfaceKHR)gipa(instance,"vkDestroySurfaceKHR");
     gdpa=(PFN_vkGetDeviceProcAddr)gipa(instance,"vkGetDeviceProcAddr");
     REQUIRE(vkCreateWin32SurfaceKHR);REQUIRE(vkEnumeratePhysicalDevices);
     REQUIRE(vkGetPhysicalDeviceProperties);REQUIRE(vkGetPhysicalDeviceQueueFamilyProperties);
     REQUIRE(vkGetPhysicalDeviceSurfaceSupportKHR);REQUIRE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
-    REQUIRE(vkGetPhysicalDeviceSurfaceFormatsKHR);REQUIRE(vkGetPhysicalDeviceFormatProperties);
+    REQUIRE(vkGetPhysicalDeviceSurfaceFormatsKHR);REQUIRE(vkGetPhysicalDeviceFormatProperties);REQUIRE(vkGetPhysicalDeviceImageFormatProperties);
     REQUIRE(vkEnumerateDeviceExtensionProperties);REQUIRE(vkGetPhysicalDeviceMemoryProperties);
     REQUIRE(vkCreateDevice);REQUIRE(destroy_surface);REQUIRE(gdpa);
     VkWin32SurfaceCreateInfoKHR si={VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
@@ -176,9 +178,21 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
         static VkPhysicalDeviceProperties prop;vkGetPhysicalDeviceProperties(devices[i],&prop);
         report(prop.deviceName,(int)prop.deviceType);
         if(prop.deviceType==VK_PHYSICAL_DEVICE_TYPE_CPU)continue;
-        VkFormatProperties fmt;vkGetPhysicalDeviceFormatProperties(devices[i],VK_FORMAT_R8G8B8A8_UNORM,&fmt);
-        VkFormatFeatureFlags need=VK_FORMAT_FEATURE_BLIT_SRC_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-        if((fmt.optimalTilingFeatures&need)!=need)continue;
+        VkFormatProperties fmt;
+        VkFormatFeatureFlags need=VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+        if(linear_filter)need|=VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        const VkFormat candidates[]={VK_FORMAT_R5G6B5_UNORM_PACK16,VK_FORMAT_R8G8B8A8_UNORM};
+        VkFormat candidate=VK_FORMAT_UNDEFINED;
+        for(unsigned k=0;k<2;k++){
+            VkImageFormatProperties ip;
+            vkGetPhysicalDeviceFormatProperties(devices[i],candidates[k],&fmt);
+            if((fmt.optimalTilingFeatures&need)!=need)continue;
+            if(vkGetPhysicalDeviceImageFormatProperties(devices[i],candidates[k],VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&ip)!=VK_SUCCESS)continue;
+            if(ip.maxExtent.width<W||ip.maxExtent.height<H||!(ip.sampleCounts&VK_SAMPLE_COUNT_1_BIT))continue;
+            candidate=candidates[k];break;
+        }
+        if(candidate==VK_FORMAT_UNDEFINED)continue;
         static VkExtensionProperties ex[256];uint32_t en=256;int has_swap=0;
         if(vkEnumerateDeviceExtensionProperties(devices[i],NULL,&en,ex)!=VK_SUCCESS)continue;
         for(uint32_t j=0;j<en;j++)if(same_string(ex[j].extensionName,VK_KHR_SWAPCHAIN_EXTENSION_NAME))has_swap=1;
@@ -202,7 +216,7 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
             VkBool32 support=0;
             if(queues[j].queueCount&&(queues[j].queueFlags&VK_QUEUE_GRAPHICS_BIT)&&
                vkGetPhysicalDeviceSurfaceSupportKHR(devices[i],j,surface,&support)==VK_SUCCESS&&support){
-                physical=devices[i];family=j;report("VULKAN_SELECTED",0);report(prop.deviceName,(int)j);break;
+                physical=devices[i];family=j;upload_format=candidate;report("VULKAN_SELECTED",0);report(prop.deviceName,(int)j);break;
             }
         }
     }
@@ -254,7 +268,8 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     count=32;CHECK(vkGetSwapchainImagesKHR(device,swap,&count,images));
     static VkPhysicalDeviceMemoryProperties mp;vkGetPhysicalDeviceMemoryProperties(physical,&mp);
     VkBufferCreateInfo bc={VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bc.size=W*H*4;bc.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;bc.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
+    upload_bytes=upload_format==VK_FORMAT_R5G6B5_UNORM_PACK16?2u:4u;
+    bc.size=W*H*upload_bytes;bc.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;bc.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     CHECK(vkCreateBuffer(device,&bc,NULL,&buffer));
     VkMemoryRequirements mr;vkGetBufferMemoryRequirements(device,buffer,&mr);
     VkMemoryAllocateInfo ma={VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
@@ -265,7 +280,7 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     CHECK(vkMapMemory(device,bm,0,bc.size,0,&mapped));
     
     VkImageCreateInfo ic={VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ic.imageType=VK_IMAGE_TYPE_2D;ic.format=VK_FORMAT_R8G8B8A8_UNORM;ic.extent.width=W;ic.extent.height=H;ic.extent.depth=1;
+    ic.imageType=VK_IMAGE_TYPE_2D;ic.format=upload_format;ic.extent.width=W;ic.extent.height=H;ic.extent.depth=1;
     ic.mipLevels=1;ic.arrayLayers=1;ic.samples=VK_SAMPLE_COUNT_1_BIT;ic.tiling=VK_IMAGE_TILING_OPTIMAL;
     ic.usage=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;ic.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     ic.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
@@ -283,6 +298,8 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     CHECK(vkCreateSemaphore(device,&se,NULL,&acquired));CHECK(vkCreateFence(device,&fe,NULL,&fence));
     for(uint32_t i=0;i<count;i++){CHECK(vkCreateSemaphore(device,&se,NULL,&finished[i]));finish_count++;}
 
+    report(upload_bytes==2?"VULKAN_UPLOAD RGB565 native":"VULKAN_UPLOAD RGBA8 converted",(int)bc.size);
+    report(linear_filter?"VULKAN_FILTER linear":"VULKAN_FILTER nearest",0);
     ready=1;report("VULKAN_PRESENTER_READY",0);return 0;
 done:
     matrox_vk_close();return rc;
@@ -293,16 +310,29 @@ int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
     if(!IsWindow(hwnd)||!GetClientRect(hwnd,&client))return 1;
     if(IsIconic(hwnd)||client.right<=client.left||client.bottom<=client.top)return 2;
     if((uint32_t)(client.right-client.left)!=extent.width||(uint32_t)(client.bottom-client.top)!=extent.height){
-        report("Vulkan surface extent changed; recreate or fallback",1);return 1;
+        report("Vulkan surface extent changed; recreate",3);return 3;
     }
-    uint32_t *pixels=(uint32_t*)mapped;
-    for(uint32_t y=0;y<H;y++){
-        const uint16_t *row=(const uint16_t*)((const unsigned char*)native_pixels+y*pitch);
-        for(uint32_t x=0;x<W;x++)pixels[y*W+x]=rgba565(row[x]);
+    /* Wait only at reuse, not immediately after submission. CPU rasterization
+     * of the next native frame can overlap GPU work on the previous staging
+     * image. The guest buffer itself is never mapped into Vulkan. */
+    if(submitted){CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,5000000000ull));}
+    if(upload_bytes==2){
+        uint16_t *pixels=(uint16_t*)mapped;
+        for(uint32_t y=0;y<H;y++){
+            const uint16_t *row=(const uint16_t*)((const unsigned char*)native_pixels+y*pitch);
+            for(uint32_t x=0;x<W;x++)pixels[y*W+x]=row[x];
+        }
+    }else{
+        uint32_t *pixels=(uint32_t*)mapped;
+        for(uint32_t y=0;y<H;y++){
+            const uint16_t *row=(const uint16_t*)((const unsigned char*)native_pixels+y*pitch);
+            for(uint32_t x=0;x<W;x++)pixels[y*W+x]=rgba565(row[x]);
+        }
     }
-    if(submitted){CHECK(vkResetFences(device,1,&fence));CHECK(vkResetCommandBuffer(cmd,0));}
     uint32_t index=0;VkResult ar=vkAcquireNextImageKHR(device,swap,1000000000ull,acquired,VK_NULL_HANDLE,&index);
+    if(ar==VK_ERROR_OUT_OF_DATE_KHR){report("vkAcquireNextImageKHR out of date",3);return 3;}
     if((ar!=VK_SUCCESS&&ar!=VK_SUBOPTIMAL_KHR)||index>=count){report("vkAcquireNextImageKHR",(int)ar);goto done;}
+    if(submitted){CHECK(vkResetFences(device,1,&fence));CHECK(vkResetCommandBuffer(cmd,0));}
     VkCommandBufferBeginInfo cb={VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CHECK(vkBeginCommandBuffer(cmd,&cb));
     VkImageSubresourceRange range={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
@@ -338,13 +368,14 @@ int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
     submit.pWaitDstStageMask=&wait_stage;submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;
     submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&finished[index];
     CHECK(vkQueueSubmit(queue,1,&submit,fence));
-    CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,5000000000ull));
+    /* Present waits on this image's signal semaphore, not the CPU. */
     VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present.waitSemaphoreCount=1;present.pWaitSemaphores=&finished[index];present.swapchainCount=1;present.pSwapchains=&swap;present.pImageIndices=&index;
     VkResult pr=vkQueuePresentKHR(queue,&present);
+    if(pr==VK_ERROR_OUT_OF_DATE_KHR){report("vkQueuePresentKHR out of date",3);return 3;}
     if(pr!=VK_SUCCESS&&pr!=VK_SUBOPTIMAL_KHR){report("vkQueuePresentKHR",(int)pr);goto done;}
 
-    submitted++;return 0;
+    submitted=1;return 0;
 done:
     ready=0;return 1;
 }

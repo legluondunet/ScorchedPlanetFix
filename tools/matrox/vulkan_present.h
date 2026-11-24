@@ -5,7 +5,8 @@
 /* One presenter, owning thread only. Caller owns HWND and pumps messages.
  * open: 0 success, 77 unsupported/unavailable, 1 other failure.
  * present: 0 success, 1 failure (caller must close before GDI fallback),
- * 2 minimized/zero-sized window (skip without teardown).
+ * 2 minimized/zero-sized window (skip without teardown),
+ * 3 surface extent/out-of-date (close and recreate before next present).
  * close: idempotent. No window ownership, no writes to guest pixels.
  * Fixed native 640x400 RGB565 input, pitch in bytes. */
 typedef void (*MatroxVkReport)(const char *message,int code);

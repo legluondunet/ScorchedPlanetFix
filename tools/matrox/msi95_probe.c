@@ -446,7 +446,7 @@ static int g_swallowed_right_down = 0;
 static int g_preview_created = 0;
 static int g_viewport_reported=0;
 static int g_vk_requested=0,g_vk_active=0,g_vk_attempted=0;
-static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0;
+static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0,g_vk_recreates=0,g_vk_retry_streak=0;
 static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
@@ -1207,9 +1207,12 @@ static void preview_present(void){
         DWORD t=GetTickCount();
         int status=matrox_vk_present((const WORD*)g_color,(DWORD)g_info.msiColor.Pitch);
         g_vk_ms+=GetTickCount()-t;
-        if(status==0){g_vk_frames++;g_preview_presented++;}
+        if(status==0){g_vk_frames++;g_preview_presented++;g_vk_retry_streak=0;}
         else if(status==2){g_vk_skipped++;}
-        else{vk_stop();logtext("PREVIEW_RENDERER Vulkan present failed; active=software for this session");}
+        else if(status==3&&g_vk_retry_streak<2u){
+            vk_stop();g_vk_recreates++;g_vk_retry_streak++;g_vk_attempted=0;
+            lognum("PREVIEW_VULKAN recreate requested count=",g_vk_recreates,NULL,0);
+        }else{vk_stop();logtext("PREVIEW_RENDERER Vulkan present failed; active=software for this session");}
     }
     if(!g_vk_active){
         HDC dc=GetDC(g_preview);
@@ -2098,7 +2101,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PRESENTATION_SMOOTH",setting,sizeof(setting));
       g_presentation_smooth_enabled=(n==1u && setting[0]=='1');}
     g_presentation_smooth_failed=g_presentation_smooth_reported=0;
-    g_vk_requested=g_vk_attempted=g_vk_active=0;g_vk_frames=g_vk_skipped=g_vk_ms=0;
+    g_vk_requested=g_vk_attempted=g_vk_active=0;g_vk_frames=g_vk_skipped=g_vk_ms=g_vk_recreates=g_vk_retry_streak=0;
     {char setting[16]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_RENDERER",setting,sizeof(setting));
       g_vk_requested=(n==4u&&setting[0]=='a'&&setting[1]=='u'&&setting[2]=='t'&&setting[3]=='o')||
         (n==6u&&setting[0]=='v'&&setting[1]=='u'&&setting[2]=='l'&&setting[3]=='k'&&setting[4]=='a'&&setting[5]=='n');
@@ -2218,7 +2221,7 @@ BOOL __cdecl msiExit(void){
     log_opacity_histogram("exit");
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
-    if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,NULL,0);}
+    if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,"recreates=",g_vk_recreates);}
     clean();
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);
