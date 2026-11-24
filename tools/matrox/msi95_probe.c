@@ -162,6 +162,13 @@ static void *g_module = NULL;
 static HANDLE g_log = NULL;
 static unsigned g_frames = 0, g_triangles = 0, g_zplanes = 0, g_params = 0;
 static unsigned g_zplane_draw_context=0, g_zplane_blue_key_skips=0;
+/* Exact raw BYTE opacity requests at the public API boundary, not internal
+ * rasterizer calls or ShadowOnce's synthetic opacity. Reset per msiInit.
+ * Counters saturate rather than wrap; a saturated bin is explicitly marked. */
+static unsigned g_triangle_opacity[256],g_zplane_opacity[256];
+static void count_opacity(unsigned *bins,BYTE opacity){
+    if(bins[opacity]!=0xFFFFFFFFu)++bins[opacity];
+}
 /* Number of Win32 region checks reused for additional triangle vertices.
  * No caching across triangles/frames: every call still queries fresh memory. */
 static unsigned g_vertex_region_reuses=0, g_vertex_region_fallbacks=0;
@@ -755,6 +762,24 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
 static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
   char buf[940];DWORD p=0;putstr(buf,&p,name);putstr(buf,&p," ");putunsigned(buf,&p,a);
   if(label2){putstr(buf,&p," ");putstr(buf,&p,label2);putstr(buf,&p," ");putunsigned(buf,&p,b);}buf[p]=0;logtext(buf);
+}
+/* Sparse histogram: absent values have zero requests. Emit at F12 and exit
+ * only, avoiding additional per-triangle logging or duplicated Z-plane halves. */
+static void log_opacity_histogram(const char *scope){
+    char buf[160];DWORD n=0;
+    putstr(buf,&n,"MSI_OPACITY_BEGIN scope=");putstr(buf,&n,scope);
+    putstr(buf,&n," frame=");putunsigned(buf,&n,g_frames);
+    buf[n]=0;logtext(buf);
+    for(unsigned i=0;i<256u;i++){
+        if(!g_triangle_opacity[i] && !g_zplane_opacity[i])continue;
+        n=0;putstr(buf,&n,"MSI_OPACITY value=");putunsigned(buf,&n,i);
+        putstr(buf,&n," triangles=");putunsigned(buf,&n,g_triangle_opacity[i]);
+        putstr(buf,&n," zplanes=");putunsigned(buf,&n,g_zplane_opacity[i]);
+        if(g_triangle_opacity[i]==0xFFFFFFFFu || g_zplane_opacity[i]==0xFFFFFFFFu)
+            putstr(buf,&n," saturated=1");
+        buf[n]=0;logtext(buf);
+    }
+    logtext("MSI_OPACITY_END");
 }
 /* Strictly diagnostic, signature-locked to the OEM Matrox instruction
  * sequence seen in the Wine AV. Do not use this probe to repair or skip any
@@ -1907,6 +1932,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_sparse_atlas_triangles=g_sparse_atlas_drawn_pixels=0;
     g_sparse_atlas_unmapped_pixels=g_sparse_atlas_direct_pixels=0;
     g_sparse_atlas_log_count=0;
+    zero(g_triangle_opacity,sizeof(g_triangle_opacity));
+    zero(g_zplane_opacity,sizeof(g_zplane_opacity));
     g_capture_ownership=0;g_world_texture_samples=0;
     g_fx_param_updates=0;
     g_fx_dither_parameters=g_fx_modulate_parameters=g_fx_decal_parameters=0;
@@ -2099,6 +2126,7 @@ BOOL __cdecl msiExit(void){
     }
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
+    log_opacity_histogram("exit");
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     clean();
@@ -2274,6 +2302,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             capture_final_source_audit(audit);
             capture_undithered_reference(nodither);
             capture_final_light_inputs(lighting);
+            log_opacity_histogram("F12");
             {char line[320];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
              putstr(line,&n," texel=");putstr(line,&n,texel);
@@ -3533,6 +3562,7 @@ static void rasterize_triangle(const T_msiVertex*a,const T_msiVertex*b,const T_m
 BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE opacity){
     if(!g_initialized)return FALSE;
     g_triangles++;
+    count_opacity(g_triangle_opacity,opacity);
     g_last_triangle_frame=g_frames;
     g_last_triangle_tick=GetTickCount();
     if(g_no_geometry_logged){
@@ -3585,6 +3615,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
 BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
     if(!g_initialized)return FALSE;
     g_zplanes++;
+    count_opacity(g_zplane_opacity,opacity);
     if(g_state_valid && g_state.msiColor.Dither)g_fx_dither_zplanes++;
     if(g_state_valid && g_state.msiTexture.Modulate)g_fx_modulate_zplanes++;
     if(g_state_valid && g_state.msiTexture.Decal)g_fx_decal_zplanes++;

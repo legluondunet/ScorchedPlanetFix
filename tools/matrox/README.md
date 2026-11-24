@@ -7,7 +7,7 @@ It is not the original Matrox proprietary `msi95.dll`.
 The full INI-FPS-enabled C source is directly reviewable in
 [`msi95_probe.c`](msi95_probe.c), with SHA-256:
 
-`81396f1f51e2e926d8619dc31d8411e86e67ab24198232692298a9c60b9233d1`
+`122e92be04ba56cb49a7035070427bedef443a4e4eef34c8ed70abe3afb3b76e`
 
 No opaque precompiled Matrox driver is committed.
 
@@ -1629,3 +1629,16 @@ For the owner's tested states, *investigate real hardware interpolation
 and fixed-point quantization only if an exactly comparable original
 Matrox-driver image becomes available*. Global brightness changes or
 altered dark-pixel keys are unsupported by the available evidence.
+
+
+## Exact MSI opacity request audit (2026-11-24)
+
+The public triangle and Z-plane entry points now count every raw opacity BYTE
+received after successful initialization, before pointer/state rejection.
+The sparse cumulative histogram is emitted at each successful F12 capture
+and at normal MSI exit, with separate counts for the two APIs. Missing bins
+are zero; a saturated 32-bit bin is explicitly marked. Counts reset on
+msiInit. Internal Z-plane triangulation and synthetic ShadowOnce blending
+are not counted as game requests. Values 101–255 are retained rather than
+clamped by the audit. This is diagnostic only: no draw decision, opacity,
+shadow heuristic, dither or filtering behavior changes.
