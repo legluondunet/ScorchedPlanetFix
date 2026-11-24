@@ -1392,3 +1392,37 @@ comparison. This PR changes no keys, colors, modulation, dithering,
 shadows, raster algorithms, settings, or copyrighted game assets.
 Eleven entirely synthetic tests cover format flags, aliases, overdraw,
 black-source conservation and error rejection in Windows CI.
+
+### Verified on owner's real F12 #0007 (Wine 11.19)
+
+The seven native RGB565 BMPs captured on 2026-11-24 at **frame 2952** are
+self-consistent. At the last successful MSI write in this terrain scene:
+**116,290** world textured pixels = 113,048 nonblack + **3,242 black**;
+16,762 nonblack final flat shadows; 122,948 HUD pixels; zero unwritten
+pixels or opaque shadow/no-texture final writes. Of the 3,242 final world
+textured RGB565-black pixels, **3,015** came from other 8bpp indices,
+**225** from source index 1, **2** from 241. Every one of the
+3,242 had a **nonzero RGB565 sample before lighting** and both modulation
+and ordered dithering enabled; none had alpha blending. Thus neither
+intrinsically black palette texels nor an opaque shadow are the direct
+source of visible black in this particular image.
+
+The 4x4 ordered Bayer threshold provides useful additional evidence.
+Across the 16 ranks, about 5,500 final modulated-and-dithered world
+pixels per rank were processed, while final-black incidence rose
+monotonically from **20/5,504 (0.36%)** at rank 0 to **374/5,529
+(6.76%)** at rank 15. Quartile ranks 0–3, 4–7, 8–11, 12–15 had
+**227, 686, 1,001, 1,328** final black pixels, respectively, with
+approximately equal denominators. The offline analyzer now calculates
+those rank denominators and final black rates automatically from the
+existing seventh F12 layer, in addition to source-index/lighting
+counters; **no eighth BMP or new owner capture is required**.
+
+**Caution:** The F12 metadata says dithering was *enabled*, not
+whether each output color differs from what an undithered reference
+would produce. The strong ordered-rank correlation implicates the
+4x4 rounding threshold as a contributor, but cannot establish the
+Mystique silicon's actual threshold matrix (or prove a regression)
+without same-scene hardware reference. Do not silently disable
+native MSI modulation or alter original dither/filter settings.
+Real user captures remain private, not committed.
