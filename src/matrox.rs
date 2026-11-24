@@ -10,6 +10,49 @@ use std::path::{Component, Path};
 
 const MANIFEST: &str =
     include_str!("../data/cd-inventories/scorched-matrox-mystique-oem.sha256");
+const RETAIL_MANIFEST: &str = include_str!("../data/cd-inventories/scorched-matrox-fr-de-alt.sha256");
+pub(crate) const RETAIL_ORIGINAL_EXE: &str = "7865e8a94a6b2b44511943a1bd2801ece302eee31444ee8a70152ec483a54748";
+pub(crate) const RETAIL_PATCHED_EXE: &str = "5e5496b4b3d3424fb717ac41708403aebab3b3dec653c40cf32de0dc9cd750b6";
+
+/// Retail selection is separate from OEM: original executable name is preserved.
+pub(crate) fn is_retail(folder: &Path) -> bool {
+    fs::symlink_metadata(folder.join("spmyst.exe")).is_ok() ||
+        fs::symlink_metadata(folder.join("spmyst.exe.bak")).is_ok()
+}
+pub(crate) fn exe_name(folder: &Path) -> &'static str {
+    if is_retail(folder) {"spmyst.exe"} else {"splanetw.exe"}
+}
+pub(crate) fn backup_name(folder: &Path) -> &'static str {
+    if is_retail(folder) {"spmyst.exe.bak"} else {"splanetw.exe.bak"}
+}
+pub(crate) fn retail_entries() -> Result<Vec<(&'static str,u64,&'static str,&'static str)>,String> {
+    let mut entries=Vec::new();
+    for row in RETAIL_MANIFEST.lines().map(str::trim).filter(|x| !x.is_empty() && !x.starts_with('#')) {
+        let mut fields=row.split_whitespace();
+        let sha=fields.next().ok_or("Missing retail SHA")?;
+        let size=fields.next().ok_or("Missing retail size")?.parse::<u64>().map_err(|_|"Invalid retail size")?;
+        let source=fields.next().ok_or("Missing retail path")?;
+        let (tree,dest)=source.split_once('/').ok_or("Invalid retail source")?;
+        if fields.next().is_some() || !matches!(tree,"splanet"|"mystique") ||
+            sha.len()!=64 || !sha.bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase()) ||
+            !dest.is_ascii() || dest.contains('\\') ||
+            Path::new(dest).components().any(|c|!matches!(c,Component::Normal(_))) ||
+            entries.iter().any(|&(_,_,_,p)|p==dest) {
+            return Err("Invalid retail Matrox manifest entry".into());
+        }
+        entries.push((sha,size,source,dest));
+    }
+    if entries.len()!=125 || entries.iter().map(|x|x.1).sum::<u64>()!=499_674_217 ||
+       !entries.iter().any(|x|x.3=="spmyst.exe" && x.0==RETAIL_ORIGINAL_EXE) ||
+       !entries.iter().any(|x|x.3=="msi95.dll" && x.0=="6c219a0dc25a7c948e2973ac99f8b900696ad87aeb2a08a6b162f96b5bc07820") {
+        return Err("Incomplete retail Matrox manifest".into());
+    }
+    Ok(entries)
+}
+pub(crate) fn profile_entries(retail:bool) -> Result<Vec<(&'static str,u64,&'static str)>,String> {
+    if retail {Ok(retail_entries()?.into_iter().map(|(h,n,_,p)|(h,n,p)).collect())}
+    else {manifest_entries()}
+}
 const OEM_FILES: usize = 66;
 const OEM_TOTAL_BYTES: u64 = 315_947_520;
 const ORIGINAL_EXE: &str =
@@ -86,7 +129,7 @@ pub fn verify_installed_oem(folder:&Path)->Result<VerifiedOem,String>{
 pub fn verify_installed_game(folder: &Path, patched_exe_hash: &str)
     -> Result<VerifiedOem, String> {
     let report = verify_reference(folder, true)?;
-    verify_modified(folder,"splanetw.exe",patched_exe_hash)?;
+    verify_modified(folder,exe_name(folder),patched_exe_hash)?;
     Ok(report)
 }
 
@@ -121,14 +164,15 @@ fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, Strin
     if !root_meta.is_dir() || root_meta.file_type().is_symlink() {
         return Err(format!("Matrox game directory is invalid or symlinked: {}", folder.display()));
     }
-    let entries = manifest_entries()?;
+    let retail=is_retail(folder);
+    let entries = profile_entries(retail)?;
     let mut checked = 0;
     let mut bytes = 0;
     for (expected_sha, expected_size, rel) in entries {
         // The original proprietary MSI95 driver is verified on the user's
         // ISO before extraction. Once installed it is no longer needed,
         // and there is intentionally no game/msi95.dll.bak to verify.
-        if installed && rel=="msi95.dll" {continue;}
+        if installed && (rel=="msi95.dll" || (retail && rel.ends_with(".sav"))) {continue;}
         let relative = Path::new(rel);
         let mut part = folder.to_path_buf();
         if let Some(parent) = relative.parent() {
@@ -141,8 +185,8 @@ fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, Strin
                 }
             }
         }
-        let path = if installed && rel=="splanetw.exe" {
-            folder.join("splanetw.exe.bak")
+        let path = if installed && rel==exe_name(folder) {
+            folder.join(backup_name(folder))
         } else { folder.join(relative) };
         let meta = regular_not_symlink(&path)?;
         if meta.len() != expected_size {
@@ -173,6 +217,16 @@ fn verify_reference(folder: &Path, installed: bool) -> Result<VerifiedOem, Strin
 mod tests {
     use super::*;
 
+    #[test]
+    fn retail_plan_has_one_executable_and_no_software_assets(){
+        let entries=retail_entries().unwrap();
+        assert_eq!(entries.len(),125);
+        assert_eq!(entries.iter().filter(|x|x.3.ends_with(".exe")).count(),1);
+        assert_eq!(entries.iter().filter(|x|x.3.ends_with(".sav")).count(),8);
+        assert!(entries.iter().any(|x|x.2=="mystique/french/mapsm.rwb"));
+        assert!(entries.iter().any(|x|x.2=="splanet/french/brief.rwb"));
+        assert!(!entries.iter().any(|x|x.3.ends_with("8.rwb")||x.3.ends_with("6.rwb")));
+    }
     #[test]
     fn manifest_matches_verified_oem_executable_and_all_files() {
         let e = manifest_entries().unwrap();

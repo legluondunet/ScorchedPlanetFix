@@ -9,3 +9,5 @@ EXPORTS
  msiRenderZPlane
  msiSetParameters
  msiStartFrame
+ msiDrawSingleLine
+ msiSync

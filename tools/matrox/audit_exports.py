@@ -8,6 +8,7 @@ EXPECTED = {
     "msiAllocTextureHeap", "msiEndFrame", "msiExit",
     "msiFreeTextureHeap", "msiInit", "msiRenderTriangle",
     "msiRenderZPlane", "msiSetParameters", "msiStartFrame",
+    "msiDrawSingleLine", "msiSync",
 }
 
 def audit(path: pathlib.Path) -> None:
@@ -22,7 +23,7 @@ def audit(path: pathlib.Path) -> None:
         raise SystemExit("MSI95 DLL has no export directory")
     exports = image.DIRECTORY_ENTRY_EXPORT.symbols
     names = {item.name.decode("ascii") for item in exports if item.name}
-    if len(exports) != 9 or names != EXPECTED:
+    if len(exports) != 11 or names != EXPECTED:
         raise SystemExit(f"MSI95 ABI differs: {sorted(names)}")
     print(f"MSI95 x86 PE32 ABI OK: {len(exports)} exports, all names exact")
 
