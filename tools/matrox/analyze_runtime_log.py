@@ -47,10 +47,13 @@ class OpacityAudit:
             self.exit_zplanes = fields(line).get("total_zplanes")
         elif line.startswith("MSI_OPACITY_BEGIN"):
             m = OPACITY_BEGIN_RE.fullmatch(line)
+            nested = self.current is not None
             self.current = {
                 "scope": m[1] if m else None, "frame": int(m[2]) if m else None,
                 "bins": {}, "errors": [] if m else ["invalid header"],
             }
+            if nested:
+                self.current["errors"].append("nested header")
             self.latest = None
         elif line.startswith("MSI_OPACITY value="):
             if self.current is None:
@@ -79,6 +82,11 @@ class OpacityAudit:
                 return
             self.latest = self.finish(self.current)
             self.current = None
+        elif line.startswith("MSI_OPACITY"):
+            if self.current is not None:
+                self.current["errors"].append("unrecognized opacity record")
+            else:
+                self.latest = {"status": "invalid", "errors": ["unrecognized opacity record"]}
 
     def finish(self, snap):
         bins = snap["bins"]
