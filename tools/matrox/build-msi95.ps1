@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "4ab4dff50832401995711e57b82ccf4c355fdea0582314b6149a9b2526f4d9c6"
+$expectedSourceHash = "1d37cbdb70d9c5db014c493435997aa8d99ccb4bbeec5b81b2b68647da70c7e0"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 
@@ -46,7 +46,7 @@ $apiAliases = @(
     "CallWindowProcA@20", "GetDC@4", "ReleaseDC@8",
     "GetClientRect@8", "AdjustWindowRect@12", "GetSystemMetrics@4",
     "DestroyWindow@4", "BeginPaint@8", "EndPaint@8",
-    "StretchDIBits@52", "PatBlt@24"
+    "StretchDIBits@52", "PatBlt@24", "SetStretchBltMode@8", "SetBrushOrgEx@16"
 )
 foreach ($alias in $apiAliases) {
     $arguments += "/alternatename:__imp__$alias=__imp__" + $alias.Split("@")[0]

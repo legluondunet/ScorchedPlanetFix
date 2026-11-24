@@ -194,13 +194,14 @@ jobs:
           $env:MATROX_MSI_BORDERLESS = '0'
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
           $env:MATROX_MSI_RGB888_LIGHTING = '0'
+          $env:MATROX_MSI_PRESENTATION_SMOOTH = '0'
           Push-Location $folder
           try {
             & '.\MatroxLightingProbe.exe'
             if ($LASTEXITCODE -ne 0) { throw "Synthetic lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING')) {
+            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING','PRESENTATION_SMOOTH')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
@@ -237,6 +238,8 @@ jobs:
           $env:MATROX_MSI_MODULATE = '1'
           $env:MATROX_MSI_DITHER = '1'
           $env:MATROX_MSI_RGB888_LIGHTING = '1'
+          $env:MATROX_MSI_PRESENTATION_SMOOTH = '1'
+          $env:MATROX_MSI_LOG = '1'
           $env:MATROX_MSI_FPS_LIMIT = '0'
           $env:MATROX_MSI_BORDERLESS = '0'
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
@@ -246,10 +249,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR')) {
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
+          $runtime = Get-Content (Join-Path (Split-Path $folder -Parent) 'ScorchedPlanetFix.log') -Raw
+          if (!$runtime.Contains('PREVIEW_SCALER HALFTONE blit succeeded') -or $runtime.Contains('HALFTONE unavailable')) { throw 'Optional HALFTONE presentation path was not successfully exercised' }
           python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software --rgb888
           if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
 

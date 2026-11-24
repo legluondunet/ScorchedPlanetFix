@@ -74,6 +74,7 @@ typedef unsigned long SIZE_T;
 #define SRCCOPY 0x00CC0020u
 #define CW_USEDEFAULT ((int)0x80000000u)
 #define GDI_ERROR 0xFFFFFFFFu
+#define HALFTONE 4
 
 __declspec(dllimport) HANDLE __stdcall CreateFileA(const char*,DWORD,DWORD,void*,DWORD,DWORD,HANDLE);
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
@@ -138,6 +139,8 @@ __declspec(dllimport) HDC __stdcall BeginPaint(HWND,PAINTSTRUCT_MIN*);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND,const PAINTSTRUCT_MIN*);
 __declspec(dllimport) int __stdcall StretchDIBits(HDC,int,int,int,int,int,int,int,int,const void*,const BITMAPINFO565*,UINT,DWORD);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC,int,int,int,int,DWORD);
+__declspec(dllimport) int __stdcall SetStretchBltMode(HDC,int);
+__declspec(dllimport) BOOL __stdcall SetBrushOrgEx(HDC,int,int,POINT*);
 
 
 /* Matches MSI95/msi95.h in official Matrox SDK; all 32-bit layout. */
@@ -441,6 +444,7 @@ static int g_swallowed_right_down = 0;
 
 static int g_preview_created = 0;
 static int g_viewport_reported=0;
+static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
 static int g_preview_class_registered = 0;
@@ -866,7 +870,35 @@ static void preview_blit(HDC dc){
     bi.bmi.biCompression=BI_BITFIELDS;
     bi.bmi.biSizeImage=(DWORD)(w*h*2u);
     bi.masks[0]=0xF800u;bi.masks[1]=0x07E0u;bi.masks[2]=0x001Fu;
-    int result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
+    /* Only presentation: never write to g_color, change MSI geometry,
+     * mouse mapping, native dimensions or F12 diagnostic layers.
+     * Restore borrowed DC state even on error; retry the original blit
+     * if the platform rejects the optional HALFTONE operation. */
+    int result=0;
+    int scaled=dstw!=(int)w || dsth!=(int)h;
+    int smooth=g_presentation_smooth_enabled && !g_presentation_smooth_failed && scaled;
+    if(smooth){
+        int oldmode=SetStretchBltMode(dc,HALFTONE);
+        POINT oldorigin;
+        if(oldmode){
+            if(SetBrushOrgEx(dc,0,0,&oldorigin)){
+                result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
+                SetBrushOrgEx(dc,oldorigin.x,oldorigin.y,NULL);
+            }
+            SetStretchBltMode(dc,oldmode);
+        }
+        if(result!=0 && (unsigned)result!=GDI_ERROR){
+            if(!g_presentation_smooth_reported){
+                logtext("PREVIEW_SCALER HALFTONE blit succeeded (presentation only)");
+                g_presentation_smooth_reported=1;
+            }
+        }else{
+            g_presentation_smooth_failed=1;
+            logtext("PREVIEW_SCALER HALFTONE unavailable or blit failed; using legacy scaling for this session");
+        }
+    }
+    if(!smooth || g_presentation_smooth_failed)
+        result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
     if(result==0 || (unsigned)result==GDI_ERROR){
         g_preview_failures++;
         if(g_preview_failures<=3)logtext("PREVIEW_GDI StretchDIBits FAILED");
@@ -2025,6 +2057,10 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
             "MSI_DITHER enabled (experimental 2x2 RGB888 quantization; guest Dither gate unchanged)":
             "MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)"):
             "MSI_DITHER disabled (no ordered quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PRESENTATION_SMOOTH",setting,sizeof(setting));
+      g_presentation_smooth_enabled=(n==1u && setting[0]=='1');}
+    g_presentation_smooth_failed=g_presentation_smooth_reported=0;
+    logtext(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
