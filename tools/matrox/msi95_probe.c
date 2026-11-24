@@ -201,6 +201,12 @@ static BYTE *g_world_provenance=NULL;
  * 3=other dark-flat with base, 4=other dark-flat without base,
  * 5=unexpected prior-blend sentinel. 0=other final MSI writer. */
 static BYTE *g_shadow_provenance=NULL;
+/* F12-only FINAL successful MSI world-texture source class, overwritten by later
+ * MSI writes. 0=other final writer, 1=index1 black, 2=index241 black,
+ * 3=index0 black, 4=other 8bpp black, 5=other 8bpp nonblack,
+ * 6=16bpp black, 7=16bpp nonblack, 8=4bpp black, 9=4bpp nonblack,
+ * 10=index1 nonblack, 11=index241 nonblack. Never read by rasterization. */
+static BYTE *g_final_texel_source=NULL;
 /* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
  * value matched the hardware color key. This is not a pixel-coverage map:
  * overdraw and triangle overlap can count a texel more than once. */
@@ -1116,10 +1122,11 @@ static void clean(void){
     if(g_atlas_provenance)VirtualFree(g_atlas_provenance,0,MEM_RELEASE);
     if(g_world_provenance)VirtualFree(g_world_provenance,0,MEM_RELEASE);
     if(g_shadow_provenance)VirtualFree(g_shadow_provenance,0,MEM_RELEASE);
+    if(g_final_texel_source)VirtualFree(g_final_texel_source,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
     g_ownership=NULL;g_atlas_provenance=NULL;g_world_provenance=NULL;
-    g_shadow_provenance=NULL;
+    g_shadow_provenance=NULL;g_final_texel_source=NULL;
     g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
@@ -1155,7 +1162,7 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow){
+static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
@@ -1164,16 +1171,18 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         capture_name(atlas,serial,"_atlas.bmp");
         capture_name(world,serial,"_world.bmp");
         capture_name(shadow,serial,"_shadow.bmp");
+        capture_name(texel,serial,"_texel.bmp");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
         int atlas_exists=capture_file_present(atlas);
         int world_exists=capture_file_present(world);
         int shadow_exists=capture_file_present(shadow);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0){
+        int texel_exists=capture_file_present(texel);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1605,6 +1614,60 @@ static void capture_shadow_provenance(const char *filename){
     msg[p]=0;logtext(msg);
 }
 
+/* Last successful source texel for each final MSI write, F12 only. Never
+ * infer visibility from the preexisting _world.bmp, which tracks attempts. */
+static void capture_final_texel_source(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_final_texel_source||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("FINAL_TEXEL_CAPTURE WRITE ERROR: open failed");return;}
+    const unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);put32le(header+10,66u);
+    put32le(header+14,40u);put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    static const WORD colors[12]={0x0000u,0xFFE0u,0xF81Fu,0x07FFu,
+        0xF800u,0x07E0u,0x8010u,0xAFE5u,0xFC00u,0x83E0u,0xFD20u,0x001Fu};
+    unsigned counts[12];{volatile unsigned*p=(volatile unsigned*)&counts[0];
+        for(unsigned c=0;c<12u;c++)p[c]=0u;}
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_final_texel_source[y*width+x];
+            if(kind>=12u)kind=0u;
+            row[x]=colors[kind];counts[kind]++;
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[380];DWORD q=0;
+    putstr(msg,&q,ok?"FINAL_TEXEL_CAPTURE OK file=":"FINAL_TEXEL_CAPTURE WRITE ERROR file=");
+    putstr(msg,&q,filename);putstr(msg,&q," frame=");putunsigned(msg,&q,g_frames);
+    putstr(msg,&q," index1_black=");putunsigned(msg,&q,counts[1]);
+    putstr(msg,&q," index241_black=");putunsigned(msg,&q,counts[2]);
+    putstr(msg,&q," index0_black=");putunsigned(msg,&q,counts[3]);
+    putstr(msg,&q," other_index_black=");putunsigned(msg,&q,counts[4]);
+    putstr(msg,&q," rgb16_black=");putunsigned(msg,&q,counts[6]);
+    putstr(msg,&q," rgb4_black=");putunsigned(msg,&q,counts[8]);
+    msg[q]=0;logtext(msg);
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
@@ -1733,6 +1796,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
     g_world_provenance=(BYTE*)alloc(g_ownership_bytes);
     g_shadow_provenance=(BYTE*)alloc(g_ownership_bytes);
+    g_final_texel_source=(BYTE*)alloc(g_ownership_bytes);
+    if(!g_final_texel_source)logtext("FINAL_TEXEL_CAPTURE disabled: diagnostic allocation failed");
     if(!g_shadow_provenance)logtext("SHADOW_CAPTURE disabled: optional diagnostic allocation failed");
     if(!g_world_provenance)logtext("WORLD_CAPTURE disabled: optional diagnostic allocation failed");
     if(!g_atlas_provenance)logtext("ATLAS_CAPTURE disabled: optional diagnostic allocation failed");
@@ -1901,6 +1966,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
         if(g_world_provenance)zero(g_world_provenance,g_ownership_bytes);
         if(g_shadow_provenance)zero(g_shadow_provenance,g_ownership_bytes);
+        if(g_final_texel_source)zero(g_final_texel_source,g_ownership_bytes);
         zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
         zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
         g_world_index1_preview_attempts=0;
@@ -1974,15 +2040,17 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100],atlas[100],world[100],shadow[100];
-        if(next_capture_pair(frame,coverage,atlas,world,shadow)){
+        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100];
+        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
             capture_atlas_provenance(atlas);
             capture_world_provenance(world);
             capture_shadow_provenance(shadow);
+            capture_final_texel_source(texel);
             {char line[160];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
+             putstr(line,&n," texel=");putstr(line,&n,texel);
              line[n]=0;logtext(line);}
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
@@ -3106,6 +3174,23 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 color=(nr<<11)|(ng<<5)|nb;
             }
             dst[y*width+x]=(WORD)color;
+            if(g_capture_ownership && g_final_texel_source){
+                /* Only last SUCCESSFUL writer, never a keyed/discarded attempt.
+                 * 'black' means actual final RGB565 zero after modulation/alpha,
+                 * not that all CLUT source colors with index 1 are zero. */
+                unsigned kind=0u;
+                if(!g_zplane_draw_context && textured){
+                    if(planes==8u && source_index_valid){
+                        if(color==0u)
+                            kind=source_index==1u?1u:(source_index==241u?2u:
+                                 (source_index==0u?3u:4u));
+                        else
+                            kind=source_index==1u?10u:(source_index==241u?11u:5u);
+                    }else if(planes==16u)kind=color==0u?6u:7u;
+                    else if(planes==4u)kind=color==0u?8u:9u;
+                }
+                g_final_texel_source[j]=(BYTE)kind;
+            }
             /* Read shadow underlay BEFORE the existing state machine updates
              * it. No source/raster change, and only record F12 final writes. */
             if(g_capture_ownership && g_shadow_provenance){
