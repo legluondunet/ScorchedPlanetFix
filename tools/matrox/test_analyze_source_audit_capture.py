@@ -70,6 +70,33 @@ class SourceAuditTests(unittest.TestCase):
                  'prelight_nonblack':2,'modulated_nonblack_to_black':1})
             self.assertEqual(out['distinct_final_black_8bpp_indices'],5)
 
+    def test_ordered_dither_4x4_rank_denominators_and_black_rates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);frame=[0xffff]*24;coverage=[5]*24
+            source=[0]*24;audit=[0]*24
+            # Pixel x=0 y=0 and x=4 y=0 share Bayer rank 0.
+            # x=1 y=0 has Bayer rank 8. Each source is nonblack
+            # before modulation; the final black mask is synthetic.
+            for pos,black in [(0,True),(4,True),(1,False)]:
+                coverage[pos]=2 if black else 1
+                source[pos]=4 if black else 5
+                frame[pos]=0 if black else 0x1234
+                audit[pos]=0x4000|0x0200|0x0400|42
+            out=analyze(fixture(p,frame=frame,coverage=coverage,
+                                texel=source,audit=audit))
+            ranks=out['ordered_dither_bayer_ranks']
+            self.assertEqual(ranks[0]['textured_modulated_dithered'],2)
+            self.assertEqual(ranks[0]['black_final'],2)
+            self.assertEqual(ranks[0]['black_rate_percent'],100.0)
+            self.assertEqual(ranks[8]['textured_modulated_dithered'],1)
+            self.assertEqual(ranks[8]['black_final'],0)
+            self.assertEqual(ranks[8]['black_rate_percent'],0.0)
+            self.assertIsNone(ranks[15]['black_rate_percent'])
+            self.assertEqual(sum(row['black_final'] for row in ranks),2)
+            quarters=out['ordered_dither_bayer_quartiles']
+            self.assertEqual(quarters[0]['black_final'],2)
+            self.assertEqual(quarters[2]['textured_modulated_dithered'],1)
+
     def test_no_rendered_world_texture(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=analyze(fixture(Path(tmp)))
