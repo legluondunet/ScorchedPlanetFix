@@ -52,7 +52,7 @@ jobs:
           i686-w64-mingw32-gcc-posix -std=c11 -O2 -D_WIN32_WINNT=0x0602 -static-libgcc -I/tmp/matrox-spv -I/tmp/matrox-vkinclude tools/matrox/vulkan_3d_probe.c -o /tmp/matrox-spv/MatroxVulkan3DProbe.exe -lm
           i686-w64-mingw32-strip /tmp/matrox-spv/MatroxVulkan3DProbe.exe
           file /tmp/matrox-spv/MatroxVulkan3DProbe.exe
-          file /tmp/matrox-spv/MatroxVulkan3DProbe.exe | grep -q 'PE32 executable.*Intel 80386'
+          python3 -c 'import pathlib,struct; b=pathlib.Path("/tmp/matrox-spv/MatroxVulkan3DProbe.exe").read_bytes(); p=struct.unpack_from("<I",b,60)[0]; assert b[:2]==b"MZ" and b[p:p+4]==b"PE\0\0" and struct.unpack_from("<H",b,p+4)[0]==0x14c and struct.unpack_from("<H",b,p+24)[0]==0x10b; print("PE32 x86 machine verified")'
           i686-w64-mingw32-objdump -p /tmp/matrox-spv/MatroxVulkan3DProbe.exe | grep 'DLL Name:'
       - name: Upload one small standalone hardware proof
         uses: actions/upload-artifact@v4
