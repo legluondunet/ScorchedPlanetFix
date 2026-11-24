@@ -16,6 +16,8 @@ __declspec(dllimport) BOOL __stdcall FreeLibrary(HANDLE);
 __declspec(dllimport) HANDLE __stdcall CreateFileA(const char*,DWORD,DWORD,void*,DWORD,DWORD,HANDLE);
 __declspec(dllimport) BOOL __stdcall WriteFile(HANDLE,const void*,DWORD,DWORD*,void*);
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
+__declspec(dllimport) BOOL __stdcall FlushFileBuffers(HANDLE);
+__declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) BOOL __stdcall DeleteFileA(const char*);
 __declspec(dllimport) void __stdcall ExitProcess(unsigned);
 __declspec(dllimport) LONG __stdcall DefWindowProcA(HANDLE,unsigned,DWORD,LONG);
@@ -68,6 +70,21 @@ static BOOL rect(float x,float y,float w,float h,float u,float left,float right)
 static BOOL write_exact(HANDLE h,const void *data,DWORD size){
     DWORD written=0;return WriteFile(h,data,size,&written,0)&&written==size;
 }
+/* Write checkpoints before and after original DLL calls, flushing every
+ * record so a guest crash or a driver calling ExitProcess leaves evidence.
+ * Short DOS-safe filename, no CRT and only Windows 95 era APIs. */
+static HANDLE trace=(HANDLE)-1;
+static void trace_text(const char *s){
+    DWORD len=0;while(s[len])len++;
+    if(trace!=(HANDLE)-1){write_exact(trace,s,len);FlushFileBuffers(trace);}
+}
+static void trace_number(const char *label,DWORD n){
+    char digits[10];unsigned i=0;
+    trace_text(label);
+    do{digits[i++]=(char)('0'+n%10u);n/=10u;}while(n);
+    while(i){char str[2];str[0]=digits[--i];str[1]=0;trace_text(str);}
+    trace_text("\r\n");
+}
 static void le32(BYTE *p,DWORD n){p[0]=(BYTE)n;p[1]=(BYTE)(n>>8);p[2]=(BYTE)(n>>16);p[3]=(BYTE)(n>>24);}
 static BOOL save(const char *name){
     static BYTE header[66];
@@ -85,19 +102,47 @@ static BOOL save(const char *name){
     return ok;
 }
 void __cdecl probe_main(void){
-    HANDLE lib=LoadLibraryA(".\\msi95.dll");Info *info=0;BYTE *tex=0,*lut=0;
+    HANDLE lib=0;Info *info=0;BYTE *tex=0,*lut=0;
     unsigned rc=1,i,x,y,d,row,col,mode;
     const char *status; HANDLE report;
-    if(!lib)ExitProcess(1);
+    trace=CreateFileA("PROBE.LOG",0x40000000ul,0,0,2,0x80,0); /* CREATE_ALWAYS */
+    trace_text("MatroxLightingProbe v3 / Win32 x86 diagnostic\r\n");
+    trace_text("CALL LoadLibraryA .\\msi95.dll\r\n");
+    lib=LoadLibraryA(".\\msi95.dll");
+    if(!lib){DWORD error=GetLastError();trace_number("LoadLibraryA error=",error);goto done;}
+    trace_text("OK LoadLibraryA\r\n");
+    trace_text("CALL GetProcAddress (eight required exports)\r\n");
     init=(Init)GetProcAddress(lib,"msiInit");start=(Start)GetProcAddress(lib,"msiStartFrame");
     set=(Set)GetProcAddress(lib,"msiSetParameters");draw=(Draw)GetProcAddress(lib,"msiRenderTriangle");
     end=(End)GetProcAddress(lib,"msiEndFrame");finish=(Exit)GetProcAddress(lib,"msiExit");
     alloc=(Alloc)GetProcAddress(lib,"msiAllocTextureHeap");release=(Free)GetProcAddress(lib,"msiFreeTextureHeap");
     blend=(Blend)GetProcAddress(lib,"msiSetTextureBlend");
-    rc=2;if(!init||!start||!set||!draw||!end||!finish||!alloc||!release)goto done;
-    rc=3;info=init(640,400,16,0,0,callback);if(!info)goto done;
-    rc=4;if(!start(1,80.f,80.f,80.f,0,0.f))goto done;
-    rc=5;tex=alloc(1);lut=alloc(1);if(!tex||!lut)goto done;
+    rc=2;
+    if(!init)trace_text("MISSING msiInit\r\n");
+    if(!start)trace_text("MISSING msiStartFrame\r\n");
+    if(!set)trace_text("MISSING msiSetParameters\r\n");
+    if(!draw)trace_text("MISSING msiRenderTriangle\r\n");
+    if(!end)trace_text("MISSING msiEndFrame\r\n");
+    if(!finish)trace_text("MISSING msiExit\r\n");
+    if(!alloc)trace_text("MISSING msiAllocTextureHeap\r\n");
+    if(!release)trace_text("MISSING msiFreeTextureHeap\r\n");
+    if(!init||!start||!set||!draw||!end||!finish||!alloc||!release)goto done;
+    trace_text(blend?"OK exports; optional blend present\r\n":"OK exports; optional blend absent\r\n");
+    rc=3;trace_text("CALL msiInit(640,400,16,0,0,callback)\r\n");
+    info=init(640,400,16,0,0,callback);
+    if(!info){trace_text("FAIL msiInit returned NULL\r\n");goto done;}
+    trace_text("OK msiInit\r\n");
+    trace_number("MSI version major=",(DWORD)info->major);
+    trace_number("MSI version minor=",(DWORD)info->minor);
+    trace_number("Color bytes per pixel=",(DWORD)info->color.bpp);
+    trace_number("Color pitch=",(DWORD)info->color.pitch);
+    trace_number("Color size=",(DWORD)info->color.size);
+    rc=4;trace_text("CALL msiStartFrame\r\n");
+    if(!start(1,80.f,80.f,80.f,0,0.f))goto done;
+    trace_text("OK msiStartFrame\r\n");
+    rc=5;trace_text("CALL msiAllocTextureHeap texture\r\n");tex=alloc(1);if(!tex)goto done;
+    trace_text("OK texture heap; CALL msiAllocTextureHeap LUT\r\n");lut=alloc(1);if(!lut)goto done;
+    trace_text("OK LUT heap; CALL fill texture and palette\r\n");
     for(y=0;y<64;y++)for(x=0;x<64;x++)tex[y*64+x]=(BYTE)(1+x/8);
     for(i=0;i<512;i++)lut[i]=0;
     for(i=0;i<8;i++){lut[2*(i+1)]=(BYTE)colors[i];lut[2*(i+1)+1]=(BYTE)(colors[i]>>8);}
@@ -110,8 +155,12 @@ void __cdecl probe_main(void){
     p.texture.mask=0xffff;p.texture.alpha=1;p.depth.compare=4;
     rc=6;
     for(d=0;d<2;d++){
+        trace_number("Frame mode=",mode);trace_number("Dither=",d);
+        trace_text("CALL msiSetParameters\r\n");
         p.color.dither=(BOOL)d;if(!set(&p))goto done;
-        if(mode && !blend(2u)){rc=11;goto done;} /* SDK MODULATE */
+        trace_text("OK msiSetParameters\r\n");
+        if(mode){trace_text("CALL msiSetTextureBlend\r\n");if(!blend(2u)){rc=11;goto done;}trace_text("OK blend\r\n");} /* SDK MODULATE */
+        trace_text("CALL render rectangles and ramp\r\n");
         /* Eight source colors x sixteen constant lighting coefficients. */
         for(row=0;row<8;row++)for(col=0;col<16;col++){
             if(!rect((float)(16+38*col),(float)(8+22*(row+8*d)),32.f,18.f,
@@ -120,16 +169,26 @@ void __cdecl probe_main(void){
         /* White-texture Gouraud ramp, 0..255 across 608 native pixels. */
         if(!rect(16.f,(float)(362+16*d),608.f,12.f,.0625f,0.f,255.f))goto done;
     }
-    rc=7;if(!set(0))goto done; /* SDK direct framebuffer access / synchronization */
+    trace_text("OK render rectangles and ramps\r\n");
+    rc=7;trace_text("CALL msiSetParameters(NULL)\r\n");if(!set(0))goto done;
+    trace_text("OK direct framebuffer mode\r\n");
+    trace_number("Color bytes per pixel=",(DWORD)info->color.bpp);
+    trace_number("Color pitch=",(DWORD)info->color.pitch);
+    trace_number("Color size=",(DWORD)info->color.size);
+    trace_number("Color pointer=",(DWORD)info->color.mem);
+     /* SDK direct framebuffer access / synchronization */
     if(info->color.bpp!=2||info->color.rd!=5||info->color.gd!=6||info->color.bd!=5||
        info->color.rs!=11||info->color.gs!=5||info->color.bs!=0||
        !info->color.mem||info->color.pitch<1280||info->color.pitch>65536||
        info->color.size<info->color.pitch*400)goto done;
+    trace_text("CALL read framebuffer\r\n");
     for(y=0;y<400;y++)for(x=0;x<1280;x++)
         pixels[y*1280+x]=info->color.mem[y*(DWORD)info->color.pitch+x];
+    trace_text("OK read framebuffer\r\nCALL restore parameters and end frame\r\n");
     rc=8;p.texture.enable=0;p.texture.mem=p.texture.heap=0;p.texture.lut.mem=p.texture.lut.heap=0;
     if(!set(&p)||!end(0,0,1))goto done;
-    rc=9;if(!save(mode?"msi95_lighting_blend.bmp":"msi95_lighting_flag.bmp"))goto done;
+    rc=9;trace_text("CALL save BMP\r\n");if(!save(mode?"msi95_lighting_blend.bmp":"msi95_lighting_flag.bmp"))goto done;
+    trace_text("OK BMP saved\r\n");
     }
     rc=12;
     status=blend?"msiSetTextureBlend=present; MODULATE calls succeeded\r\n":"msiSetTextureBlend=absent; flag-only frame generated\r\n";
@@ -140,6 +199,11 @@ void __cdecl probe_main(void){
      if(!ok){DeleteFileA("msi95_lighting_probe.txt");goto done;}}
     rc=0;
 done:
+    trace_number("Result before cleanup=",rc);
+    trace_text("CALL cleanup\r\n");
     if(info){if(lut&&!release(lut)&&!rc)rc=10;if(tex&&!release(tex)&&!rc)rc=10;if(!finish()&&!rc)rc=10;}
-    FreeLibrary(lib);ExitProcess(rc);
+    if(lib)FreeLibrary(lib);
+    trace_number("Exit code=",rc);
+    if(trace!=(HANDLE)-1)CloseHandle(trace);
+    ExitProcess(rc);
 }

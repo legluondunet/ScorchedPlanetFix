@@ -203,6 +203,18 @@ jobs:
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
+          $trace = Get-Content (Join-Path $folder 'PROBE.LOG') -Raw
+          if (!$trace.Contains('OK BMP saved') -or !$trace.Contains('Exit code=0')) { throw 'Missing successful lighting probe checkpoints' }
+          $missing = Join-Path $env:RUNNER_TEMP 'scorched-msi95-lighting-missing-dll'
+          New-Item -ItemType Directory -Force -Path $missing | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $missing
+          Push-Location $missing
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 1) { throw "Missing DLL probe returned unexpected code: $LASTEXITCODE" }
+            $trace = Get-Content 'PROBE.LOG' -Raw
+            if (!$trace.Contains('LoadLibraryA error=') -or !$trace.Contains('Exit code=1')) { throw 'Missing DLL diagnostic incomplete' }
+          } finally { Pop-Location }
           python tools/matrox/check_lighting_probe.py --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Lighting comparison model self-test failed' }
           python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_flag.bmp')

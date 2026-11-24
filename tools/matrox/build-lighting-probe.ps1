@@ -4,7 +4,7 @@ $root = $PSScriptRoot
 $out = Join-Path (Resolve-Path "$root/../..") 'target/matrox-lighting-probe'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $imports = @{
-  kernel32 = @('LoadLibraryA@4','GetProcAddress@8','FreeLibrary@4','CreateFileA@28','WriteFile@20','CloseHandle@4','DeleteFileA@4','ExitProcess@4')
+  kernel32 = @('LoadLibraryA@4','GetProcAddress@8','FreeLibrary@4','CreateFileA@28','WriteFile@20','CloseHandle@4','FlushFileBuffers@4','GetLastError@0','DeleteFileA@4','ExitProcess@4')
   user32 = @('DefWindowProcA@16')
 }
 $aliases = @()
