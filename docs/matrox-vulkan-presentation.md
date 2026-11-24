@@ -7,3 +7,7 @@ Exit 0 = test passed; 77 = runtime/device unavailable (not a GPU pass); 1 = fail
 ## Revision 2
 
 180 changing synthetic frames; persistent mapped staging and reusable command buffer/fence, per-swapchain-image presentation semaphores, no per-frame device idle. FIFO timing includes refresh wait and is not directly comparable to game raster/presentation timing. Fixed-size window; resize/device loss recovery remains an integration requirement. Writes VulkanProbe.log and VulkanProbe-error.log. CI #2 compiled x86 and passed CPU self-test, but the runner returned VK_ERROR_INCOMPATIBLE_DRIVER (-9); PowerShell's implicit propagation of exit 77 marked the step failed. Explicitly accept only expected no-runtime cases; other instance creation errors fail. One small short-lived x86 artifact is now necessary for real GPU validation on owner hardware; no full launcher builds or additional artifacts.
+
+## Owner hardware result / reusable presenter
+
+On RADV NAVI23 RX 6600M, Wine x86 v2 reported 180 frames in 1504.47 ms (8.358 ms/frame, FIFO wait included), exit 0; no visual pixel-readback verification. Extract shared presenter with caller-owned HWND, explicit open/present/close lifecycle, fixed 640x400 RGB565 input and pitch, selectable nearest/linear filter, and safe failure return for resize/minimize. Synthetic harness exercises the same code intended for integration. No new downloadable artifact until integration. Native game integration and no-CRT DLL build still pending.
