@@ -160,11 +160,8 @@ def analyze(prefix: Path, roi: str | None = None,
     if mismatches:
         raise ValueError(f'{len(mismatches)} lighting RGB565 invariant failures: '
                          f'{mismatches}')
-    if total!=verified['counts']['final_dithered_world_texels']+sum(
-        1 for p in () ):
-        # valid texture count also includes undithered and nonmodulated writes,
-        # checked by _sourceaudit and the source schema below.
-        pass
+    # The earlier layers verify all world-texture ownership. This audit
+    # independently verifies the subset with both modulation and dither.
     if dithered!=verified['counts']['final_dithered_world_texels']:
         raise ValueError('modulated+dithered lighting count differs from F12 provenance')
     if sum(black_created_bins)!=verified['counts']['actual_black_undithered_nonblack']:
