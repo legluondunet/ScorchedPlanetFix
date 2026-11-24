@@ -1324,3 +1324,105 @@ palette RGB. No raw original Matrox driver evidence exists yet to claim
 source index 1 should be keyed or drawn. **No changed keys, palettes,
 filter defaults, shadow blending, geometry or graphics behavior** in
 this branch. No user/game screenshots or textures committed.
+
+## 2026-11-24 — Source of black pixels: palette RGB565 or post-lighting?
+
+The owner's **real** six-layer F12 #0006 (Wine 11.19, frame 2449)
+contained **4,266 final black RGB565 world-texture pixels**:
+4,016 from 8bpp palette indices **other than 0/1/241**,
+240 from index 1, and 10 from index 241. The fifth shadow layer showed
+12,575 **nonblack** final shadows and **no** final opaque/no-texture-base
+shadow. Thus globally forcing index 1 keyed or opaque will not fix the
+dominant dark ridge. The six-layer F12 map, however, only records whether
+the **post-lighting** pixel is black. It cannot tell whether the CLUT
+returned RGB565 zero **before** optional MSI modulation and dither.
+
+This follow-up adds a **seventh** same-serial F12-only bitmap
+`matrox_capture_XXXX_sourceaudit.bmp` (16-bit RGB565 BI_BITFIELDS).
+**It is a lossless 16-bit encoded data map, not an image to interpret by
+eye or a screenshot; its color values are intentionally packed flags.**
+All previous six captures remain identical.
+
+Packed data per final successful MSI world-texture write:
+
+| Bit(s) | Meaning |
+| --- | --- |
+| 14 | Final texture source is **8bpp**; low 8 bits preserve **exact source index 0–255** |
+| 13 | Final texture source is native **16bpp** |
+| 12 | Final texture source is **4bpp** |
+| 8 | Pre-lighting sampled RGB565 was **0x0000** |
+| 9 | MSI texture RGB modulation was applied |
+| 10 | Ordered dither was applied with modulation |
+| 11 | Source color was subsequently alpha-blended with prior framebuffer |
+| 0–7 | Exact raw source index when bit 14 is set; zero for 16/4bpp |
+| 15 | Reserved and always zero |
+| entire pixel zero | No final successful ordinary MSI world-texture write |
+
+The three mutually exclusive source-format bits never overlap. Records
+are written **after** a successful MSI framebuffer write, and reset by
+later successful world/flat/HUD writes. Key-discarded samples **do not**
+claim final ownership, regardless of their color or palette index.
+
+```sh
+python tools/matrox/analyze_source_audit_capture.py game/matrox_capture_0007
+python tools/matrox/analyze_source_audit_capture.py game/matrox_capture_0007 --json
+python tools/matrox/test_analyze_source_audit_capture.py
+```
+
+The offline stdlib analyzer validates the seventh map against the existing
+`_frame`, `_coverage` and `_texel` F12 layers; it **rejects** invalid
+flags, dimensions, unsupported palette-source combinations, missing
+metadata, and dither-without-modulation. It reports precise **top 8bpp
+indices among final black pixels** and distinguishes:
+
+- Original/pre-lighting texture **already black**, remains black
+- Texture **nonblack before lighting**, final result black
+- Texture black before lighting but output nonblack (e.g. alpha)
+- How many final black pixels had modulation, ordered dither, or alpha
+- Spatial 4-connected components for source-black vs darkened-to-black
+
+**Interpretation limits:** The sampled pre-lighting RGB565 equals the
+CLUT-resolved original color in authentic **nearest-neighbor** sampling.
+Optional `WorldBilinear` changes the sampled RGB565 before this capture.
+Ordered dithering and alpha can affect black independently of underlying
+palette contents; the flags expose these cases. CPU framebuffer writes
+after MSI are not intercepted. Source index/CLUT black alone **does not
+establish a Mystique-driver rendering bug** without same-view hardware
+comparison. This PR changes no keys, colors, modulation, dithering,
+shadows, raster algorithms, settings, or copyrighted game assets.
+Eleven entirely synthetic tests cover format flags, aliases, overdraw,
+black-source conservation and error rejection in Windows CI.
+
+### Verified on owner's real F12 #0007 (Wine 11.19)
+
+The seven native RGB565 BMPs captured on 2026-11-24 at **frame 2952** are
+self-consistent. At the last successful MSI write in this terrain scene:
+**116,290** world textured pixels = 113,048 nonblack + **3,242 black**;
+16,762 nonblack final flat shadows; 122,948 HUD pixels; zero unwritten
+pixels or opaque shadow/no-texture final writes. Of the 3,242 final world
+textured RGB565-black pixels, **3,015** came from other 8bpp indices,
+**225** from source index 1, **2** from 241. Every one of the
+3,242 had a **nonzero RGB565 sample before lighting** and both modulation
+and ordered dithering enabled; none had alpha blending. Thus neither
+intrinsically black palette texels nor an opaque shadow are the direct
+source of visible black in this particular image.
+
+The 4x4 ordered Bayer threshold provides useful additional evidence.
+Across the 16 ranks, about 5,500 final modulated-and-dithered world
+pixels per rank were processed, while final-black incidence rose
+monotonically from **20/5,504 (0.36%)** at rank 0 to **374/5,529
+(6.76%)** at rank 15. Quartile ranks 0–3, 4–7, 8–11, 12–15 had
+**227, 686, 1,001, 1,328** final black pixels, respectively, with
+approximately equal denominators. The offline analyzer now calculates
+those rank denominators and final black rates automatically from the
+existing seventh F12 layer, in addition to source-index/lighting
+counters; **no eighth BMP or new owner capture is required**.
+
+**Caution:** The F12 metadata says dithering was *enabled*, not
+whether each output color differs from what an undithered reference
+would produce. The strong ordered-rank correlation implicates the
+4x4 rounding threshold as a contributor, but cannot establish the
+Mystique silicon's actual threshold matrix (or prove a regression)
+without same-scene hardware reference. Do not silently disable
+native MSI modulation or alter original dither/filter settings.
+Real user captures remain private, not committed.
