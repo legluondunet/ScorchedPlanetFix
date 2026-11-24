@@ -253,6 +253,25 @@ fn expected_files(image: &mut Image) -> Result<Vec<Entry>, String> {
     Ok(verified)
 }
 
+/// Read-only structural check of the separately catalogued mixed retail CD.
+fn expected_retail_files(image:&mut Image)->Result<Vec<Entry>,String>{
+    let listing=directory_tree(image)?;
+    let mut files=Vec::new();
+    for (_sha,size,source,dest) in matrox::retail_entries()? {
+        let entry=listing.get(source).ok_or_else(||format!("Missing retail Matrox file: {source}"))?;
+        if entry.directory || entry.bytes as u64!=size {return Err(format!("Retail Matrox file size differs: {source}"));}
+        let mut e=entry.clone();e.path=dest.to_string();files.push(e);
+    }
+    // Hash the executable before recognizing a retail variant, since other
+    // pressings may have the same tree and size. Full payload is hashed on extraction.
+    let exe=files.iter().find(|x|x.path=="spmyst.exe").ok_or("Missing retail executable")?;
+    let mut bytes=vec![0u8;exe.bytes as usize];
+    image.read_iso(exe.lba as u64*PAYLOAD,&mut bytes)?;
+    if format!("{:x}",Sha256::digest(&bytes))!=matrox::RETAIL_ORIGINAL_EXE {
+        return Err("Unsupported retail Matrox executable fingerprint".into());
+    }
+    Ok(files)
+}
 /// Never allow Matrox installation while ANY game installation exists.
 /// Use symlink_metadata so even dangling links block unsafe reuse.
 fn refuse_retail_installation(root: &Path) -> Result<(), String> {
@@ -269,11 +288,14 @@ fn refuse_retail_installation(root: &Path) -> Result<(), String> {
 /// always removed when the returned guard goes out of scope (also on failure).
 /// The same 66-file SHA-256 checks apply to every input format.
 pub fn install_media(root: &Path, source: &Path, bin_override: Option<&Path>) -> Result<(), String> {
+    install_media_selected(root,source,bin_override,false)
+}
+pub fn install_media_selected(root: &Path, source: &Path, bin_override: Option<&Path>,allow_retail:bool) -> Result<(), String> {
     refuse_retail_installation(root)?;
     if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
         let temporary = cue_image::normalize_cue_with_bin(source, bin_override, root,
             |_done, _total, _message| {}, |_message| {})?;
-        install(root, &temporary.path)
+        install_selected(root, &temporary.path,allow_retail)
     } else {
         if bin_override.is_some() {
             return Err("An explicit BIN/IMG companion is only valid with a .cue source".into());
@@ -281,41 +303,58 @@ pub fn install_media(root: &Path, source: &Path, bin_override: Option<&Path>) ->
         if !source.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso") || e.eq_ignore_ascii_case("img")) {
             return Err("Expected an ISO, raw IMG or CUE/BIN source".into());
         }
-        install(root, source)
+        install_selected(root, source,allow_retail)
     }
 }
 
 /// Structural disc recognition, not a substitute for the extraction SHA audit.
 /// CUE conversion is guarded and temporary; the original disc is never edited.
 pub fn recognized_media(root: &Path, source: &Path) -> bool {
+    recognized_media_selected(root,source,false)
+}
+pub fn recognized_media_selected(root:&Path,source:&Path,allow_retail:bool)->bool{
     if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")) {
         let temporary = cue_image::normalize_cue_with_bin(source, None, root,
             |_done, _total, _message| {}, |_message| {});
         match temporary {
-            Ok(temporary) => recognized(&temporary.path),
+            Ok(temporary) => recognized_selected(&temporary.path,allow_retail),
             Err(_) => false,
         }
     } else {
-        recognized(source)
+        recognized_selected(source,allow_retail)
     }
 }
 
 /// Read-only structural recognition. Full SHA-256 checks are performed during extraction.
 pub fn recognized(image: &Path) -> bool {
-    open_image(image).and_then(|mut source| expected_files(&mut source)).is_ok()
+    recognized_selected(image,false)
+}
+pub fn recognized_selected(image:&Path,allow_retail:bool)->bool{
+    open_image(image).and_then(|mut source| {
+        if expected_files(&mut source).is_ok(){Ok(())}
+        else if allow_retail {expected_retail_files(&mut source).map(|_|())}
+        else {Err("Not an OEM Matrox disc".into())}
+    }).is_ok()
 }
 
 /// Install the exact 66 original user-owned files, with transactional staging.
 /// Existing installations are verified and never overwritten.
 pub fn install(root: &Path, image: &Path) -> Result<(), String> {
+    install_selected(root,image,false)
+}
+fn install_selected(root:&Path,image:&Path,allow_retail:bool)->Result<(),String>{
     refuse_retail_installation(root)?;
     let target = root.join(ORIGINAL_FOLDER);
     if fs::symlink_metadata(&target).is_ok() {
         return Err("game/ already exists: refusing to overwrite an installed edition".into());
     }
     let mut source = open_image(image)?;
-    let files = expected_files(&mut source)?;
-    let manifest: BTreeMap<_, _> = matrox::manifest_entries()?.into_iter()
+    let (files,retail)=match expected_files(&mut source){
+        Ok(files)=>(files,false),
+        Err(_) if allow_retail=>(expected_retail_files(&mut source)?,true),
+        Err(e)=>return Err(e),
+    };
+    let manifest: BTreeMap<_, _> = matrox::profile_entries(retail)?.into_iter()
         .map(|(sha, bytes, path)| (path, (sha, bytes))).collect();
     let stage = root.join(STAGING_FOLDER);
     if fs::symlink_metadata(&stage).is_ok() {
@@ -353,7 +392,8 @@ pub fn install(root: &Path, image: &Path) -> Result<(), String> {
         // Matrox defaults validated with the player's known-good native INI:
         // English, high-quality movies, gamma 1.3, maximal graphics/shadows.
         // FPS and Dither belong ONLY to root ScorchedPlanetFix.ini.
-        let ini = MATROX_DEFAULT_INI;
+        let retail_ini=String::from_utf8_lossy(MATROX_DEFAULT_INI).replace("language= 1","language= 3");
+        let ini = if retail {retail_ini.as_bytes()} else {MATROX_DEFAULT_INI};
         fs::write(stage.join("splanet.ini"), ini).map_err(|e| e.to_string())?;
         matrox::verify_original(&stage)?;
         // Transform the verified private stage into ONE playable game/.

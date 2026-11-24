@@ -93,7 +93,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Clean-room MSI95 build failed' }
           $msi = 'target/matrox-msi95-x86/msi95.dll'
           python tools/matrox/audit_exports.py $msi
-          if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 eleven-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
 
       - name: Smoke test MSI95 x86 dynamic texture-heap growth past 256 live allocations

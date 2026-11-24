@@ -294,6 +294,7 @@ static void *g_color, *g_depth, *g_texture;
 static void **g_heaps=NULL;
 static unsigned g_heap_count=0,g_heap_capacity=0,g_heap_peak=0;
 static int g_initialized = 0;
+static int g_retail_mode = 0;
 static unsigned g_snapshot_mask = 0;
 static int g_log_attempted = 0;
 static int g_veh_registered = 0;
@@ -673,6 +674,7 @@ static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
  * sequence seen in the Wine AV. Do not use this probe to repair or skip any
  * game dereference, and never read arbitrary player data. */
 static BOOL game_global_probe_supported(void){
+    if(g_retail_mode)return FALSE;
     const BYTE *load=(const BYTE*)0x0046D761u;
     const BYTE *cmp=(const BYTE*)0x0046D76Du;
     return readable_span(load,6u) && readable_span(cmp,3u) &&
@@ -872,7 +874,8 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         int guest_input_ready=0;
         DWORD oem_table=0;
         const volatile DWORD *ptr=(const volatile DWORD*)0x004BA4B8u;
-        if(readable_span((const void*)ptr,sizeof(DWORD)))oem_table=*ptr;
+        if(g_retail_mode)oem_table=1u;
+        else if(readable_span((const void*)ptr,sizeof(DWORD)))oem_table=*ptr;
         guest_input_ready=(g_initialized && g_frames>=8u &&
                            g_heap_count>0u && oem_table!=0u);
         int swallowed_pair=(msg==WM_LBUTTONUP && g_swallowed_left_down) ||
@@ -1269,6 +1272,7 @@ static void capture_ownership(const char *filename){
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_RETAIL",setting,sizeof(setting));g_retail_mode=(n==1u&&setting[0]=='1');}
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
@@ -2522,4 +2526,34 @@ BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
 }
 BOOL __stdcall DllMain(void*module,DWORD reason,void*reserved){
     (void)reserved;if(reason==1)g_module=module;return TRUE;
+}
+
+/* Retail RenderWare MSI95 imports not used by the original OEM driver.
+ * Synchronous software rasterizer has no hardware queue to drain.
+ * SDK DrawLines specifies RGB565 color, packed signed XY (X low word),
+ * 32-bit style masks. Dashed phase is provisional pending hardware comparison.
+ */
+BOOL __cdecl msiSync(void){
+    return g_initialized?TRUE:FALSE;
+}
+BOOL __cdecl msiDrawSingleLine(DWORD color,DWORD XYStart,DWORD XYEnd,DWORD style){
+    if(!g_initialized || !g_color || g_info.msiColor.BytesPerPixel!=2)return FALSE;
+    int x=(short)(XYStart&0xffffu),y=(short)(XYStart>>16);
+    int ex=(short)(XYEnd&0xffffu),ey=(short)(XYEnd>>16);
+    int dx=ex>=x?ex-x:x-ex,dy=ey>=y?ey-y:y-ey;
+    int sx=x<ex?1:-1,sy=y<ey?1:-1,err=dx-dy;
+    int width=g_info.msiColor.Pitch/2,height=g_info.msiColor.MemSize/g_info.msiColor.Pitch;
+    unsigned step=0;
+    if(g_state_valid&&g_state.msiColor.Protect)return TRUE;
+    for(;;){
+        if((style&(0x80000000u>>(step&31u))) && x>=0 && y>=0 && x<width && y<height){
+            ((WORD*)((BYTE*)g_color+y*g_info.msiColor.Pitch))[x]=(WORD)color;
+        }
+        if(x==ex&&y==ey)break;
+        int e2=err*2;
+        if(e2>-dy){err-=dy;x+=sx;}
+        if(e2<dx){err+=dx;y+=sy;}
+        step++;
+    }
+    return TRUE;
 }

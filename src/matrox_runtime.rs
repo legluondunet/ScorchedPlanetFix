@@ -122,6 +122,23 @@ fn apply_briefing_guard(exe:&mut [u8])->Result<(),String>{
 fn patched_exe(original: &Path) -> Result<Vec<u8>,String> {
     safe_regular(original)?;
     let mut exe=fs::read(original).map_err(|e|e.to_string())?;
+    if original.file_name().is_some_and(|n|n=="spmyst.exe"){
+        if exe.len()!=848_384 || digest(&exe)!=matrox::RETAIL_ORIGINAL_EXE {
+            return Err("Unknown retail Matrox executable; patch refused".into());
+        }
+        // Exact alternate FR/DE build: verified OS guard, FadeLow compare,
+        // and branch from the failed media scan to its original success epilogue.
+        for (offset,old,new) in [
+            (0x110c9usize,&[0x74,0x1d][..],&[0xeb,0x1d][..]),
+            (0x70ebbusize,&[0x17,0xb7,0xd1,0x38][..],&[0xac,0xc5,0x27,0x37][..]),
+            (0x13bc9usize,&[0x33,0xc0][..],&[0xeb,0x0a][..]),
+        ] {
+            if exe.get(offset..offset+old.len())!=Some(old) {return Err("Retail Matrox patch site mismatch".into());}
+            exe[offset..offset+new.len()].copy_from_slice(new);
+        }
+        if digest(&exe)!=matrox::RETAIL_PATCHED_EXE {return Err("Retail Matrox patch SHA-256 mismatch".into());}
+        return Ok(exe);
+    }
     if exe.len()!=840_704 || digest(&exe)!=ORIGINAL_EXE_SHA {
         return Err("Unknown Matrox executable; patch refused".into());
     }
@@ -158,8 +175,8 @@ fn check_ini(path: &Path)->Result<(),String> {
 pub fn prepare_staged(game: &Path, launcher_root: &Path)->Result<(),String>{
     matrox::verify_original(game)?;
     let driver=cleanroom_driver(launcher_root)?;
-    let exe_path=game.join("splanetw.exe");
-    let original_exe=game.join("splanetw.exe.bak");
+    let exe_path=game.join(matrox::exe_name(game));
+    let original_exe=game.join(matrox::backup_name(game));
     let original_driver=game.join("msi95.dll");
     if fs::symlink_metadata(&original_exe).is_ok() {
         return Err(format!("Matrox EXE backup already exists: {}",original_exe.display()));
@@ -179,7 +196,8 @@ pub fn prepare_staged(game: &Path, launcher_root: &Path)->Result<(),String>{
     verify_prepared_at(game,expected_driver_hash())
 }
 fn verify_prepared_at(game: &Path,driver_hash: &str)->Result<(),String> {
-    matrox::verify_installed(game,PATCHED_EXE_SHA,driver_hash)?;
+    let patched=if matrox::is_retail(game){matrox::RETAIL_PATCHED_EXE}else{PATCHED_EXE_SHA};
+    matrox::verify_installed(game,patched,driver_hash)?;
     check_ini(&game.join("splanet.ini"))
 }
 pub fn verify_prepared(root: &Path)->Result<(),String> {
@@ -242,8 +260,12 @@ fn replace_owned_driver(game:&Path,desired:&[u8],expected:&str,
 /// permanent .bak), and never touch the separately authenticated original
 /// splanetw.exe.bak. Missing/unknown active EXE is an error.
 fn ensure_game_compat_exe(game:&Path,mut log:impl FnMut(&str))->Result<(),String>{
-    let active=game.join("splanetw.exe");
+    let active=game.join(matrox::exe_name(game));
     let prior=hash_file(&active)?;
+    if matrox::is_retail(game){
+        if prior==matrox::RETAIL_PATCHED_EXE{return Ok(());}
+        return Err("Unknown retail Matrox patched executable".into());
+    }
     if prior==PATCHED_EXE_SHA{return Ok(());}
     if prior!=PREVIOUS_PATCHED_EXE_SHA && prior!=PREVIOUS_NULL_GUARDED_EXE_SHA{
         return Err(format!("Unsupported Matrox game EXE {} sha256={prior}; refusing patch",
@@ -356,8 +378,10 @@ pub fn prepare(root:&Path,mut log:impl FnMut(&str))->Result<PathBuf,String>{
     ensure_game_compat_exe(&game,|message|log(message))?;
     ensure_owned_driver(&game,expected_driver_hash(),||cleanroom_driver(root),
         |message|log(message),||verify_prepared(root))?;
-    cleanup_legacy_driver_backup(&game,matrox::ORIGINAL_MSI95,|message|log(message))?;
-    matrox_iso::update_generated_ini(&game)?;
+    if !matrox::is_retail(&game){
+        cleanup_legacy_driver_backup(&game,matrox::ORIGINAL_MSI95,|message|log(message))?;
+        matrox_iso::update_generated_ini(&game)?;
+    }
     settings::ensure_defaults(&root.join("ScorchedPlanetFix.ini"),true)?;
     Ok(game)
 }
@@ -391,9 +415,10 @@ pub fn spawn_unchecked(root: &Path)->Result<Child,String> {
 }
 fn spawn_impl(root: &Path,force_first_log:bool)->Result<Child,String> {
     let game=root.join(GAME_FOLDER);
-    let mut command=Command::new(game.join("splanetw.exe"));
+    let mut command=Command::new(game.join(matrox::exe_name(&game)));
     command.current_dir(&game);
     configure(&mut command,root,force_first_log)?;
+    command.env("MATROX_MSI_RETAIL",if matrox::is_retail(&game){"1"}else{"0"});
     command.spawn().map_err(|e|format!("Cannot launch Matrox Mystique OEM: {e}"))
 }
 

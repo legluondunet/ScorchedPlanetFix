@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automatic, hash-verified Scorched Planet installer and launcher.
 //! The only authority for game discovery is the executable's own folder.
-use crate::{iso_install, logger::Logger, gameframe, verify, cue_image, matrox_runtime, matrox_iso, settings, layout};
+use crate::{matrox, iso_install, logger::Logger, gameframe, verify, cue_image, matrox_runtime, matrox_iso, settings, layout};
 use scorched_planet_fix::{self, Action};
 use std::ffi::OsString;
 use std::fs;
@@ -14,6 +14,7 @@ use std::process::{Child, Command};
 const USAGE: &str = "Usage:
   ScorchedPlanetFix.exe
   ScorchedPlanetFix.exe --install-only
+  ScorchedPlanetFix.exe --install-matrox [--install-only]
   ScorchedPlanetFix.exe --inspect image.iso
   ScorchedPlanetFix.exe --inspect image.cue [track.bin|track.img]
   ScorchedPlanetFix.exe --verbose
@@ -48,6 +49,7 @@ enum Mode {
 
 #[derive(Debug, PartialEq, Eq)]
 struct CommandLine {
+    force_matrox:bool,
     mode: Mode,
     media: Media,
 }
@@ -87,11 +89,11 @@ fn installation_kind(root: &Path) -> Result<Option<InstalledEdition>, String> {
             Err(e)=>Err(format!("Cannot inspect {}: {e}",path.display())),
         }
     };
-    match (executable("spvoodoo.exe")?,executable("splanetw.exe")?){
-        (true,false)=>Ok(Some(InstalledEdition::Retail3dfx)),
-        (false,true)=>Ok(Some(InstalledEdition::MatroxOem)),
-        (true,true)=>Err("Two game editions detected inside game/. Exactly one game executable is supported; no files were changed.".into()),
-        (false,false)=>Err("Unrecognized game/ installation: missing supported executable; refusing automatic overwrite".into()),
+    match (executable("spvoodoo.exe")?,executable("splanetw.exe")?,executable("spmyst.exe")?){
+        (true,false,false)=>Ok(Some(InstalledEdition::Retail3dfx)),
+        (false,true,false)|(false,false,true)=>Ok(Some(InstalledEdition::MatroxOem)),
+        (false,false,false)=>Err("Unrecognized game/ installation: missing supported executable; refusing automatic overwrite".into()),
+        _=>Err("Two game editions detected inside game/. Exactly one game executable is supported; no files were changed.".into()),
     }
 }
 
@@ -154,20 +156,24 @@ fn parse_media(args: &[OsString]) -> Result<Media, String> {
 fn parse_args(args:&[OsString])->Result<CommandLine,String>{
     let flags=args.iter().filter(|a|*a=="--verbose").count();
     if flags>1{return Err("--verbose specified twice".into());}
-    let filtered=args.iter().filter(|a|*a!="--verbose").collect::<Vec<_>>();
+    let force_count=args.iter().filter(|a|*a=="--install-matrox").count();
+    if force_count>1{return Err("--install-matrox specified twice".into());}
+    let force_matrox=force_count==1;
+    let filtered=args.iter().filter(|a|*a!="--verbose"&&*a!="--install-matrox").collect::<Vec<_>>();
     let name=filtered.first().and_then(|x|x.to_str());
     let blank=Media{image:None,bin:None};
+    if force_matrox && !matches!(name,None|Some("--install-only")){return Err("--install-matrox is compatible only with installation or --install-only".into());}
     match name {
-        None=>Ok(CommandLine{mode:Mode::Play,media:blank}),
-        Some("--help"|"-h") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Help,media:blank}),
-        Some("--version") if filtered.len()==1=>Ok(CommandLine{mode:Mode::Version,media:blank}),
-        Some("--verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::VerifyOnly,media:blank}),
-        Some("--launch-no-verify") if filtered.len()==1=>Ok(CommandLine{mode:Mode::LaunchUnchecked,media:blank}),
-        Some("--install-only") if filtered.len()==1=>Ok(CommandLine{mode:Mode::InstallOnly,media:blank}),
+        None=>Ok(CommandLine{force_matrox,mode:Mode::Play,media:blank}),
+        Some("--help"|"-h") if filtered.len()==1=>Ok(CommandLine{force_matrox,mode:Mode::Help,media:blank}),
+        Some("--version") if filtered.len()==1=>Ok(CommandLine{force_matrox,mode:Mode::Version,media:blank}),
+        Some("--verify") if filtered.len()==1=>Ok(CommandLine{force_matrox,mode:Mode::VerifyOnly,media:blank}),
+        Some("--launch-no-verify") if filtered.len()==1=>Ok(CommandLine{force_matrox,mode:Mode::LaunchUnchecked,media:blank}),
+        Some("--install-only") if filtered.len()==1=>Ok(CommandLine{force_matrox,mode:Mode::InstallOnly,media:blank}),
         Some("--inspect") if (2..=3).contains(&filtered.len())=>{
             let selected=filtered[1..].iter().map(|x|(*x).clone()).collect::<Vec<_>>();
             let media=parse_media(&selected)?;
-            Ok(CommandLine{mode:Mode::Inspect,media})
+            Ok(CommandLine{force_matrox,mode:Mode::Inspect,media})
         },
         Some(option) if option.starts_with('-')=>
             Err(format!("Unknown or incompatible option: {option}.\n{USAGE}")),
@@ -284,14 +290,14 @@ fn matrox_verify(root: &Path, logger: &Logger,
                  mut sink: impl FnMut(&str)) -> Result<(), String> {
     matrox_runtime::verify_prepared(root)?;
     let _ = settings::read_settings(&root.join(layout::CONFIG))?;
-    emit(logger, &mut sink, "Matrox game/: immutable OEM resources (65 installed originals), original EXE backup, patched EXE and embedded MSI95 DLL verified.");
+    emit(logger, &mut sink, "Matrox game/: immutable resources, original EXE backup, patched EXE and embedded MSI95 DLL verified.");
     Ok(())
 }
 
 /// Prepare the isolated Matrox runtime, then start the user-owned OEM game.
 fn matrox_play(root: &Path, logger: &Logger,
                mut sink: impl FnMut(&str)) -> Result<(), String> {
-    emit(logger, &mut sink, "Verifying Matrox Mystique OEM edition inside game/...");
+    emit(logger, &mut sink, "Verifying Matrox Mystique edition inside game/...");
     let runtime = matrox_runtime::prepare(root,|message|emit(logger,&mut sink,message))?;
     layout::ensure_support_files(root,"matrox")?;
     settings::reject_unimplemented_cheats(&root.join(layout::CONFIG))?;
@@ -344,7 +350,7 @@ fn launch_unchecked(root: &Path, logger: &Logger,
     // Even unchecked mode refuses conflicting installations, without
     // game file hashing, runtime preparation, installation or repair.
     if installation_kind(root)? == Some(InstalledEdition::MatroxOem) {
-        let executable = game.join("splanetw.exe");
+        let executable = game.join(matrox::exe_name(&game));
         emit(logger, &mut sink,
             "WARNING: --launch-no-verify bypasses ALL game and MSI95 runtime checks; no repair or installation will be attempted.");
         emit(logger, &mut sink,
@@ -511,6 +517,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         return matrox_play(root, logger, sink);
     }
     if installed == Some(InstalledEdition::Retail3dfx) {
+        if cmd.force_matrox {return Err("3dfx already installed; use a separate fresh directory for Matrox".into());}
         if cmd.media.image.is_some() {
             return Err("game/ already exists; refusing to overwrite it with a CD image".into());
         }
@@ -531,7 +538,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
         let mut cue_data_tracks = Vec::new();
         for path in &files {
             if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cue"))
-                && matrox_iso::recognized_media(root, path) {
+                && matrox_iso::recognized_media_selected(root, path,cmd.force_matrox) {
                 let data_track=cue_image::data_track_source(path)?;
                 emit(logger,&mut sink,&format!("MEDIA: recognized Matrox CUE={} data_track={}",
                     path.display(),data_track.display()));
@@ -540,7 +547,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             }
         }
         for path in unreferenced_raw_images(&files,&cue_data_tracks)? {
-            if matrox_iso::recognized(&path) {
+            if matrox_iso::recognized_selected(&path,cmd.force_matrox) {
                 emit(logger,&mut sink,&format!("MEDIA: recognized standalone Matrox image={}",path.display()));
                 matrox_images.push(path);
             }
@@ -568,8 +575,8 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             }
         }
         if let Some(image) = matrox_images.pop() {
-            matrox_iso::install_media(root, &image, None)?;
-            emit(logger, &mut sink, &format!("Matrox Mystique OEM automatically recognized and verified from {}", image.display()));
+            matrox_iso::install_media_selected(root, &image, None,cmd.force_matrox)?;
+            emit(logger, &mut sink, &format!("Matrox Mystique automatically recognized and verified from {}", image.display()));
             if cmd.mode == Mode::InstallOnly {
                 settings::ensure_defaults(&root.join(layout::CONFIG),true)?;
                 layout::ensure_support_files(root,"matrox")?;
@@ -577,6 +584,7 @@ fn session(root: &Path, cmd: &CommandLine, logger: &Logger,
             }
             return matrox_play(root, logger, sink);
         }
+        if cmd.force_matrox{return Err("No supported Matrox payload found; no 3dfx fallback requested".into());}
         let images = media_arguments(&cmd.media, root);
         run(&images, root, logger, |line| sink(line))?;
         if cmd.mode == Mode::InstallOnly {
@@ -671,6 +679,14 @@ mod tests {
     use super::*;
     fn args(items: &[&str]) -> Vec<OsString> {
         items.iter().map(OsString::from).collect()
+    }
+    #[test]
+    fn forced_matrox_is_only_an_install_selector(){
+        assert!(parse_args(&args(&["--install-matrox"])).unwrap().force_matrox);
+        let selected=parse_args(&args(&["--install-only","--install-matrox"])).unwrap();
+        assert!(selected.force_matrox);assert_eq!(selected.mode,Mode::InstallOnly);
+        assert!(!parse_args(&args(&["--verify"])).unwrap().force_matrox);
+        assert!(parse_args(&args(&["--verify","--install-matrox"])).is_err());
     }
     #[test]
     fn command_line_modes_without_legacy_wrapper_flags() {
