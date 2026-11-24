@@ -44,6 +44,7 @@ static uint32_t memtype(VkPhysicalDeviceMemoryProperties *m,uint32_t bits,VkMemo
 #define H 400u
 
 static int probe(void){
+    const unsigned frames=180;
     int rc=77; /* unavailable before logical device, not a successful GPU test */
     HMODULE dll=LoadLibraryExW(L"vulkan-1.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
     if(!dll){puts("VULKAN_PROBE_UNAVAILABLE loader");return rc;}
@@ -56,7 +57,10 @@ static int probe(void){
     VkImage source=VK_NULL_HANDLE;
     VkDeviceMemory bm=VK_NULL_HANDLE,im=VK_NULL_HANDLE;
     VkCommandPool pool=VK_NULL_HANDLE;
-    VkSemaphore acquired=VK_NULL_HANDLE,finished=VK_NULL_HANDLE;
+    VkSemaphore acquired=VK_NULL_HANDLE,finished[32]={0};
+    uint32_t finish_count=0;
+    void *mapped=NULL;
+    PFN_vkUnmapMemory unmap_memory=NULL;
     VkFence fence=VK_NULL_HANDLE;
     HWND hwnd=NULL;
     PFN_vkDestroyInstance destroy_instance=NULL;
@@ -64,6 +68,7 @@ static int probe(void){
     PFN_vkGetDeviceProcAddr gdpa=NULL;
     PFN_vkDestroyDevice destroy_device=NULL;
     PFN_vkDeviceWaitIdle wait_idle=NULL;
+    rc=1;
     if(!gipa)goto done;
     PFN_vkCreateInstance create_instance=(PFN_vkCreateInstance)gipa(NULL,"vkCreateInstance");
     REQUIRE(create_instance);
@@ -72,7 +77,9 @@ static int probe(void){
     app.pApplicationName="Scorched Planet Matrox presentation probe";app.apiVersion=VK_API_VERSION_1_0;
     VkInstanceCreateInfo ci={VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo=&app;ci.enabledExtensionCount=2;ci.ppEnabledExtensionNames=extensions;
-    CHECK(create_instance(&ci,NULL,&instance));
+    VkResult ir=create_instance(&ci,NULL,&instance);
+    if(ir==VK_ERROR_INCOMPATIBLE_DRIVER||ir==VK_ERROR_EXTENSION_NOT_PRESENT){rc=77;fprintf(stderr,"Vulkan instance unavailable: %d\n",(int)ir);goto done;}
+    if(ir!=VK_SUCCESS){fprintf(stderr,"vkCreateInstance: %d\n",(int)ir);goto done;}
     destroy_instance=(PFN_vkDestroyInstance)gipa(instance,"vkDestroyInstance");
     REQUIRE(destroy_instance);
     I(vkCreateWin32SurfaceKHR);I(vkEnumeratePhysicalDevices);
@@ -88,7 +95,7 @@ static int probe(void){
     REQUIRE(vkGetPhysicalDeviceSurfaceFormatsKHR);REQUIRE(vkGetPhysicalDeviceFormatProperties);
     REQUIRE(vkEnumerateDeviceExtensionProperties);REQUIRE(vkGetPhysicalDeviceMemoryProperties);
     REQUIRE(vkCreateDevice);REQUIRE(destroy_surface);REQUIRE(gdpa);
-    hwnd=CreateWindowExW(0,L"STATIC",L"Matrox Vulkan synthetic presentation",WS_OVERLAPPEDWINDOW,
+    hwnd=CreateWindowExW(0,L"STATIC",L"Matrox Vulkan synthetic presentation",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
                          CW_USEDEFAULT,CW_USEDEFAULT,960,720,NULL,NULL,GetModuleHandleW(NULL),NULL);
     if(!hwnd){rc=1;goto done;}
     VkWin32SurfaceCreateInfoKHR si={VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
@@ -133,7 +140,7 @@ static int probe(void){
             }
         }
     }
-    if(!physical){puts("VULKAN_PROBE_UNAVAILABLE no eligible GPU/surface");goto done;}
+    if(!physical){rc=77;puts("VULKAN_PROBE_UNAVAILABLE no eligible GPU/surface");goto done;}
     /* From this point an execution error is a failed test, not a skip. */
     rc=1;
     float priority=1.0f;
@@ -149,13 +156,13 @@ static int probe(void){
     D(vkGetDeviceQueue);D(vkCreateSwapchainKHR);D(vkGetSwapchainImagesKHR);
     D(vkCreateBuffer);D(vkGetBufferMemoryRequirements);D(vkAllocateMemory);D(vkBindBufferMemory);D(vkMapMemory);D(vkUnmapMemory);
     D(vkCreateImage);D(vkGetImageMemoryRequirements);D(vkBindImageMemory);
-    D(vkCreateCommandPool);D(vkAllocateCommandBuffers);D(vkBeginCommandBuffer);D(vkEndCommandBuffer);
+    D(vkCreateCommandPool);D(vkAllocateCommandBuffers);D(vkBeginCommandBuffer);D(vkEndCommandBuffer);D(vkResetCommandBuffer);D(vkResetFences);
     D(vkCmdPipelineBarrier);D(vkCmdCopyBufferToImage);D(vkCmdClearColorImage);D(vkCmdBlitImage);
     D(vkCreateSemaphore);D(vkCreateFence);D(vkAcquireNextImageKHR);D(vkQueueSubmit);D(vkWaitForFences);D(vkQueuePresentKHR);
     REQUIRE(vkGetDeviceQueue);REQUIRE(vkCreateSwapchainKHR);REQUIRE(vkGetSwapchainImagesKHR);
     REQUIRE(vkCreateBuffer);REQUIRE(vkGetBufferMemoryRequirements);REQUIRE(vkAllocateMemory);REQUIRE(vkBindBufferMemory);REQUIRE(vkMapMemory);REQUIRE(vkUnmapMemory);
     REQUIRE(vkCreateImage);REQUIRE(vkGetImageMemoryRequirements);REQUIRE(vkBindImageMemory);
-    REQUIRE(vkCreateCommandPool);REQUIRE(vkAllocateCommandBuffers);REQUIRE(vkBeginCommandBuffer);REQUIRE(vkEndCommandBuffer);
+    REQUIRE(vkCreateCommandPool);REQUIRE(vkAllocateCommandBuffers);REQUIRE(vkBeginCommandBuffer);REQUIRE(vkEndCommandBuffer);REQUIRE(vkResetCommandBuffer);REQUIRE(vkResetFences);
     REQUIRE(vkCmdPipelineBarrier);REQUIRE(vkCmdCopyBufferToImage);REQUIRE(vkCmdClearColorImage);REQUIRE(vkCmdBlitImage);
     REQUIRE(vkCreateSemaphore);REQUIRE(vkCreateFence);REQUIRE(vkAcquireNextImageKHR);REQUIRE(vkQueueSubmit);REQUIRE(vkWaitForFences);REQUIRE(vkQueuePresentKHR);
     VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
@@ -189,13 +196,9 @@ static int probe(void){
     ma.allocationSize=mr.size;ma.memoryTypeIndex=memtype(&mp,mr.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if(ma.memoryTypeIndex==UINT32_MAX)goto done;
     CHECK(vkAllocateMemory(device,&ma,NULL,&bm));CHECK(vkBindBufferMemory(device,buffer,bm,0));
-    void *mapped=NULL;CHECK(vkMapMemory(device,bm,0,bc.size,0,&mapped));
+    unmap_memory=vkUnmapMemory;
+    CHECK(vkMapMemory(device,bm,0,bc.size,0,&mapped));
     uint32_t *pixels=(uint32_t*)mapped;
-    for(uint32_t y=0;y<H;y++)for(uint32_t x=0;x<W;x++){
-        uint16_t p=(uint16_t)(((x*31/(W-1))<<11)|((y*63/(H-1))<<5)|(((x/20+y/20)&1)*31));
-        pixels[y*W+x]=rgba565(p);
-    }
-    vkUnmapMemory(device,bm);
     VkImageCreateInfo ic={VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ic.imageType=VK_IMAGE_TYPE_2D;ic.format=VK_FORMAT_R8G8B8A8_UNORM;ic.extent.width=W;ic.extent.height=H;ic.extent.depth=1;
     ic.mipLevels=1;ic.arrayLayers=1;ic.samples=VK_SAMPLE_COUNT_1_BIT;ic.tiling=VK_IMAGE_TILING_OPTIMAL;
@@ -205,14 +208,32 @@ static int probe(void){
     ma.allocationSize=mr.size;ma.memoryTypeIndex=memtype(&mp,mr.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if(ma.memoryTypeIndex==UINT32_MAX)goto done;
     CHECK(vkAllocateMemory(device,&ma,NULL,&im));CHECK(vkBindImageMemory(device,source,im,0));
-    VkCommandPoolCreateInfo pc={VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pc.queueFamilyIndex=family;
+    VkCommandPoolCreateInfo pc={VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pc.queueFamilyIndex=family;pc.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     CHECK(vkCreateCommandPool(device,&pc,NULL,&pool));
     VkCommandBufferAllocateInfo ca={VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     ca.commandPool=pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
     VkCommandBuffer cmd;CHECK(vkAllocateCommandBuffers(device,&ca,&cmd));
     VkSemaphoreCreateInfo se={VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fe={VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    CHECK(vkCreateSemaphore(device,&se,NULL,&acquired));CHECK(vkCreateSemaphore(device,&se,NULL,&finished));CHECK(vkCreateFence(device,&fe,NULL,&fence));
+    CHECK(vkCreateSemaphore(device,&se,NULL,&acquired));CHECK(vkCreateFence(device,&fe,NULL,&fence));
+    for(uint32_t i=0;i<count;i++){CHECK(vkCreateSemaphore(device,&se,NULL,&finished[i]));finish_count++;}
+    LARGE_INTEGER freq,t0,t1;QueryPerformanceFrequency(&freq);QueryPerformanceCounter(&t0);
+    unsigned submitted=0;
+    for(unsigned frame=0;frame<frames;frame++){
+    MSG msg;
+    while(PeekMessageW(&msg,NULL,0,0,PM_REMOVE)){
+        if(msg.message==WM_QUIT||msg.message==WM_CLOSE){puts("VULKAN_PROBE_CANCELLED");goto done;}
+        TranslateMessage(&msg);DispatchMessageW(&msg);
+    }
+    if(!IsWindow(hwnd)||IsIconic(hwnd)){puts("VULKAN_PROBE_CANCELLED window unavailable");goto done;}
+    /* Prior fence was waited before reusing the mapped staging buffer and
+       acquire semaphore. Present-complete semaphore is per swapchain image,
+       reused only after reacquiring that same image. */
+    for(uint32_t y=0;y<H;y++)for(uint32_t x=0;x<W;x++){
+        uint16_t p=(uint16_t)(((((x+frame*3)%W)*31/(W-1))<<11)|((y*63/(H-1))<<5)|((((x+frame*2)/20+y/20)&1)*31));
+        pixels[y*W+x]=rgba565(p);
+    }
+    if(frame){CHECK(vkResetFences(device,1,&fence));CHECK(vkResetCommandBuffer(cmd,0));}
     uint32_t index=0;VkResult ar=vkAcquireNextImageKHR(device,swap,5000000000ull,acquired,VK_NULL_HANDLE,&index);
     if((ar!=VK_SUCCESS&&ar!=VK_SUBOPTIMAL_KHR)||index>=count)goto done;
     VkCommandBufferBeginInfo cb={VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -248,21 +269,26 @@ static int probe(void){
     VkPipelineStageFlags wait_stage=VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo submit={VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&acquired;
     submit.pWaitDstStageMask=&wait_stage;submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;
-    submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&finished;
+    submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&finished[index];
     CHECK(vkQueueSubmit(queue,1,&submit,fence));
     CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,5000000000ull));
     VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    present.waitSemaphoreCount=1;present.pWaitSemaphores=&finished;present.swapchainCount=1;present.pSwapchains=&swap;present.pImageIndices=&index;
+    present.waitSemaphoreCount=1;present.pWaitSemaphores=&finished[index];present.swapchainCount=1;present.pSwapchains=&swap;present.pImageIndices=&index;
     VkResult pr=vkQueuePresentKHR(queue,&present);
     if(pr!=VK_SUCCESS&&pr!=VK_SUBOPTIMAL_KHR){fprintf(stderr,"vkQueuePresentKHR: %d\n",(int)pr);goto done;}
+    submitted++;
+    }
     CHECK(wait_idle(device));
-    printf("VULKAN_PROBE_PRESENT_PASS source=640x400 viewport=%ux%u offset=%u,%u filter=linear\n",v.w,v.h,v.x,v.y);
+    QueryPerformanceCounter(&t1);
+    double ms=1000.0*(double)(t1.QuadPart-t0.QuadPart)/(double)freq.QuadPart;
+    printf("VULKAN_PROBE_PRESENT_PASS source=640x400 viewport=%ux%u offset=%u,%u filter=linear frames=%u elapsed_ms=%.2f mean_ms=%.3f (FIFO includes refresh wait)\n",v.w,v.h,v.x,v.y,submitted,ms,ms/submitted);
     rc=0;
 done:
     if(device&&gdpa){
         if(wait_idle)wait_idle(device);
         #define DESTROY(fn,obj) do{if(obj){PFN_##fn f=(PFN_##fn)gdpa(device,#fn);if(f)f(device,obj,NULL);}}while(0)
-        DESTROY(vkDestroyFence,fence);DESTROY(vkDestroySemaphore,finished);DESTROY(vkDestroySemaphore,acquired);
+        if(mapped&&unmap_memory)unmap_memory(device,bm);
+        DESTROY(vkDestroyFence,fence);for(uint32_t i=0;i<finish_count;i++){DESTROY(vkDestroySemaphore,finished[i]);}DESTROY(vkDestroySemaphore,acquired);
         DESTROY(vkDestroyCommandPool,pool);DESTROY(vkDestroyImage,source);DESTROY(vkDestroyBuffer,buffer);
         DESTROY(vkFreeMemory,im);DESTROY(vkFreeMemory,bm);DESTROY(vkDestroySwapchainKHR,swap);
         if(destroy_device)destroy_device(device,NULL);
@@ -277,5 +303,11 @@ done:
 int main(int argc,char **argv){
     if(selftest())return 1;
     if(argc==2&&!strcmp(argv[1],"--self-test"))return 0;
-    return probe();
+    /* A separate log allows double-click testing without losing console output. */
+    FILE *out=NULL,*err=NULL;
+    if(freopen_s(&out,"VulkanProbe.log","w",stdout)!=0)return 1;
+    if(freopen_s(&err,"VulkanProbe-error.log","w",stderr)!=0)return 1;
+    setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
+    puts("MatroxVulkanProbe v2 / 180-frame synthetic presentation");
+    int rc=probe();printf("VULKAN_PROBE_EXIT=%d\n",rc);return rc;
 }

@@ -40,6 +40,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Viewport/RGB565 self-test failed' }
           & ./MatroxVulkanProbe.exe
           $code = $LASTEXITCODE
-          if ($code -eq 77) { Write-Host 'GPU unavailable on this runner; real presentation NOT validated' }
+          Get-Content VulkanProbe.log
+          Get-Content VulkanProbe-error.log
+          if ($code -eq 77) { Write-Host 'GPU unavailable on this runner; real presentation NOT validated'; exit 0 }
           elseif ($code -ne 0) { throw "Vulkan prototype failed: $code" }
-          else { Write-Host 'Real Vulkan presentation succeeded' }
+          else { Write-Host 'Real Vulkan presentation succeeded'; exit 0 }
+      - name: Upload single small prototype for real GPU validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: MatroxVulkanProbe-x86
+          path: MatroxVulkanProbe.exe
+          retention-days: 3
+          if-no-files-found: error
