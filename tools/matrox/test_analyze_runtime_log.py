@@ -128,5 +128,80 @@ FIRST_CHANCE_AV #1 code=0xC0000005 ip=0x0048302D operation=0 address=0x0000000C
         r = analyzer.parse_log(Path("totally_nonexistent_scorched_runtime_log.txt"))
         self.assertEqual(r["status"], "unreadable")
 
+
+    def test_opacity_legacy_log_unavailable(self):
+        self.assertEqual(self.parse("msiInit width=640\n")["opacity_audit"]["status"], "unavailable")
+
+    def test_opacity_opaque_exit(self):
+        r = self.parse("""msiInit width=640
+msiExit total_frames= 20 triangles= 500
+msiExit total_zplanes= 10 parameter_updates= 50
+MSI_OPACITY_BEGIN scope=exit frame=20
+MSI_OPACITY value=100 triangles=500 zplanes=10
+MSI_OPACITY_END
+""")["opacity_audit"]
+        self.assertEqual(r["status"], "opaque_only")
+        self.assertFalse(r["intermediate_requested"])
+        self.assertTrue(r["exit_totals_checked"])
+
+    def test_opacity_mixed_values(self):
+        r = self.parse("""MSI_OPACITY_BEGIN scope=F12 frame=20
+MSI_OPACITY value=0 triangles=1 zplanes=0
+MSI_OPACITY value=50 triangles=3 zplanes=2
+MSI_OPACITY value=100 triangles=5 zplanes=9
+MSI_OPACITY value=255 triangles=0 zplanes=1
+MSI_OPACITY_END
+""")["opacity_audit"]
+        self.assertEqual(r["status"], "nonopaque_requested")
+        self.assertTrue(r["intermediate_requested"])
+        self.assertTrue(r["zero_requested"])
+        self.assertTrue(r["out_of_range_requested"])
+        self.assertEqual(r["totals"], {"triangles": 9, "zplanes": 12})
+
+    def test_opacity_no_calls(self):
+        r = self.parse("MSI_OPACITY_BEGIN scope=F12 frame=1\nMSI_OPACITY_END\n")["opacity_audit"]
+        self.assertEqual(r["status"], "no_calls")
+
+    def test_opacity_truncated_snapshot_overrides_older(self):
+        r = self.parse("""MSI_OPACITY_BEGIN scope=F12 frame=20
+MSI_OPACITY value=100 triangles=500 zplanes=10
+MSI_OPACITY_END
+MSI_OPACITY_BEGIN scope=F12 frame=30
+MSI_OPACITY value=100 triangles=600 zplanes=20
+""")["opacity_audit"]
+        self.assertEqual(r["status"], "incomplete")
+
+    def test_opacity_invalid_bins(self):
+        for rows in (
+            "MSI_OPACITY value=256 triangles=1 zplanes=0",
+            "MSI_OPACITY value=100 triangles=0 zplanes=0",
+            "MSI_OPACITY value=100 triangles=1 zplanes=0\nMSI_OPACITY value=100 triangles=1 zplanes=0",
+            "MSI_OPACITY value=100 triangles=4294967295 zplanes=0 saturated=1",
+            "MSI_OPACITY value=100 triangles=1 zplanes=0 saturated=1",
+        ):
+            with self.subTest(rows=rows):
+                r = self.parse("MSI_OPACITY_BEGIN scope=F12 frame=20\n" + rows + "\nMSI_OPACITY_END\n")["opacity_audit"]
+                self.assertEqual(r["status"], "invalid")
+                self.assertIsNone(r["intermediate_requested"])
+
+    def test_opacity_exit_totals_mismatch(self):
+        r = self.parse("""msiInit width=640
+msiExit total_frames= 20 triangles= 500
+msiExit total_zplanes= 10 parameter_updates= 50
+MSI_OPACITY_BEGIN scope=exit frame=20
+MSI_OPACITY value=100 triangles=499 zplanes=10
+MSI_OPACITY_END
+""")["opacity_audit"]
+        self.assertEqual(r["status"], "invalid")
+
+    def test_opacity_reset_on_reinit(self):
+        r = self.parse("""msiInit width=640
+MSI_OPACITY_BEGIN scope=F12 frame=20
+MSI_OPACITY value=50 triangles=2 zplanes=0
+MSI_OPACITY_END
+msiInit width=640
+""")["opacity_audit"]
+        self.assertEqual(r["status"], "unavailable")
+
 if __name__ == "__main__":
     unittest.main()

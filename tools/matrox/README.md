@@ -1642,3 +1642,10 @@ msiInit. Internal Z-plane triangulation and synthetic ShadowOnce blending
 are not counted as game requests. Values 101–255 are retained rather than
 clamped by the audit. This is diagnostic only: no draw decision, opacity,
 shadow heuristic, dither or filtering behavior changes.
+
+The existing offline runtime-log analyzer reports the latest opacity snapshot
+in its JSON output as `opacity_audit`. Old logs without this diagnostic are
+unavailable, not opaque-only. Truncated blocks, invalid/duplicate bins,
+saturation, and mismatched normal-exit totals (single init only) are explicitly
+classified rather than silently accepted. Its synthetic tests run in the
+existing runtime-log CI step. No change to rendering or clean-exit criteria.
