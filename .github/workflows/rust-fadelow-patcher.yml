@@ -92,6 +92,15 @@ jobs:
           python -m py_compile tools/matrox/analyze_final_texel_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'F12 final texel analyzer syntax failed' }
 
+      - name: Test Matrox seventh F12 pre-light and exact palette index audit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_source_audit_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 pre-light source audit tests failed' }
+          python -m py_compile tools/matrox/analyze_source_audit_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 pre-light source audit syntax failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
