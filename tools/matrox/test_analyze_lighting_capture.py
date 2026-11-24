@@ -89,6 +89,74 @@ class LightingInputTests(unittest.TestCase):
             self.assertEqual(result['top_final_black_8bpp_source_indices'][0],
                              {'source_index':42,'pixels':1})
 
+    def test_official_msi95_sdk_modulation_endpoint_scaling(self):
+        """Vendor msitutor's RGB 0 and 255 vertex settings, no asset files."""
+        # In MSI95's original TexturingTypes() demonstration, mr/mg/mb
+        # values are 0 and 255, not normalized 0 and 1.
+        # 255 -> identity; 0 -> zero. Green-only tint preserves green.
+        samples=(0x0000,0x0001,0x001f,0x07e0,0xf800,0xffff,0x1234)
+        for sample in samples:
+            self.assertEqual(undithered_color(sample,255,255,255),sample)
+            self.assertEqual(undithered_color(sample,0,0,0),0)
+            for y in range(4):
+                for x in range(4):
+                    self.assertEqual(
+                        ordered_color(sample,255,255,255,x,y),sample)
+                    self.assertEqual(
+                        ordered_color(sample,0,0,0,x,y),0)
+        self.assertEqual(undithered_color(0xffff,0,255,0),0x07e0)
+        self.assertEqual(undithered_color(0xffff,255,0,0),0xf800)
+        self.assertEqual(undithered_color(0xffff,0,0,255),0x001f)
+        self.assertEqual(undithered_color(0xffff,1,1,1),0)
+        # Modulation never creates an absent channel.
+        for rank in range(16):
+            x,y=rank%4,rank//4
+            out=ordered_color(0x07e0,255,100,255,x,y)
+            self.assertEqual(out&0xf81f,0)
+
+    def test_sdk_colored_modulation_in_full_f12_fixture(self):
+        """Exercise native capture checks with independent RGB modifiers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            frame=[0xffff]*24;coverage=[5]*24
+            source=[0]*24;audit=[0]*24;nodither=[0]*24
+            lighting={}
+            tests=(
+                (0,100,0xffff,0,255,0),
+                (1,101,0xffff,255,0,0),
+                (2,102,0xffff,0,0,255),
+                (3,103,0xffff,255,255,255),
+            )
+            for pixel,index,sample,mr,mg,mb in tests:
+                output=ordered_color(sample,mr,mg,mb,pixel,0)
+                frame[pixel]=output
+                coverage[pixel]=2 if output==0 else 1
+                source[pixel]=4 if output==0 else 5
+                audit[pixel]=0x4000|0x0200|0x0400|index
+                nodither[pixel]=undithered_color(sample,mr,mg,mb)
+                lighting[pixel]=(sample,mr,mg,mb)
+            result=analyze(fixture(p,frame,coverage,source,audit,
+                                   nodither,lighting))
+            self.assertEqual(result['counts']['final_modulated_textured_pixels'],4)
+            self.assertEqual(result['counts']['modulated_nonuniform_rgb_coefficients'],3)
+            self.assertEqual(result['counts']['modulated_equal_rgb_coefficients'],1)
+            self.assertEqual(result['counts']['modulated_final_black'],0)
+
+    def test_ordered_bayer_quantization_bound_all_16_ranks(self):
+        """For each channel, ordered dither is either floor or ceil."""
+        for sample in (0,1,0x001f,0x07e0,0xf800,0xffff,0xabcdef&0xffff):
+            for mr,mg,mb in ((0,0,0),(1,1,1),(127,193,87),(255,255,255)):
+                c=((sample>>11)&31,(sample>>5)&63,sample&31)
+                m=(mr,mg,mb)
+                for y in range(4):
+                    for x in range(4):
+                        packed=ordered_color(sample,mr,mg,mb,x,y)
+                        rgb=((packed>>11)&31,(packed>>5)&63,packed&31)
+                        for ch,mod,actual in zip(c,m,rgb):
+                            low=(ch*mod)//255
+                            high=low+int((ch*mod)%255!=0)
+                            self.assertIn(actual,(low,high))
+
     def test_empty_capture(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=analyze(fixture(Path(tmp)))
