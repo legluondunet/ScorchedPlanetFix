@@ -1,7 +1,7 @@
 name: Matrox Vulkan presentation prototype
 on:
-  push:
-    branches: [feature/matrox-vulkan-presentation]
+  pull_request:
+    branches: [diagnostics/matrox-f12-lighting-input-20261124]
     paths:
       - 'tools/matrox/vulkan_probe.c'
       - '.github/workflows/matrox-vulkan-prototype.yml'
