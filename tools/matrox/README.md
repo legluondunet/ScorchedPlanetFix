@@ -1649,3 +1649,33 @@ unavailable, not opaque-only. Truncated blocks, invalid/duplicate bins,
 saturation, and mismatched normal-exit totals (single init only) are explicitly
 classified rather than silently accepted. Its synthetic tests run in the
 existing runtime-log CI step. No change to rendering or clean-exit criteria.
+
+
+## Standalone synthetic MSI95 lighting comparison probe
+
+`lighting_probe.c` is independent of Scorched Planet: it dynamically loads
+only a local `msi95.dll`, uploads a synthetic 64x64 indexed texture and
+palette through documented MSI95 texture heaps, renders a single 640x400
+frame, and reads the RGB565 back buffer via SDK direct access
+(`msiSetParameters(NULL)`). It creates `msi95_lighting_probe.bmp` without
+overwriting an existing file. No game data or proprietary DLL is included.
+The freestanding x86 executable is linked with legacy Win32 imports and
+subsystem version 4.0; actual Windows 95/98 compatibility remains untested.
+
+Rows 0–7 use dithering disabled; rows 8–15 enable it. Source colors are
+FFFF, 8410, 4208, 0841, F800, 07E0, 001F, 7BEF in both groups. Columns
+use coefficients 0, .25, .5, 1, 2, 3, 4, 7, 8, 15, 16, 31, 63, 127, 254, 255.
+Cell origin (16+38*column, 8+22*row), size 32x18. Two white-texture
+Gouraud ramps (x=16..623, y=362..373 / 378..389) vary from 0 to 255.
+All opacity requests are 100; transparency and depth testing are disabled.
+
+Build: `powershell -File tools/matrox/build-lighting-probe.ps1`.
+CI builds and tests against the software DLL with modulation/dither enabled
+and publishes a separate artifact, including its reference BMP. It does not
+change the launcher or its defaults. For original driver comparison, use a
+separate directory inside a suitable Matrox VM/PC with its own legitimate
+MSI95 DLL; run the probe once, keep the generated BMP. Do not replace the
+system or game driver. Exit codes: 1 DLL load, 2 exports, 3 init, 4 start,
+5 heap, 6 render/state, 7 direct-readback/format, 8 restore/end, 9 file,
+10 cleanup. A failure is not evidence of arithmetic mismatch. Driver/hardware
+compatibility, original palette conversion and raster phase remain to verify.

@@ -179,6 +179,43 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
 
+      - name: Build and validate standalone MSI95 synthetic lighting probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/matrox/build-lighting-probe.ps1
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-lighting-probe'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $folder
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' $folder
+          $env:MATROX_MSI_MODULATE = '1'
+          $env:MATROX_MSI_DITHER = '1'
+          $env:MATROX_MSI_FPS_LIMIT = '0'
+          $env:MATROX_MSI_BORDERLESS = '0'
+          $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          Push-Location $folder
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 0) { throw "Synthetic lighting probe failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR')) {
+              Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
+            }
+          }
+          python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_probe.bmp')
+          if ($LASTEXITCODE -ne 0) { throw 'Lighting probe pixel validation failed' }
+          Copy-Item (Join-Path $folder 'msi95_lighting_probe.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
+
+      - name: Upload standalone Matrox lighting comparison probe
+        uses: actions/upload-artifact@v6
+        with:
+          name: MatroxLightingProbe-x86
+          path: |
+            target/matrox-lighting-probe/MatroxLightingProbe.exe
+            target/matrox-lighting-probe/reference-software.bmp
+          if-no-files-found: error
+
       - name: Smoke test real x86 Matrox palette-index keying
         shell: pwsh
         run: |
