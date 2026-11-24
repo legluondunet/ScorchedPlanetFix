@@ -216,7 +216,15 @@ static int nearest_boundary_match(double *w,double x,double y,unsigned f,uint16_
     }
     return 0;
 }
+static unsigned logical_pixel(unsigned pixel,unsigned logical,unsigned target){
+    return (2u*pixel+1u)*logical/(2u*target);
+}
 static void oracle_selftest(void){
+    NEED(logical_pixel(706,640,1440)==314);
+    NEED(logical_pixel(407,400,1080)==150);
+    NEED(logical_pixel(13,400,1080)==5);
+    for(unsigned i=0;i<640;i++)NEED(logical_pixel(i,640,640)==i);
+    for(unsigned i=0;i<400;i++)NEED(logical_pixel(i,400,400)==i);
     double w[3],interior_weights[3];
     double x=1083.5*640/1440,y=295.5*400/1080;
     weights(x,y,w);weights(200.5,150.5,interior_weights);
@@ -225,6 +233,10 @@ static void oracle_selftest(void){
     NEED(!nearest_boundary_match(w,x,y,0,0x07e0));
     NEED(!nearest_boundary_match(w,x,y,8,0xf800));
     NEED(!nearest_boundary_match(interior_weights,200.5,150.5,0,0xdead));
+    x=706.5*640/1440;y=407.5*400/1080;weights(x,y,w);
+    NEED(refpixel(w,314,150,63)==0x554d);
+    NEED(refpixel_offset(w,313,150,63,0,-0.000002)==0x4d4b);
+    NEED(refpixel_offset(w,314,150,63,0,-0.000002)==0x4d4c);
     puts("VULKAN_3D_ORACLE_SELFTEST_PASS");
 }
 static int absdiff(unsigned a,unsigned b){return a>b?(int)(a-b):(int)(b-a);}
@@ -233,6 +245,7 @@ static int channel_error(uint16_t a,uint16_t b){
     return r>g?(r>bl?r:bl):(g>bl?g:bl);
 }
 static int test(uint32_t w,uint32_t h,unsigned flags){
+    NEED(w>0&&h>0&&w<=16384&&h<=16384);
     Image out=image(w,h,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
@@ -254,8 +267,9 @@ static int test(uint32_t w,uint32_t h,unsigned flags){
     for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h,b[3];weights(lx,ly,b);
         double mn=fmin(b[0],fmin(b[1],b[2]));uint16_t actual=p[(size_t)y*w+x];
+        unsigned dx=logical_pixel(x,640,w),dy=logical_pixel(y,400,h);
         /* exclude a thin geometric edge band from strict interior checks */
-        if(mn>.002){interior++;uint16_t ref=refpixel(b,lx,ly,flags);int e=channel_error(actual,ref);if(!e)exact++;else if(e==1)one++;else if(nearest_boundary_match(b,lx,ly,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
+        if(mn>.002){interior++;uint16_t ref=refpixel(b,dx,dy,flags);int e=channel_error(actual,ref);if(!e)exact++;else if(e==1)one++;else if(nearest_boundary_match(b,dx,dy,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
         else if(mn<-.002){outside++;if(actual!=0xdead)coverage++;}
         else edges++;
     }
@@ -269,7 +283,7 @@ int main(void){
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v2 / embedded opaque world shaders");
+    puts("MatroxVulkan3DProbe x86 v3 / embedded opaque world shaders");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();

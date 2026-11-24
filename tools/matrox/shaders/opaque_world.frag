@@ -53,8 +53,12 @@ void main(){
         uvec3 m=uvec3(clamp(modifier,0.0,255.0)+0.5);
         uvec3 n=unpack565(c)*m;
         if((draw.flags&32u)!=0u){
-            // Keep the 4x4 pattern at native logical pixel coordinates.
-            uvec2 p=uvec2(gl_FragCoord.xy*draw.logicalExtent/draw.targetExtent);
+            // Map the exact center of each destination pixel to a logical
+            // pixel using integer arithmetic. Float division can round just
+            // below an integer boundary on hardware (e.g. x=706 -> 314).
+            // Host bounds both extents to 16384, so the product fits uint32.
+            uvec2 pixel=uvec2(gl_FragCoord.xy);
+            uvec2 p=((2u*pixel+1u)*uvec2(draw.logicalExtent))/(2u*uvec2(draw.targetExtent));
             uint threshold=((2u*bayer[(p.y&3u)*4u+(p.x&3u)]+1u)*255u)/32u;
             uvec3 q=n/255u;
             uvec3 r=n%255u;
