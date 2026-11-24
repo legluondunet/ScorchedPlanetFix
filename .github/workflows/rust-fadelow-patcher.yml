@@ -193,13 +193,14 @@ jobs:
           $env:MATROX_MSI_FPS_LIMIT = '0'
           $env:MATROX_MSI_BORDERLESS = '0'
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          $env:MATROX_MSI_RGB888_LIGHTING = '0'
           Push-Location $folder
           try {
             & '.\MatroxLightingProbe.exe'
             if ($LASTEXITCODE -ne 0) { throw "Synthetic lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR')) {
+            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
@@ -224,6 +225,33 @@ jobs:
           Copy-Item (Join-Path $folder 'msi95_lighting_flag.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
           $report = Get-Content (Join-Path $folder 'msi95_lighting_probe.txt') -Raw
           if (!$report.Contains('msiSetTextureBlend=absent')) { throw 'Unexpected standalone software DLL export state' }
+
+      - name: Verify experimental RGB888 lighting in actual MSI95 DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-rgb888-lighting'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $folder
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' $folder
+          $env:MATROX_MSI_MODULATE = '1'
+          $env:MATROX_MSI_DITHER = '1'
+          $env:MATROX_MSI_RGB888_LIGHTING = '1'
+          $env:MATROX_MSI_FPS_LIMIT = '0'
+          $env:MATROX_MSI_BORDERLESS = '0'
+          $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          Push-Location $folder
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR')) {
+              Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
+            }
+          }
+          python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software --rgb888
+          if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
 
       - name: Upload standalone Matrox lighting comparison probe
         uses: actions/upload-artifact@v6

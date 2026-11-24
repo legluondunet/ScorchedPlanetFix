@@ -21,9 +21,11 @@ pub const INI_EXAMPLE: &str = "\
 FPSLimit=60\r\n\
 \r\n\
 [Matrox]\r\n\
-; Experimental ordered RGB565 dithering: 0=off (default), 1=on\r\n\
+; Ordered dithering: 0=off (default), 1=allow game-requested dither\r\n\
 ; Ignored when using the 3dfx/GameFrame edition\r\n\
 Dither=0\r\n\
+; Experimental lighting arithmetic: 0=legacy RGB565 /255, 1=RGB888 /256 with 2x2 dither\r\n\
+RGB888Lighting=0\r\n\
 ; Render index241 black ONLY for fingerprint-verified original Matrox icon01 atlas\r\n\
 ; 0=unchanged/reference (default), 1=experimental title-icon fidelity A/B\r\n\
 Icon01Opaque=0\r\n\

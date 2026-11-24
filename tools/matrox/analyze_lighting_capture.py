@@ -4,7 +4,7 @@
 
 Ninth capture layer _lighting.bin (no copyrighted game assets) is a lossless
 stream of five bytes per pixel with little-endian header "M95LIGHT", width u32,
-height u32, record bytes u32=5, reserved u32=0. Each record is:
+height u32, record bytes u32=5, lighting model u32 (0=legacy,1=RGB888). Each record is:
 prelight_rgb565 u16, applied mr u8, mg u8, mb u8.
 The seventh _sourceaudit.bmp is authoritative for final writer and flags;
 non-textured/HUD/flat writes erase their previous lighting records.
@@ -51,18 +51,26 @@ def undithered_color(sample: int, mr: int, mg: int, mb: int) -> int:
     return (r<<11)|(g<<5)|b
 
 
-def parse_lighting(path: Path, width: int, height: int) -> memoryview:
+def rgb888_color(sample: int, mr: int, mg: int, mb: int, x: int, y: int, dither: bool) -> int:
+    rank=((0,3),(2,1))[y&1][x&1] if dither else 0
+    r=min(31,((((sample>>11)&31)*8*mr)//256+2*rank)//8)
+    g=min(63,((((sample>>5)&63)*4*mg)//256+rank)//4)
+    b=min(31,((sample&31)*8*mb//256+2*rank)//8)
+    return (r<<11)|(g<<5)|b
+
+
+def parse_lighting(path: Path, width: int, height: int) -> tuple[memoryview,int]:
     raw=path.read_bytes()
     if len(raw)<HEADER.size:
         raise ValueError('lighting layer is shorter than its 24-byte header')
-    magic,w,h,record_bytes,reserved=HEADER.unpack_from(raw)
-    if magic!=MAGIC or record_bytes!=RECORD_SIZE or reserved!=0:
+    magic,w,h,record_bytes,model=HEADER.unpack_from(raw)
+    if magic!=MAGIC or record_bytes!=RECORD_SIZE or model not in (0,1):
         raise ValueError('invalid M95LIGHT signature/version/record length')
     if (w,h)!=(width,height):
         raise ValueError('lighting layer dimensions do not match RGB565 frame')
     if len(raw)!=HEADER.size+width*height*RECORD_SIZE:
         raise ValueError('lighting layer truncated or contains trailing bytes')
-    return memoryview(raw)[HEADER.size:]
+    return memoryview(raw)[HEADER.size:],model
 
 
 def analyze(prefix: Path, roi: str | None = None,
@@ -81,7 +89,7 @@ def analyze(prefix: Path, roi: str | None = None,
     path=prefix.parent/f'{prefix.name}_lighting.bin'
     if not path.is_file():
         raise ValueError('F12 ninth _lighting.bin layer absent')
-    raw=parse_lighting(path,width,height)
+    raw,model=parse_lighting(path,width,height)
     bounds=parse_roi(roi,width,height) if roi else (0,0,width,height)
     x0,y0,x1,y1=bounds
     total=0;modulated=0;dithered=0;final_black=0
@@ -123,6 +131,9 @@ def analyze(prefix: Path, roi: str | None = None,
                 modulated+=1
                 if use_dither:
                     dithered+=1
+                if model:
+                    computed=rgb888_color(sample,mr,mg,mb,x,y,use_dither)
+                elif use_dither:
                     computed=ordered_color(sample,mr,mg,mb,x,y)
                 else:
                     computed=undithered_color(sample,mr,mg,mb)
@@ -130,7 +141,7 @@ def analyze(prefix: Path, roi: str | None = None,
                 issue(x,y,'actual framebuffer differs from native modulation formula',
                       computed,frame[p])
             if use_dither and not alpha:
-                expected=undithered_color(sample,mr,mg,mb)
+                expected=(rgb888_color(sample,mr,mg,mb,x,y,False) if model else undithered_color(sample,mr,mg,mb))
                 if nodither[p]!=expected:
                     issue(x,y,'undithered F12 reference differs from native formula',
                           expected,nodither[p])
@@ -181,6 +192,7 @@ def analyze(prefix: Path, roi: str | None = None,
         })
     return {
         'capture':str(prefix),'source_size':[width,height],'roi':list(bounds),
+        'lighting_model':'rgb888_div256' if model else 'legacy_rgb565_div255',
         'counts':{
             'final_textured_with_light_samples':total,
             'final_modulated_textured_pixels':modulated,
@@ -204,7 +216,7 @@ def analyze(prefix: Path, roi: str | None = None,
         'interpretation':(
             'Exact RGB565 prelight source and actual per-channel 0..255 Gouraud '
             'modifiers are preserved for the last successful MSI world draw. '
-            'The analyzer verifies native modulation and Bayer rounding when '
+            'The analyzer verifies the recorded lighting model and ordered quantization when '
             'the last write was not alpha-blended. This proves internal '
             'software arithmetic consistency, NOT original Matrox Mystique '
             'hardware parity, gamma correctness, or original driver color.'

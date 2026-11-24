@@ -367,7 +367,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     let controlled=[
         "MATROX_MSI_BORDERLESS","MATROX_MSI_PERSPECTIVE",
         "MATROX_MSI_INDEXED_KEY","MATROX_MSI_ICON01_OPAQUE","MATROX_MSI_WORLD_BILINEAR","MATROX_MSI_SHADOW_ONCE",
-        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
+        "MATROX_MSI_MODULATE","MATROX_MSI_DITHER","MATROX_MSI_RGB888_LIGHTING","MATROX_MSI_FPS_LIMIT","MATROX_MSI_LOG",
         "MATROX_MSI_SHADOW_BLEND","MATROX_MSI_SHADOW_UNDERLAY",
         "MATROX_MSI_WORLD_BLUE_KEY",
     ];
@@ -379,6 +379,7 @@ fn configure(command: &mut Command,root:&Path,force_first_log:bool)->Result<(),S
     }
     command.env("MATROX_MSI_FPS_LIMIT",configured.fps_limit.to_string());
     command.env("MATROX_MSI_DITHER",if configured.dither{"1"}else{"0"});
+    command.env("MATROX_MSI_RGB888_LIGHTING",if configured.rgb888_lighting{"1"}else{"0"});
     command.env("MATROX_MSI_ICON01_OPAQUE",if configured.icon01_opaque{"1"}else{"0"});
     command.env("MATROX_MSI_WORLD_BILINEAR",if configured.world_bilinear{"1"}else{"0"});
     command.env("MATROX_MSI_LOG",if configured.log || force_first_log{"1"}else{"0"});

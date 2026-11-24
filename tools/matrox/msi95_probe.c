@@ -268,6 +268,7 @@ static unsigned g_native_color_protect=0,g_native_state_details=0;
  * v0.34 ordered RGB565 quantization experiment, independently selectable;
  * it affects ONLY opt-in modulated 3D textures with Dither set in MSI95. */
 static int g_msi_modulate_enabled=0,g_msi_dither_enabled=0;
+static int g_rgb888_lighting_enabled=0;
 static unsigned g_modulate_triangles=0,g_modulate_pixels=0,g_modulate_varying=0;
 static unsigned g_dither_candidates=0,g_dither_changed=0,g_dither_bypassed=0;
 static unsigned g_fx_vertex_color_logs=0,g_fx_param_state_logs=0;
@@ -1852,7 +1853,7 @@ static void capture_undithered_reference(const char*filename){
 
 /* The ninth F12 diagnostic is a versioned BINARY data map, not a bitmap.
  * Header (24 bytes): ASCII "M95LIGHT" + little-endian u32 width,height,
- * record_bytes=5,reserved=0. Each pixel is [RGB565 sample LE16,
+ * record_bytes=5, lighting_model=0 (legacy) or 1 (experimental RGB888). Each pixel is [RGB565 sample LE16,
  * modifier_r8,modifier_g8,modifier_b8]. sourceaudit marks validity.
  * It never alters renderer pixels, keys, fog, shading or texture content. */
 static void capture_final_light_inputs(const char*filename){
@@ -1879,6 +1880,7 @@ static void capture_final_light_inputs(const char*filename){
     header[4]='I';header[5]='G';header[6]='H';header[7]='T';
     put32le(header+8u,width);put32le(header+12u,height);
     put32le(header+16u,5u);
+    put32le(header+20u,(unsigned)g_rgb888_lighting_enabled);
     const unsigned bytes=g_ownership_bytes*5u;
     DWORD written=0;
     BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
@@ -2015,8 +2017,14 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
         "MSI_MODULATE disabled (v0.32 reference textured colors)");
     {char setting[8];DWORD n=GetEnvironmentVariableA("MATROX_MSI_DITHER",setting,sizeof(setting));
       g_msi_dither_enabled=(n==1u && setting[0]=='1');}
-    logtext(g_msi_dither_enabled?"MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)":
-            "MSI_DITHER disabled (v0.33 modulation quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_RGB888_LIGHTING",setting,sizeof(setting));
+      g_rgb888_lighting_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_rgb888_lighting_enabled?"MSI_LIGHTING_MODEL RGB888_DIV256_EXPERIMENTAL":
+            "MSI_LIGHTING_MODEL LEGACY_RGB565_DIV255");
+    logtext(g_msi_dither_enabled?(g_rgb888_lighting_enabled?
+            "MSI_DITHER enabled (experimental 2x2 RGB888 quantization; guest Dither gate unchanged)":
+            "MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)"):
+            "MSI_DITHER disabled (no ordered quantization)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
@@ -2746,6 +2754,21 @@ static unsigned rgb565_modulate_ordered(unsigned color,unsigned mr,unsigned mg,
     unsigned b=modulate_channel_ordered(color&31u,mb,31u,threshold);
     return (r<<11)|(g<<5)|b;
 }
+/* Independently fitted from the owner's original MSI95 1.4 / 86Box
+ * synthetic captures: shift-expand channels to eight bits, multiply and
+ * truncate /256, then optionally add the measured 2x2 quantization offsets.
+ * This is NOT a claim of physical hardware parity. Keep existing coefficient
+ * interpolation, keying, alpha and the guest Dither gate unchanged. */
+static unsigned rgb888_modulate_565(unsigned color,unsigned mr,unsigned mg,
+                                    unsigned mb,unsigned x,unsigned y,int dither){
+    static const BYTE ranks[4]={0,3,2,1};
+    unsigned rank=dither?(unsigned)ranks[((y&1u)<<1u)|(x&1u)]:0u;
+    unsigned r=((((((color>>11)&31u)<<3u)*mr)>>8u)+2u*rank)>>3u;
+    unsigned g=((((((color>>5)&63u)<<2u)*mg)>>8u)+rank)>>2u;
+    unsigned b=(((((color&31u)<<3u)*mb)>>8u)+2u*rank)>>3u;
+    if(r>31u)r=31u;if(g>63u)g=63u;if(b>31u)b=31u;
+    return (r<<11u)|(g<<5u)|b;
+}
 static float cross2(float ax,float ay,float bx,float by){return ax*by-ay*bx;}
 /* Same source texel decoder as the nearest path, used only by optional
  * opaque world bilinear after original cache-residency checks. */
@@ -3364,11 +3387,14 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     unsigned rr=(((color>>11)&31u)*mr+127u)/255u;
                     unsigned gg=(((color>>5)&63u)*mg+127u)/255u;
                     unsigned bb=((color&31u)*mb+127u)/255u;
-                    unsigned reference=(rr<<11)|(gg<<5)|bb;
+                    unsigned reference=g_rgb888_lighting_enabled?
+                        rgb888_modulate_565(color,mr,mg,mb,0u,0u,0):((rr<<11)|(gg<<5)|bb);
                     if(g_capture_ownership && g_undithered_reference)
                         undithered_color=reference;
                     if(g_msi_dither_enabled && g_state.msiColor.Dither){
-                        color=rgb565_modulate_ordered(color,mr,mg,mb,(unsigned)x,(unsigned)y);
+                        color=g_rgb888_lighting_enabled?
+                            rgb888_modulate_565(color,mr,mg,mb,(unsigned)x,(unsigned)y,1):
+                            rgb565_modulate_ordered(color,mr,mg,mb,(unsigned)x,(unsigned)y);
                         g_dither_candidates++;
                         if(color!=reference)g_dither_changed++;
                     }else{

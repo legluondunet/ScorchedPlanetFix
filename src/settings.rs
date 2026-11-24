@@ -10,7 +10,7 @@ const MAX_INI_SIZE:usize=256*1024;
 const OPTION_HELP_MARKER: &[u8] = b"; ScorchedPlanetFix option descriptions";
 const OPTION_HELP: &[u8] = b"; ScorchedPlanetFix option descriptions\r\n\
 ; [Graphics] FPSLimit: 0=unlimited, 1..240=maximum FPS for both renderers\r\n\
-; [Matrox] Dither: 0=off, 1=experimental RGB565 dithering (Matrox only)\r\n\
+; [Matrox] Dither: 0=off, 1=ordered dithering when requested by the game (Matrox only)\r\n\
 ; [Matrox] Icon01Opaque: 0=unchanged, 1=experimental original icon01 black background (signature-locked)\r\n\
 ; [Matrox] WorldBilinear: 0=1996 original nearest, 1=optional smooth opaque 3D world textures only\r\n\
 ; [Cheats] UnlimitedFuel: reserved, not supported yet; default=0\r\n\
@@ -26,6 +26,7 @@ pub const MAX_FPS:u32=240;
 pub struct GameSettings{
     pub fps_limit:u32,
     pub dither:bool,
+    pub rgb888_lighting:bool,
     pub icon01_opaque:bool,
     pub world_bilinear:bool,
     pub unlimited_fuel:bool,
@@ -34,12 +35,12 @@ pub struct GameSettings{
     pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
-    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,unlimited_fuel:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,rgb888_lighting:bool,unlimited_fuel:bool,
     aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
@@ -114,6 +115,10 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.dither{return Err("INI: duplicate [matrox] Dither".into());}
                 seen.dither=true;result.dither=switch(value,"[matrox] Dither")?;
             },
+            3 if name.eq_ignore_ascii_case(b"RGB888Lighting")=>{
+                if seen.rgb888_lighting{return Err("INI: duplicate [Matrox] RGB888Lighting".into());}
+                seen.rgb888_lighting=true;result.rgb888_lighting=switch(value,"[Matrox] RGB888Lighting")?;
+            },
             3 if name.eq_ignore_ascii_case(b"Icon01Opaque")=>{
                 if seen.icon01_opaque{return Err("INI: duplicate [Matrox] Icon01Opaque".into());}
                 seen.icon01_opaque=true;result.icon01_opaque=switch(value,"[Matrox] Icon01Opaque")?;
@@ -165,6 +170,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let (before,seen)=parse(original)?;
     let add_fps=!seen.graphics_fps;
     let add_dither=matrox&&!seen.dither;
+    let add_rgb888=matrox&&!seen.rgb888_lighting;
     let add_icon01_opaque=matrox&&!seen.icon01_opaque;
     let add_world_bilinear=matrox&&!seen.world_bilinear;
     let add_fuel=!seen.unlimited_fuel;
@@ -173,13 +179,14 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_log=!seen.log;
     let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
         .any(|slice|slice==OPTION_HELP_MARKER);
-    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_icon01_opaque&&!add_world_bilinear&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_rgb888&&!add_icon01_opaque&&!add_world_bilinear&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
     if add_descriptions {out.extend_from_slice(OPTION_HELP);}
     let mut current=0u8;
     let mut did_fps=false;
     let mut did_dither=false;
+    let mut did_rgb888=false;
     let mut did_icon01_opaque=false;
     let mut did_world_bilinear=false;
     let mut did_fuel=false;
@@ -189,6 +196,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut finish=|old:u8,out:&mut Vec<u8>|{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
+        if old==3&&add_rgb888&&!did_rgb888{append(out,b"; Experimental RGB888 /256 lighting; 0=legacy, 1=experimental");append(out,b"RGB888Lighting=0");did_rgb888=true;}
         if old==3&&add_icon01_opaque&&!did_icon01_opaque{
             append(out,b"; Original Matrox title atlas icon01 only; experimental, default off");
             append(out,b"Icon01Opaque=0");did_icon01_opaque=true;
@@ -223,6 +231,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if add_fps&&!did_fps{append(&mut out,fpsline.as_bytes());}
     if matrox&&!seen.matrox{append(&mut out,b"[matrox]");}
     if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
+    if add_rgb888&&!did_rgb888{append(&mut out,b"; Experimental RGB888 /256 lighting; 0=legacy, 1=experimental");append(&mut out,b"RGB888Lighting=0");}
     if add_icon01_opaque&&!did_icon01_opaque{
         append(&mut out,b"; Original Matrox title atlas icon01 only; experimental, default off");
         append(&mut out,b"Icon01Opaque=0");
@@ -297,11 +306,16 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
+            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=60\nfpslimit=30").is_err());
+        assert!(parse(b"[Matrox]\nRGB888Lighting=2").is_err());
+        assert!(parse(b"[Matrox]\nRGB888Lighting=1\nrgb888lighting=0").is_err());
+        let experimental=parse(b"[Matrox]\nRGB888Lighting=1\nDither=0").unwrap().0;
+        assert!(experimental.rgb888_lighting && !experimental.dither);
+        assert!(!parse(b"").unwrap().0.rgb888_lighting);
         assert!(parse(b"[Matrox]\nWorldBilinear=2").is_err());
         assert!(parse(b"[Matrox]\nWorldBilinear=1\nworldbilinear=0").is_err());
         assert!(parse(b"[Matrox]\nWorldBilinear=1").unwrap().0.world_bilinear);
@@ -336,10 +350,11 @@ mod tests{
         assert!(out.windows(b"FATAL=0".len()).any(|v|v==b"FATAL=0"));
         assert!(out.windows(b"Icon01Opaque=0".len()).any(|v|v==b"Icon01Opaque=0"));
         assert!(out.windows(b"WorldBilinear=0".len()).any(|v|v==b"WorldBilinear=0"));
+        assert!(out.windows(b"RGB888Lighting=0".len()).any(|v|v==b"RGB888Lighting=0"));
         assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
         assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -353,6 +368,7 @@ mod tests{
         assert!(s.contains("FPSLimit=60"));
         assert!(s.contains("[Matrox]\r\n"));
         assert!(s.contains("Dither=0"));
+        assert!(s.contains("RGB888Lighting=0"));
         assert!(s.contains("Icon01Opaque=0"));
         assert!(s.contains("WorldBilinear=0"));
         assert!(s.contains("[Cheats]\r\n"));

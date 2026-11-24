@@ -8,7 +8,7 @@ from pathlib import Path
 
 from test_analyze_undithered_capture import make_case
 from analyze_lighting_capture import (
-    analyze, ordered_color, undithered_color, parse_lighting, MAGIC, HEADER,
+    analyze, ordered_color, undithered_color, rgb888_color, parse_lighting, MAGIC, HEADER,
 )
 
 
@@ -157,6 +157,29 @@ class LightingInputTests(unittest.TestCase):
                             high=low+int((ch*mod)%255!=0)
                             self.assertIn(actual,(low,high))
 
+    def test_rgb888_model_is_self_describing_and_legacy_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            frame=[0xffff]*24;cov=[5]*24;source=[0]*24;audit=[0]*24;nd=[0]*24;light={}
+            # RGB888 /256 has lower undithered white endpoint than legacy.
+            self.assertEqual(rgb888_color(0xffff,255,255,255,0,0,False),0xf7de)
+            self.assertEqual(rgb888_color(0xffff,255,255,255,1,0,True),0xffff)
+            for pos,coeff,dither in ((0,(255,255,255),False),(1,(255,255,255),True),(2,(0,0,0),True),(3,(127,193,87),True)):
+                out=rgb888_color(0xffff,*coeff,pos,0,dither)
+                frame[pos]=out;cov[pos]=1 if out else 2;source[pos]=5 if out else 4
+                audit[pos]=0x4200|42|(0x0400 if dither else 0)
+                nd[pos]=rgb888_color(0xffff,*coeff,pos,0,False) if dither else 0
+                light[pos]=(0xffff,*coeff)
+            prefix=fixture(p,frame,cov,source,audit,nd,light,header=HEADER.pack(MAGIC,6,4,5,1))
+            result=analyze(prefix)
+            self.assertEqual(result["lighting_model"],"rgb888_div256")
+            self.assertEqual(result["counts"]["final_modulated_textured_pixels"],4)
+            self.assertEqual(result["counts"]["modulated_final_black"],1)
+            # Same pixels with legacy header must be rejected.
+            (p/"sample_lighting.bin").write_bytes(HEADER.pack(MAGIC,6,4,5,0)+(p/"sample_lighting.bin").read_bytes()[24:])
+            with self.assertRaises(ValueError):
+                analyze(prefix)
+
     def test_empty_capture(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=analyze(fixture(Path(tmp)))
@@ -169,7 +192,7 @@ class LightingInputTests(unittest.TestCase):
             for header in (HEADER.pack(b'WRONGLIT',6,4,5,0),
                            HEADER.pack(MAGIC,8,3,5,0),
                            HEADER.pack(MAGIC,6,4,6,0),
-                           HEADER.pack(MAGIC,6,4,5,1)):
+                           HEADER.pack(MAGIC,6,4,5,2)):
                 prefix=fixture(p,header=header)
                 with self.assertRaises(ValueError):
                     analyze(prefix)
