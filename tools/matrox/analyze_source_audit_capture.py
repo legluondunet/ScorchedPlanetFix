@@ -170,8 +170,7 @@ def analyze(prefix: Path, roi: str | None = None,
             'black_final':dark,
             'black_rate_percent':round(100*dark/count,3) if count else None
         })
-    if sum(bayer_dithered)!=table['final_black_dither_enabled']+sum(
-            bayer_dithered)-sum(bayer_black):
+    if sum(bayer_black)!=table['final_black_dither_enabled']:
         raise ValueError('Bayer black numerator diverges from dithered finals')
     region_args=(width,bounds,min_region_pixels,max_regions)
     return {
