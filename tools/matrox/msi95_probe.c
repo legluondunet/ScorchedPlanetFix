@@ -222,6 +222,11 @@ static WORD *g_final_source_audit=NULL;
  * The _sourceaudit.bmp bit10 identifies where zero is a valid reference.
  * Never read this array when rasterizing or presenting actual game pixels. */
 static WORD *g_undithered_reference=NULL;
+/* F12-only exact five-byte pre-modulation RGB565 sample + 3x8-bit vertex
+ * lighting coefficient of the last successful MSI world texture write.
+ * Never read by rasterization. The seventh _sourceaudit marks valid pixels.
+ * Non-modulated world textures use neutral modifiers 255,255,255. */
+static BYTE *g_final_light_inputs=NULL;
 /* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
  * value matched the hardware color key. This is not a pixel-coverage map:
  * overdraw and triangle overlap can count a texel more than once. */
@@ -1140,11 +1145,12 @@ static void clean(void){
     if(g_final_texel_source)VirtualFree(g_final_texel_source,0,MEM_RELEASE);
     if(g_final_source_audit)VirtualFree(g_final_source_audit,0,MEM_RELEASE);
     if(g_undithered_reference)VirtualFree(g_undithered_reference,0,MEM_RELEASE);
+    if(g_final_light_inputs)VirtualFree(g_final_light_inputs,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
     g_ownership=NULL;g_atlas_provenance=NULL;g_world_provenance=NULL;
     g_shadow_provenance=NULL;g_final_texel_source=NULL;g_final_source_audit=NULL;
-    g_undithered_reference=NULL;
+    g_undithered_reference=NULL;g_final_light_inputs=NULL;
     g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
@@ -1180,7 +1186,7 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered){
+static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered,char*lighting){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
@@ -1192,6 +1198,7 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         capture_name(texel,serial,"_texel.bmp");
         capture_name(audit,serial,"_sourceaudit.bmp");
         capture_name(undithered,serial,"_nodither.bmp");
+        capture_name(lighting,serial,"_lighting.bin");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
         int atlas_exists=capture_file_present(atlas);
@@ -1200,11 +1207,12 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         int texel_exists=capture_file_present(texel);
         int audit_exists=capture_file_present(audit);
         int nodither_exists=capture_file_present(undithered);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0){
+        int lighting_exists=capture_file_present(lighting);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1817,6 +1825,60 @@ static void capture_undithered_reference(const char*filename){
     msg[q]=0;logtext(msg);
 }
 
+/* The ninth F12 diagnostic is a versioned BINARY data map, not a bitmap.
+ * Header (24 bytes): ASCII "M95LIGHT" + little-endian u32 width,height,
+ * record_bytes=5,reserved=0. Each pixel is [RGB565 sample LE16,
+ * modifier_r8,modifier_g8,modifier_b8]. sourceaudit marks validity.
+ * It never alters renderer pixels, keys, fog, shading or texture content. */
+static void capture_final_light_inputs(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_final_light_inputs||
+       !g_final_source_audit||g_info.msiColor.BytesPerPixel!=2||
+       g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){
+        logtext("LIGHTING_INPUT_CAPTURE WRITE ERROR: open failed");return;
+    }
+    BYTE header[24];zero(header,sizeof(header));
+    header[0]='M';header[1]='9';header[2]='5';header[3]='L';
+    header[4]='I';header[5]='G';header[6]='H';header[7]='T';
+    put32le(header+8u,width);put32le(header+12u,height);
+    put32le(header+16u,5u);
+    const unsigned bytes=g_ownership_bytes*5u;
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    if(ok)ok=WriteFile(h,g_final_light_inputs,bytes,&written,NULL)&&written==bytes;
+    CloseHandle(h);
+    unsigned tracked=0u,modulated=0u,black_final=0u;
+    const WORD*displayed=(const WORD*)g_color;
+    for(unsigned pos=0;pos<g_ownership_bytes;pos++){
+        unsigned meta=g_final_source_audit[pos];
+        if(!(meta&0x7000u))continue;
+        tracked++;
+        if(meta&0x0200u)modulated++;
+        if(displayed[pos]==0u)black_final++;
+    }
+    char msg[360];DWORD p=0;
+    putstr(msg,&p,ok?"LIGHTING_INPUT_CAPTURE OK file=":
+        "LIGHTING_INPUT_CAPTURE WRITE ERROR file=");
+    putstr(msg,&p,filename);
+    putstr(msg,&p," frame=");putunsigned(msg,&p,g_frames);
+    putstr(msg,&p," tracked=");putunsigned(msg,&p,tracked);
+    putstr(msg,&p," modulated=");putunsigned(msg,&p,modulated);
+    putstr(msg,&p," final_black=");putunsigned(msg,&p,black_final);
+    msg[p]=0;logtext(msg);
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
@@ -1948,6 +2010,9 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_final_texel_source=(BYTE*)alloc(g_ownership_bytes);
     g_final_source_audit=(WORD*)alloc(g_ownership_bytes*2u);
     g_undithered_reference=(WORD*)alloc(g_ownership_bytes*2u);
+    g_final_light_inputs=(BYTE*)alloc(g_ownership_bytes*5u);
+    if(!g_final_light_inputs)
+        logtext("LIGHTING_INPUT_CAPTURE disabled: optional diagnostic allocation failed");
     if(!g_undithered_reference)
         logtext("UNDITHERED_CAPTURE disabled: optional reference allocation failed");
     if(!g_final_source_audit)
@@ -2124,6 +2189,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
         if(g_final_texel_source)zero(g_final_texel_source,g_ownership_bytes);
         if(g_final_source_audit)zero(g_final_source_audit,g_ownership_bytes*2u);
         if(g_undithered_reference)zero(g_undithered_reference,g_ownership_bytes*2u);
+        if(g_final_light_inputs)zero(g_final_light_inputs,g_ownership_bytes*5u);
         zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
         zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
         g_world_index1_preview_attempts=0;
@@ -2197,8 +2263,8 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100],audit[100],nodither[100];
-        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel,audit,nodither)){
+        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100],audit[100],nodither[100],lighting[100];
+        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel,audit,nodither,lighting)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
             capture_atlas_provenance(atlas);
@@ -2207,11 +2273,13 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             capture_final_texel_source(texel);
             capture_final_source_audit(audit);
             capture_undithered_reference(nodither);
+            capture_final_light_inputs(lighting);
             {char line[320];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
              putstr(line,&n," texel=");putstr(line,&n,texel);
              putstr(line,&n," sourceaudit=");putstr(line,&n,audit);
              putstr(line,&n," nodither=");putstr(line,&n,nodither);
+             putstr(line,&n," lighting=");putstr(line,&n,lighting);
              line[n]=0;logtext(line);}
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
@@ -2938,6 +3006,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
             unsigned color=0, source_index=0, source_index_valid=0;
             unsigned undithered_color=0u;
+            unsigned used_mr=255u,used_mg=255u,used_mb=255u;
             unsigned prelight_rgb565=0u;
             if(textured){
                 float u=w0*a->u+w1*b->u+w2*c->u;
@@ -3262,6 +3331,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         mg=clamp_mod_255(w0*a->mg+w1*b->mg+w2*c->mg);
                         mb=clamp_mod_255(w0*a->mb+w1*b->mb+w2*c->mb);
                     }
+                    used_mr=mr;used_mg=mg;used_mb=mb;
                     unsigned rr=(((color>>11)&31u)*mr+127u)/255u;
                     unsigned gg=(((color>>5)&63u)*mg+127u)/255u;
                     unsigned bb=((color&31u)*mb+127u)/255u;
@@ -3356,6 +3426,18 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 }
             }
             dst[y*width+x]=(WORD)color;
+            if(g_capture_ownership && g_final_light_inputs){
+                BYTE *out=g_final_light_inputs+5u*j;
+                if(!g_zplane_draw_context && textured && g_final_source_audit){
+                    out[0]=(BYTE)prelight_rgb565;
+                    out[1]=(BYTE)(prelight_rgb565>>8u);
+                    out[2]=(BYTE)used_mr;
+                    out[3]=(BYTE)used_mg;
+                    out[4]=(BYTE)used_mb;
+                }else{
+                    out[0]=out[1]=out[2]=out[3]=out[4]=0u;
+                }
+            }
             if(g_capture_ownership && g_undithered_reference){
                 /* This does not change actual color; later writes must clear
                  * the hypothetical reference just like source attribution. */
