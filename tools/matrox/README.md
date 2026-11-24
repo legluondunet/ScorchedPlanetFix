@@ -1567,3 +1567,47 @@ shadows, raw palette, texture keying, modulation, dither, scene content,
 or displayed game pixels. Additional optional diagnostic memory is
 5 bytes/native pixel (~1.28 MB at 640x400) and is updated only on F12.
 No screenshots, copyrighted game data or logs are committed.
+
+### 2026-11-24 — Cross-check against the **original Matrox MSI95 SDK samples**
+
+The **Matrox MSI95 developer SDK**, published source
+[`MSI95/msitutor/msitutor.c`](https://github.com/kytulendu/MSISDK/blob/master/MSI95/msitutor/msitutor.c)
+(`TexturingTypes()`), supplies stronger primary evidence than
+modern emulation guesses: the sample enables `msiTexture.Modulate` and
+`msiSetTextureBlend(MODULATE)`, and assigns **0.0f or 255.0f** to
+`T_msiVertex.mr`, `.mg`, `.mb`, including independent red/green/blue
+tints. The original
+[`msi95.h`](https://github.com/kytulendu/MSISDK/blob/master/MSI95/msi95.h)
+defines these fields as floats, `MODULATE=0x00000002`, and
+`msiTexture.Modulate` as a separate state flag.
+
+**Implications:** Our per-channel 0–255 interpretation is correct at
+the API level; low original coefficients **are not** accidentally
+normalized 0–1 inputs. Zero is expected to black out a channel, and
+255 is expected to preserve the original texel channel. Three extra
+synthetic test cases in `test_analyze_lighting_capture.py`, based
+only on the SDK's public numerical endpoints (no original texture
+assets), now enforce:
+- 0 / 255 black/identity channel invariants for both standard rounding
+  and all 16 native 4×4 Bayer positions;
+- red-, green-, and blue-only modulation in complete synthetic
+  nine-layer F12 source traces with nonuniform coefficients;
+- per-channel Bayer output constrained to floor or ceil of
+  `source_channel * multiplier / 255`, regardless of pixel position.
+
+**Important limitation:** This establishes only the **SDK's input
+scale** and that independent component modulation is a supported
+feature. It does **not** specify whether the actual MGA-1064SG driver
+interpolates with identical subpixel/fixed-point precision or uses
+the same channel quantization, gamma, Bayer matrix, or rounding
+threshold. The current emulator's arithmetic consistency with real
+F12 #0010/#0011 remains established; no brightness adjustment,
+render modification or game-asset redistribution is justified.
+
+The original tutorial also describes non-opaque `msiRenderTriangle`
+`Opacity` as **screen-door transparency**, commonly used for shadows.
+That is a **separate historical-fidelity hypothesis** from color
+modulation; it does not establish the exact hardware stipple pattern
+and should not trigger a blanket switch from existing experimental
+`SHADOW_ONCE` blending without a camera-matched original-driver
+comparison. No runtime shadow changes are made here.
