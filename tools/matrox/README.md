@@ -1611,3 +1611,21 @@ modulation; it does not establish the exact hardware stipple pattern
 and should not trigger a blanket switch from existing experimental
 `SHADOW_ONCE` blending without a camera-matched original-driver
 comparison. No runtime shadow changes are made here.
+
+### Native owner log: Decal not involved in the #0010–#0012 scenes
+
+The owner-supplied native Windows
+`ScorchedPlanetFix(20261124-103637).log` includes **37** periodic
+`MSI_FX_STATES`/`MSI_FX_TRIANGLES`/`MSI_FX_ZPLANES`
+snapshots. **All 37 report `decal=0`**, while world modulation
+reaches **603,552 triangles / 276,895,247 processed pixel attempts**
+over the complete run. Therefore the SDK's `DECAL`+modulation
+combination is NOT a relevant explanation for the observed black
+terrain in #0010/#0011. These accumulated values are **render
+attempts**, not unique visible framebuffer pixels; use F12
+last-write ownership for final-pixel attribution.
+
+For the owner's tested states, *investigate real hardware interpolation
+and fixed-point quantization only if an exactly comparable original
+Matrox-driver image becomes available*. Global brightness changes or
+altered dark-pixel keys are unsupported by the available evidence.
