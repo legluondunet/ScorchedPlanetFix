@@ -110,6 +110,15 @@ jobs:
           python -m py_compile tools/matrox/analyze_undithered_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'F12 no-dither analyzer syntax failed' }
 
+      - name: Test exact Matrox F12 lighting inputs (synthetic native RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_lighting_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox ninth F12 lighting audit tests failed' }
+          python -m py_compile tools/matrox/analyze_lighting_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox ninth F12 lighting analyzer syntax failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
