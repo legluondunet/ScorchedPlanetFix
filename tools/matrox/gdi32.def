@@ -2,3 +2,5 @@ LIBRARY GDI32.dll
 EXPORTS
  StretchDIBits
  PatBlt
+ SetStretchBltMode
+ SetBrushOrgEx

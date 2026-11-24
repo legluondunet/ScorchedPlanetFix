@@ -5,6 +5,7 @@
  * Compile with clang targeting i686-pc-windows-msvc and lld-link; no CRT.
  */
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
+#include "msi_world_bilinear.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -73,6 +74,7 @@ typedef unsigned long SIZE_T;
 #define SRCCOPY 0x00CC0020u
 #define CW_USEDEFAULT ((int)0x80000000u)
 #define GDI_ERROR 0xFFFFFFFFu
+#define HALFTONE 4
 
 __declspec(dllimport) HANDLE __stdcall CreateFileA(const char*,DWORD,DWORD,void*,DWORD,DWORD,HANDLE);
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
@@ -137,6 +139,8 @@ __declspec(dllimport) HDC __stdcall BeginPaint(HWND,PAINTSTRUCT_MIN*);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND,const PAINTSTRUCT_MIN*);
 __declspec(dllimport) int __stdcall StretchDIBits(HDC,int,int,int,int,int,int,int,int,const void*,const BITMAPINFO565*,UINT,DWORD);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC,int,int,int,int,DWORD);
+__declspec(dllimport) int __stdcall SetStretchBltMode(HDC,int);
+__declspec(dllimport) BOOL __stdcall SetBrushOrgEx(HDC,int,int,POINT*);
 
 
 /* Matches MSI95/msi95.h in official Matrox SDK; all 32-bit layout. */
@@ -161,6 +165,16 @@ static void *g_module = NULL;
 static HANDLE g_log = NULL;
 static unsigned g_frames = 0, g_triangles = 0, g_zplanes = 0, g_params = 0;
 static unsigned g_zplane_draw_context=0, g_zplane_blue_key_skips=0;
+/* Exact raw BYTE opacity requests at the public API boundary, not internal
+ * rasterizer calls or ShadowOnce's synthetic opacity. Reset per msiInit.
+ * Counters saturate rather than wrap; a saturated bin is explicitly marked. */
+static unsigned g_triangle_opacity[256],g_zplane_opacity[256];
+static void count_opacity(unsigned *bins,BYTE opacity){
+    if(bins[opacity]!=0xFFFFFFFFu)++bins[opacity];
+}
+/* Number of Win32 region checks reused for additional triangle vertices.
+ * No caching across triangles/frames: every call still queries fresh memory. */
+static unsigned g_vertex_region_reuses=0, g_vertex_region_fallbacks=0;
 /* Large HUD atlases can be only partially populated. Older probes required
  * both extreme texture-cache pages to be uploaded, rejecting *all* pixels
  * of a 512x512 / 1024x1024 image when only a small region was resident.
@@ -169,6 +183,12 @@ static unsigned g_sparse_atlas_triangles=0;
 static unsigned g_sparse_atlas_drawn_pixels=0;
 static unsigned g_sparse_atlas_unmapped_pixels=0;
 static unsigned g_sparse_atlas_direct_pixels=0;
+/* Read-only attribution for the existing sparse-atlas zero skip: count
+ * how often zero WOULD be transparent according to the currently bound
+ * palette and original color key, vs potentially opaque palette zero.
+ * Neither class changes the current renderer's skip decision. */
+static unsigned g_sparse_atlas_zero_keyed_skips=0;
+static unsigned g_sparse_atlas_zero_unkeyed_skips=0;
 static unsigned g_sparse_atlas_log_count=0;
 /* v0.20: capture per-frame ownership for selected rendered frames only.
  * 1: world textured nonblack, 2: world textured black, 3: world flat nonblack,
@@ -179,6 +199,57 @@ static unsigned g_sparse_atlas_log_count=0;
  * game CPU writes or previous framebuffer content can still be present.
  * Diagnostic buffer is NEVER used as input to the main rasterizer. */
 static BYTE *g_ownership = NULL;
+/* F12-only provenance of the last attempted sparse Z-plane atlas sample.
+ * 0=not sampled, 1=uploaded nonzero, 2=uploaded zero, 3=unmarked nonzero,
+ * 4=unmarked zero (heuristically skipped), 5=keyed transparency.
+ * Zero index is NOT evidence of a missing asset; diagnostic only. */
+static BYTE *g_atlas_provenance=NULL;
+/* F12-only last ordinary world-texture sample, never used for rendering. */
+static BYTE *g_world_provenance=NULL;
+/* F12 only: final MSI shadow-write origin; never read by the rasterizer.
+ * 1=blended with textured base, 2=opaque without textured base,
+ * 3=other dark-flat with base, 4=other dark-flat without base,
+ * 5=unexpected prior-blend sentinel. 0=other final MSI writer. */
+static BYTE *g_shadow_provenance=NULL;
+/* F12-only FINAL successful MSI world-texture source class, overwritten by later
+ * MSI writes. 0=other final writer, 1=index1 black, 2=index241 black,
+ * 3=index0 black, 4=other 8bpp black, 5=other 8bpp nonblack,
+ * 6=16bpp black, 7=16bpp nonblack, 8=4bpp black, 9=4bpp nonblack,
+ * 10=index1 nonblack, 11=index241 nonblack. Never read by rasterization. */
+static BYTE *g_final_texel_source=NULL;
+/* F12-only final successful world texture source: packed, lossless 16-bit
+ * diagnostic value, written only beside the actual framebuffer write.
+ * bit14=8bpp, bit13=16bpp, bit12=4bpp; low8=EXACT raw 8bpp palette index;
+ * bit8=pre-lighting texture sample RGB565 was zero; bit9=modulation active;
+ * bit10=ordered dither active; bit11=alpha blended with prior framebuffer.
+ * Zero=not an ordinary final world-texture write. This must NEVER influence
+ * the rasterizer, palette keying, colors, or any game pixels. */
+static WORD *g_final_source_audit=NULL;
+/* One-frame, F12-only "same last MSI writer without ordered dither" RGB565.
+ * For each FINAL dithered world-texture draw, store the existing undithered
+ * modulation reference, with the SAME actual framebuffer underlay for alpha
+ * blending. Untracked/overwritten/non-dither final writers clear to zero.
+ * The _sourceaudit.bmp bit10 identifies where zero is a valid reference.
+ * Never read this array when rasterizing or presenting actual game pixels. */
+static WORD *g_undithered_reference=NULL;
+/* F12-only exact five-byte pre-modulation RGB565 sample + 3x8-bit vertex
+ * lighting coefficient of the last successful MSI world texture write.
+ * Never read by rasterization. The seventh _sourceaudit marks valid pixels.
+ * Non-modulated world textures use neutral modifiers 255,255,255. */
+static BYTE *g_final_light_inputs=NULL;
+/* F12 only: count original (pre-LUT) 8-bit indices whose resolved RGB565
+ * value matched the hardware color key. This is not a pixel-coverage map:
+ * overdraw and triangle overlap can count a texel more than once. */
+static unsigned g_world_rgbkey_index_hist[256];
+/* F12-only CLUT alias analysis, no influence on keying/rasterizer:
+ * count ALL original RGB565 key matches BEFORE palette index 1 preview
+ * exempts its black source pixel. This includes draws/overdraw, not
+ * unique pixels nor proof that a palette entry is used in this frame. */
+static unsigned g_world_key_candidate_hist[256];
+static unsigned g_world_index1_preview_attempts=0;
+static unsigned g_key_alias_bind_reports=0;
+static unsigned g_key_alias_seen[24][4]; /* texture offset, CLUT offset, key, mask */
+
 static unsigned g_ownership_bytes = 0;
 static int g_capture_ownership = 0;
 static unsigned g_world_texture_samples = 0;
@@ -190,10 +261,17 @@ static unsigned g_fx_dither_parameters=0,g_fx_modulate_parameters=0,g_fx_decal_p
 static unsigned g_fx_dither_textured_states=0,g_fx_modulate_textured_states=0;
 static unsigned g_fx_dither_triangles=0,g_fx_modulate_triangles=0,g_fx_decal_triangles=0;
 static unsigned g_fx_dither_zplanes=0,g_fx_modulate_zplanes=0,g_fx_decal_zplanes=0;
+/* Passive original MSI95 state audit. This reports *requests* by the
+ * OEM client, not proof that each effect was accurately implemented. */
+static unsigned g_native_tex_transparency=0,g_native_alpha_mask=0;
+static unsigned g_native_tex_clamp_u=0,g_native_tex_clamp_v=0;
+static unsigned g_native_depth_enabled=0,g_native_depth_protect=0;
+static unsigned g_native_color_protect=0,g_native_state_details=0;
 /* v0.33 per-vertex texture-color modulation, independently selectable.
  * v0.34 ordered RGB565 quantization experiment, independently selectable;
  * it affects ONLY opt-in modulated 3D textures with Dither set in MSI95. */
 static int g_msi_modulate_enabled=0,g_msi_dither_enabled=0;
+static int g_rgb888_lighting_enabled=0;
 static unsigned g_modulate_triangles=0,g_modulate_pixels=0,g_modulate_varying=0;
 static unsigned g_dither_candidates=0,g_dither_changed=0,g_dither_bypassed=0;
 static unsigned g_fx_vertex_color_logs=0,g_fx_param_state_logs=0;
@@ -213,6 +291,17 @@ static int g_perspective_enabled=0;
 static unsigned g_perspective_triangles=0, g_perspective_pixels=0;
 static unsigned g_world_varying_invw=0, g_world_constant_invw=0;
 static unsigned g_world_invalid_invw=0;
+/* Modern optional rendering experiment: RGB565 bilinear ONLY on opaque
+ * 3D world textures whose vertex invW actually varies. The 1996
+ * Mystique used nearest sampling; default OFF for original fidelity.
+ * Transparent textures, menus (constant invW) and Z-plane HUD bypass. */
+static int g_world_bilinear_enabled=0;
+static unsigned g_world_bilinear_triangles=0;
+static unsigned g_world_bilinear_samples=0,g_world_bilinear_changed=0;
+static unsigned g_world_bilinear_keyed_bypass=0;
+static unsigned g_world_bilinear_palette_triangles=0;
+static unsigned g_world_bilinear_palette_samples=0;
+static unsigned g_world_bilinear_uniform_samples=0;
 /* Explicit A/B experiment: the game uses RGB565 0x00FF for some blue
  * sprite borders in the 3D world. Honor the original color key always;
  * only opt-in a second exact-blue key on textured transparent world draws.
@@ -224,6 +313,15 @@ static unsigned g_world_blue_diagnostic_count=0;
  * KeyingColor before LUT conversion, rather than post-LUT RGB565 only.
  * OFF by default. Restrict to world triangles with Transparency set. */
 static int g_index_key_enabled=0;
+/* Opt-in authentic-asset experiment. Only original TITLEM icon01 contains
+ * 6,993 source-index-241 background texels. Its live cached atlas is
+ * identified by full 128x128 byte content, never by a hardcoded address.
+ * No original game code or texture is modified. */
+static int g_icon01_opaque_enabled=0;
+static unsigned g_icon01_cache_offset=0xffffffffu;
+static unsigned g_icon01_verified_uploads=0;
+static unsigned g_icon01_opaque_samples=0;
+
 static unsigned g_index_key_candidates=0,g_index_key_skipped=0;
 static unsigned g_index_key_blue_candidates=0,g_index_key_other_candidates=0;
 static unsigned g_index_key_debug=0;
@@ -346,6 +444,7 @@ static int g_swallowed_right_down = 0;
 
 static int g_preview_created = 0;
 static int g_viewport_reported=0;
+static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
 static int g_preview_class_registered = 0;
@@ -669,6 +768,24 @@ static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
   char buf[940];DWORD p=0;putstr(buf,&p,name);putstr(buf,&p," ");putunsigned(buf,&p,a);
   if(label2){putstr(buf,&p," ");putstr(buf,&p,label2);putstr(buf,&p," ");putunsigned(buf,&p,b);}buf[p]=0;logtext(buf);
 }
+/* Sparse histogram: absent values have zero requests. Emit at F12 and exit
+ * only, avoiding additional per-triangle logging or duplicated Z-plane halves. */
+static void log_opacity_histogram(const char *scope){
+    char buf[160];DWORD n=0;
+    putstr(buf,&n,"MSI_OPACITY_BEGIN scope=");putstr(buf,&n,scope);
+    putstr(buf,&n," frame=");putunsigned(buf,&n,g_frames);
+    buf[n]=0;logtext(buf);
+    for(unsigned i=0;i<256u;i++){
+        if(!g_triangle_opacity[i] && !g_zplane_opacity[i])continue;
+        n=0;putstr(buf,&n,"MSI_OPACITY value=");putunsigned(buf,&n,i);
+        putstr(buf,&n," triangles=");putunsigned(buf,&n,g_triangle_opacity[i]);
+        putstr(buf,&n," zplanes=");putunsigned(buf,&n,g_zplane_opacity[i]);
+        if(g_triangle_opacity[i]==0xFFFFFFFFu || g_zplane_opacity[i]==0xFFFFFFFFu)
+            putstr(buf,&n," saturated=1");
+        buf[n]=0;logtext(buf);
+    }
+    logtext("MSI_OPACITY_END");
+}
 /* Strictly diagnostic, signature-locked to the OEM Matrox instruction
  * sequence seen in the Wine AV. Do not use this probe to repair or skip any
  * game dereference, and never read arbitrary player data. */
@@ -753,7 +870,35 @@ static void preview_blit(HDC dc){
     bi.bmi.biCompression=BI_BITFIELDS;
     bi.bmi.biSizeImage=(DWORD)(w*h*2u);
     bi.masks[0]=0xF800u;bi.masks[1]=0x07E0u;bi.masks[2]=0x001Fu;
-    int result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
+    /* Only presentation: never write to g_color, change MSI geometry,
+     * mouse mapping, native dimensions or F12 diagnostic layers.
+     * Restore borrowed DC state even on error; retry the original blit
+     * if the platform rejects the optional HALFTONE operation. */
+    int result=0;
+    int scaled=dstw!=(int)w || dsth!=(int)h;
+    int smooth=g_presentation_smooth_enabled && !g_presentation_smooth_failed && scaled;
+    if(smooth){
+        int oldmode=SetStretchBltMode(dc,HALFTONE);
+        POINT oldorigin;
+        if(oldmode){
+            if(SetBrushOrgEx(dc,0,0,&oldorigin)){
+                result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
+                SetBrushOrgEx(dc,oldorigin.x,oldorigin.y,NULL);
+            }
+            SetStretchBltMode(dc,oldmode);
+        }
+        if(result!=0 && (unsigned)result!=GDI_ERROR){
+            if(!g_presentation_smooth_reported){
+                logtext("PREVIEW_SCALER HALFTONE blit succeeded (presentation only)");
+                g_presentation_smooth_reported=1;
+            }
+        }else{
+            g_presentation_smooth_failed=1;
+            logtext("PREVIEW_SCALER HALFTONE unavailable or blit failed; using legacy scaling for this session");
+        }
+    }
+    if(!smooth || g_presentation_smooth_failed)
+        result=StretchDIBits(dc,dx,dy,dstw,dsth,0,0,(int)w,(int)h,g_color,&bi,DIB_RGB_COLORS,SRCCOPY);
     if(result==0 || (unsigned)result==GDI_ERROR){
         g_preview_failures++;
         if(g_preview_failures<=3)logtext("PREVIEW_GDI StretchDIBits FAILED");
@@ -1052,9 +1197,19 @@ static void clean(void){
     if(g_depth)VirtualFree(g_depth,0,MEM_RELEASE);
     if(g_texture)VirtualFree(g_texture,0,MEM_RELEASE);
     if(g_ownership)VirtualFree(g_ownership,0,MEM_RELEASE);
+    if(g_atlas_provenance)VirtualFree(g_atlas_provenance,0,MEM_RELEASE);
+    if(g_world_provenance)VirtualFree(g_world_provenance,0,MEM_RELEASE);
+    if(g_shadow_provenance)VirtualFree(g_shadow_provenance,0,MEM_RELEASE);
+    if(g_final_texel_source)VirtualFree(g_final_texel_source,0,MEM_RELEASE);
+    if(g_final_source_audit)VirtualFree(g_final_source_audit,0,MEM_RELEASE);
+    if(g_undithered_reference)VirtualFree(g_undithered_reference,0,MEM_RELEASE);
+    if(g_final_light_inputs)VirtualFree(g_final_light_inputs,0,MEM_RELEASE);
     if(g_shadow_underlay)VirtualFree(g_shadow_underlay,0,MEM_RELEASE);
     g_shadow_underlay=NULL;
-    g_ownership=NULL;g_ownership_bytes=0;g_capture_ownership=0;
+    g_ownership=NULL;g_atlas_provenance=NULL;g_world_provenance=NULL;
+    g_shadow_provenance=NULL;g_final_texel_source=NULL;g_final_source_audit=NULL;
+    g_undithered_reference=NULL;g_final_light_inputs=NULL;
+    g_ownership_bytes=0;g_capture_ownership=0;
     g_color=g_depth=g_texture=NULL;g_initialized=0;
     g_state_valid=0;
     zero(&g_state,sizeof(g_state));
@@ -1089,19 +1244,33 @@ static int capture_file_present(const char*filename){
     path[i+k]=0;
     return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
 }
-static int next_capture_pair(char*frame,char*coverage){
+static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered,char*lighting){
     for(unsigned tries=0;tries<999999u;tries++){
         if(g_manual_capture_sequence>=999999u)g_manual_capture_sequence=0;
         unsigned serial=++g_manual_capture_sequence;
         capture_name(frame,serial,"_frame.bmp");
         capture_name(coverage,serial,"_coverage.bmp");
+        capture_name(atlas,serial,"_atlas.bmp");
+        capture_name(world,serial,"_world.bmp");
+        capture_name(shadow,serial,"_shadow.bmp");
+        capture_name(texel,serial,"_texel.bmp");
+        capture_name(audit,serial,"_sourceaudit.bmp");
+        capture_name(undithered,serial,"_nodither.bmp");
+        capture_name(lighting,serial,"_lighting.bin");
         int frame_exists=capture_file_present(frame);
         int coverage_exists=capture_file_present(coverage);
-        if(frame_exists<0||coverage_exists<0){
+        int atlas_exists=capture_file_present(atlas);
+        int world_exists=capture_file_present(world);
+        int shadow_exists=capture_file_present(shadow);
+        int texel_exists=capture_file_present(texel);
+        int audit_exists=capture_file_present(audit);
+        int nodither_exists=capture_file_present(undithered);
+        int lighting_exists=capture_file_present(lighting);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1266,9 +1435,513 @@ static void capture_ownership(const char *filename){
     buf[z]=0;logtext(buf);
 }
 
+/* Exact F12-only sparse-atlas provenance bitmap. This reveals where atlas
+ * page-residency guesses and chroma keys were used, NOT which game assets
+ * are actually missing. Colors: green=uploaded nonzero, cyan=uploaded zero,
+ * magenta=unmarked nonzero, red=unmarked zero skipped, yellow=keyed. */
+static void capture_atlas_provenance(const char *filename){
+    if(!g_manual_capture_active||!g_initialized||!g_atlas_provenance||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD length=GetModuleFileNameA(g_module,path,1023);
+    if(!length||length>=1023)return;
+    DWORD i=length;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("ATLAS_CAPTURE WRITE ERROR: open failed");return;}
+    unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned counts[6],tiles[4][4][6];
+    /* The freestanding MSI95 DLL cannot call the C runtime memset.
+     * Volatile writes prevent Clang from replacing fixed-size stack
+     * initialization with an unresolved external memset. F12 only. */
+    {volatile unsigned *p=(volatile unsigned*)&counts[0];
+     for(unsigned i=0;i<6u;i++)p[i]=0u;}
+    {volatile unsigned *p=(volatile unsigned*)&tiles[0][0][0];
+     for(unsigned i=0;i<4u*4u*6u;i++)p[i]=0u;}
+    static const WORD colors[6]={0x0000u,0x07E0u,0x07FFu,0xF81Fu,0xF800u,0xFFE0u};
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_atlas_provenance[y*width+x];
+            if(kind>5u)kind=0;
+            row[x]=colors[kind];
+            counts[kind]++;
+            tiles[y*4u/height][x*4u/width][kind]++;
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[380];DWORD n=0;
+    putstr(msg,&n,ok?"ATLAS_CAPTURE OK file=":"ATLAS_CAPTURE WRITE ERROR file=");
+    putstr(msg,&n,filename);
+    putstr(msg,&n," frame=");putunsigned(msg,&n,g_frames);
+    putstr(msg,&n," uploaded_nonzero=");putunsigned(msg,&n,counts[1]);
+    putstr(msg,&n," uploaded_zero=");putunsigned(msg,&n,counts[2]);
+    putstr(msg,&n," unmarked_nonzero=");putunsigned(msg,&n,counts[3]);
+    putstr(msg,&n," unmarked_zero_skip=");putunsigned(msg,&n,counts[4]);
+    putstr(msg,&n," keyed=");putunsigned(msg,&n,counts[5]);
+    msg[n]=0;logtext(msg);
+    for(unsigned ty=0;ty<4u;ty++)for(unsigned tx=0;tx<4u;tx++){
+        if(!tiles[ty][tx][4]&&!tiles[ty][tx][5])continue;
+        n=0;
+        putstr(msg,&n,"ATLAS_TILE row=");putunsigned(msg,&n,ty);
+        putstr(msg,&n," col=");putunsigned(msg,&n,tx);
+        putstr(msg,&n," unmarked_zero_skip=");putunsigned(msg,&n,tiles[ty][tx][4]);
+        putstr(msg,&n," keyed=");putunsigned(msg,&n,tiles[ty][tx][5]);
+        putstr(msg,&n," uploaded_zero=");putunsigned(msg,&n,tiles[ty][tx][2]);
+        msg[n]=0;logtext(msg);
+    }
+}
+
+
+/* F12-only ordinary world-texture provenance. Categories:
+ * 0 none; 1 RGB565 drawn; 2 8bpp nonzero index drawn;
+ * 3 8bpp zero index drawn; 4 RGB565 key discarded;
+ * 5 indexed key discarded; 6 blue fallback discarded; 7 4bpp drawn.
+ * 8=RGB565 keyed raw 8-bit index zero; 9=keyed source index 1;
+ * 10=keyed source index 241; 11=keyed any other nonzero index.
+ * 12=EXPERIMENTAL opaque source index 1, resolved RGB565 black (amber).
+ * 13=EXPERIMENTAL original icon01 source index241 opaque (distinct teal).
+ * Last textured world sample only; later untextured or CPU writes can cover it.
+ * Never feeds this buffer to the rasterizer or the framebuffer. */
+static void capture_world_provenance(const char *filename){
+    if(!g_manual_capture_active||!g_initialized||!g_world_provenance||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD length=GetModuleFileNameA(g_module,path,1023);
+    if(!length||length>=1023)return;
+    DWORD i=length;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("WORLD_CAPTURE WRITE ERROR: open failed");return;}
+    unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned counts[14];
+    {volatile unsigned *p=(volatile unsigned*)&counts[0];
+     for(unsigned i=0;i<14u;i++)p[i]=0u;}
+    /* Keyed index 0=magenta; 1=yellow; 241=violet; other=white;
+     * previewed opaque index1 is amber. */
+    static const WORD colors[14]={0x0000u,0x07E0u,0xAFE5u,0xFD20u,
+                                  0x8010u,0xF800u,0x001Fu,0x07FFu,
+                                  0xF81Fu,0xFFE0u,0xA01Fu,0xFFFFu,
+                                  0xFC00u,0x83E0u};
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_world_provenance[y*width+x];
+            if(kind>13u)kind=0u;
+            row[x]=colors[kind];counts[kind]++;
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[430];DWORD n=0;
+    putstr(msg,&n,ok?"WORLD_CAPTURE OK file=":"WORLD_CAPTURE WRITE ERROR file=");
+    putstr(msg,&n,filename);
+    putstr(msg,&n," frame=");putunsigned(msg,&n,g_frames);
+    putstr(msg,&n," rgb16_draw=");putunsigned(msg,&n,counts[1]);
+    putstr(msg,&n," indexed_nonzero_draw=");putunsigned(msg,&n,counts[2]);
+    putstr(msg,&n," indexed_zero_draw=");putunsigned(msg,&n,counts[3]);
+    putstr(msg,&n," rgb565_key=");putunsigned(msg,&n,counts[4]+counts[8]+counts[9]+counts[10]+counts[11]);
+    putstr(msg,&n," rgb565_key_index0=");putunsigned(msg,&n,counts[8]);
+    putstr(msg,&n," rgb565_key_otherindex=");putunsigned(msg,&n,counts[9]+counts[10]+counts[11]);
+    putstr(msg,&n," rgb565_key_unindexed=");putunsigned(msg,&n,counts[4]);
+    putstr(msg,&n," index_key=");putunsigned(msg,&n,counts[5]);
+    putstr(msg,&n," blue_fallback=");putunsigned(msg,&n,counts[6]);
+    putstr(msg,&n," indexed4_draw=");putunsigned(msg,&n,counts[7]);
+    msg[n]=0;logtext(msg);
+    char sl[180];DWORD sn=0;
+    putstr(sl,&sn,"WORLD_KEY_SCREEN frame=");putunsigned(sl,&sn,g_frames);
+    putstr(sl,&sn," index1=");putunsigned(sl,&sn,counts[9]);
+    putstr(sl,&sn," index241=");putunsigned(sl,&sn,counts[10]);
+    putstr(sl,&sn," other_nonzero=");putunsigned(sl,&sn,counts[11]);
+    putstr(sl,&sn," index1_opaque_preview=");putunsigned(sl,&sn,counts[12]);
+    putstr(sl,&sn," icon01_index241_opaque=");putunsigned(sl,&sn,counts[13]);
+    sl[sn]=0;logtext(sl);
+    /* The existing key histogram counts only discarded source samples.
+     * This independent F12 histogram counts every source-index match
+     * BEFORE the optional index-1 preview exception suppresses a skip. */
+    {
+        unsigned total=0,distinct=0;
+        for(unsigned ix=0;ix<256u;ix++){
+            total+=g_world_key_candidate_hist[ix];
+            if(g_world_key_candidate_hist[ix])distinct++;
+        }
+        char ab[400];DWORD an=0;
+        putstr(ab,&an,"F12_PALETTE_KEY_CANDIDATES frame=");putunsigned(ab,&an,g_frames);
+        putstr(ab,&an," attempts=");putunsigned(ab,&an,total);
+        putstr(ab,&an," distinct_source_indices=");putunsigned(ab,&an,distinct);
+        putstr(ab,&an," source_index0=");putunsigned(ab,&an,g_world_key_candidate_hist[0]);
+        putstr(ab,&an," source_index1=");putunsigned(ab,&an,g_world_key_candidate_hist[1]);
+        putstr(ab,&an," source_index241=");putunsigned(ab,&an,g_world_key_candidate_hist[241]);
+        putstr(ab,&an," index1_preview_attempts=");putunsigned(ab,&an,g_world_index1_preview_attempts);
+        ab[an]=0;logtext(ab);
+    }
+    /* Top eight RGB565-keyed 8-bit source indices, counted at sample time.
+     * A single screen pixel can be sampled multiple times by overlapping
+     * triangles, so sample counts need not match the colored BMP counts. */
+    unsigned total=0,distinct=0;
+    for(unsigned i=0;i<256u;i++){
+        total+=g_world_rgbkey_index_hist[i];
+        if(g_world_rgbkey_index_hist[i])distinct++;
+    }
+    char histline[256];DWORD hn=0;
+    putstr(histline,&hn,"WORLD_KEY_INDEX_HIST frame=");putunsigned(histline,&hn,g_frames);
+    putstr(histline,&hn," attempts=");putunsigned(histline,&hn,total);
+    putstr(histline,&hn," distinct=");putunsigned(histline,&hn,distinct);
+    putstr(histline,&hn," index0=");putunsigned(histline,&hn,g_world_rgbkey_index_hist[0]);
+    histline[hn]=0;logtext(histline);
+    unsigned listed[8];for(unsigned r=0;r<8u;r++)listed[r]=256u;
+    for(unsigned rank=0;rank<8u;rank++){
+        unsigned best=256u,bestCount=0;
+        for(unsigned i=0;i<256u;i++){
+            unsigned count=g_world_rgbkey_index_hist[i];
+            if(!count||count<bestCount)continue;
+            int already=0;
+            for(unsigned r=0;r<rank;r++)if(listed[r]==i){already=1;break;}
+            if(already)continue;
+            if(count>bestCount||best==256u||i<best){
+                best=i;bestCount=count;
+            }
+        }
+        if(best==256u)break;
+        listed[rank]=best;
+        hn=0;
+        putstr(histline,&hn,"WORLD_KEY_INDEX_TOP rank=");putunsigned(histline,&hn,rank+1u);
+        putstr(histline,&hn," source_index=");putunsigned(histline,&hn,best);
+        putstr(histline,&hn," attempts=");putunsigned(histline,&hn,bestCount);
+        histline[hn]=0;logtext(histline);
+    }
+}
+
+/* Shadow-write origins are F12-only metadata. The last actual MSI write
+ * owns the pixel, even when earlier shadow polygons were overdrawn.
+ * Unlike shadow histogram attempts, this map can localize visible stains. */
+static void capture_shadow_provenance(const char *filename){
+    if(!g_manual_capture_active || !g_initialized || !g_shadow_provenance ||
+       g_info.msiColor.BytesPerPixel!=2 || g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width || width>4096u || !height || height>4096u ||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n || n>=1023)return;
+    DWORD i=n;while(i>0 && path[i-1]!='\\' && path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k] && i+k<1022){path[i+k]=filename[k];k++;}
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("SHADOW_CAPTURE WRITE ERROR: open failed");return;}
+    const unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned counts[6];{
+        volatile unsigned *p=(volatile unsigned*)&counts[0];
+        for(unsigned c=0;c<6u;c++)p[c]=0u;
+    }
+    static const WORD colors[6]={0x0000u,0x07E0u,0xF800u,
+                                  0xFFE0u,0x07FFu,0xF81Fu};
+    for(unsigned y=0;y<height && ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_shadow_provenance[y*width+x];
+            if(kind>5u)kind=0u;
+            counts[kind]++;
+            row[x]=colors[kind];
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[400];DWORD p=0;
+    putstr(msg,&p,ok?"SHADOW_CAPTURE OK file=":"SHADOW_CAPTURE WRITE ERROR file=");
+    putstr(msg,&p,filename);
+    putstr(msg,&p," frame=");putunsigned(msg,&p,g_frames);
+    putstr(msg,&p," blended_with_textured_base=");putunsigned(msg,&p,counts[1]);
+    putstr(msg,&p," opaque_no_textured_base=");putunsigned(msg,&p,counts[2]);
+    putstr(msg,&p," other_dark_with_base=");putunsigned(msg,&p,counts[3]);
+    putstr(msg,&p," other_dark_no_base=");putunsigned(msg,&p,counts[4]);
+    putstr(msg,&p," unusual_prior_blend=");putunsigned(msg,&p,counts[5]);
+    msg[p]=0;logtext(msg);
+}
+
+/* Last successful source texel for each final MSI write, F12 only. Never
+ * infer visibility from the preexisting _world.bmp, which tracks attempts. */
+static void capture_final_texel_source(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_final_texel_source||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("FINAL_TEXEL_CAPTURE WRITE ERROR: open failed");return;}
+    const unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);put32le(header+10,66u);
+    put32le(header+14,40u);put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);put32le(header+62,0x001Fu);
+    static const WORD colors[12]={0x0000u,0xFFE0u,0xF81Fu,0x07FFu,
+        0xF800u,0x07E0u,0x8010u,0xAFE5u,0xFC00u,0x83E0u,0xFD20u,0x001Fu};
+    unsigned counts[12];{volatile unsigned*p=(volatile unsigned*)&counts[0];
+        for(unsigned c=0;c<12u;c++)p[c]=0u;}
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned kind=g_final_texel_source[y*width+x];
+            if(kind>=12u)kind=0u;
+            row[x]=colors[kind];counts[kind]++;
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[380];DWORD q=0;
+    putstr(msg,&q,ok?"FINAL_TEXEL_CAPTURE OK file=":"FINAL_TEXEL_CAPTURE WRITE ERROR file=");
+    putstr(msg,&q,filename);putstr(msg,&q," frame=");putunsigned(msg,&q,g_frames);
+    putstr(msg,&q," index1_black=");putunsigned(msg,&q,counts[1]);
+    putstr(msg,&q," index241_black=");putunsigned(msg,&q,counts[2]);
+    putstr(msg,&q," index0_black=");putunsigned(msg,&q,counts[3]);
+    putstr(msg,&q," other_index_black=");putunsigned(msg,&q,counts[4]);
+    putstr(msg,&q," rgb16_black=");putunsigned(msg,&q,counts[6]);
+    putstr(msg,&q," rgb4_black=");putunsigned(msg,&q,counts[8]);
+    msg[q]=0;logtext(msg);
+}
+
+/* Packed F12 raw source-index + pre-light/lighting flags, not a picture.
+ * _sourceaudit.bmp is BI_BITFIELDS RGB565 only as a lossless 16-bit carrier.
+ * The source map is cleared on F12 and tracks FINAL successful MSI writes. */
+static void capture_final_source_audit(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_final_source_audit||
+       g_info.msiColor.BytesPerPixel!=2||g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("SOURCE_AUDIT_CAPTURE WRITE ERROR: open failed");return;}
+    const unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);
+    put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned textured=0u,black_raw=0u,lit=0u;
+    for(unsigned y=0;y<height && ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned encoded=g_final_source_audit[y*width+x];
+            row[x]=(WORD)encoded;
+            if(encoded&0x7000u){
+                textured++;
+                if(encoded&0x0100u)black_raw++;
+                if(encoded&0x0200u)lit++;
+            }
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok && stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char message[350];DWORD p=0;
+    putstr(message,&p,ok?"SOURCE_AUDIT_CAPTURE OK file=":
+                "SOURCE_AUDIT_CAPTURE WRITE ERROR file=");
+    putstr(message,&p,filename);
+    putstr(message,&p," frame=");putunsigned(message,&p,g_frames);
+    putstr(message,&p," final_textured=");putunsigned(message,&p,textured);
+    putstr(message,&p," prelight_black=");putunsigned(message,&p,black_raw);
+    putstr(message,&p," modulated=");putunsigned(message,&p,lit);
+    message[p]=0;logtext(message);
+}
+
+/* F12-only counterfactual image: no dither for the LAST successful MSI
+ * world-texture write, same other settings and prior framebuffer underlay.
+ * IMPORTANT this is NOT a full-frame no-dither replay, since earlier draws
+ * and their underlays may have been dithered. Only sourceaudit bit10 pixels
+ * have a valid reference; all other pixels encode zero. */
+static void capture_undithered_reference(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_undithered_reference||
+       !g_final_source_audit||g_info.msiColor.BytesPerPixel!=2||
+       g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){logtext("UNDITHERED_CAPTURE WRITE ERROR: open failed");return;}
+    unsigned stride=(width*2u+3u)&~3u,bytes=stride*height;
+    BYTE header[66];zero(header,sizeof(header));
+    header[0]='B';header[1]='M';put32le(header+2,66u+bytes);
+    put32le(header+10,66u);put32le(header+14,40u);
+    put32le(header+18,width);put32le(header+22,0u-height);
+    put16le(header+26,1u);put16le(header+28,16u);
+    put32le(header+30,3u);put32le(header+34,bytes);
+    put32le(header+54,0xF800u);put32le(header+58,0x07E0u);
+    put32le(header+62,0x001Fu);
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    static WORD row[4096];const BYTE pad[3]={0,0,0};
+    unsigned tracked=0u,changed=0u,actual_black_ref_nonblack=0u;
+    unsigned actual_black_ref_black=0u,actual_nonblack_ref_black=0u;
+    const WORD *displayed=(const WORD*)g_color;
+    for(unsigned y=0;y<height&&ok;y++){
+        for(unsigned x=0;x<width;x++){
+            unsigned pos=y*width+x;
+            unsigned tracked_here=(g_final_source_audit[pos]&0x0400u)!=0u;
+            unsigned raw=(unsigned)g_undithered_reference[pos];
+            row[x]=(WORD)(tracked_here?raw:0u);
+            if(tracked_here){
+                unsigned actual=(unsigned)displayed[pos];
+                tracked++;
+                if(actual!=raw)changed++;
+                if(actual==0u){
+                    if(raw)actual_black_ref_nonblack++;
+                    else actual_black_ref_black++;
+                }else if(raw==0u)actual_nonblack_ref_black++;
+            }
+        }
+        ok=WriteFile(h,row,width*2u,&written,NULL)&&written==width*2u;
+        if(ok&&stride>width*2u)
+            ok=WriteFile(h,pad,stride-width*2u,&written,NULL)&&written==stride-width*2u;
+    }
+    CloseHandle(h);
+    char msg[490];DWORD q=0;
+    putstr(msg,&q,ok?"UNDITHERED_CAPTURE OK file=":"UNDITHERED_CAPTURE WRITE ERROR file=");
+    putstr(msg,&q,filename);putstr(msg,&q," frame=");putunsigned(msg,&q,g_frames);
+    putstr(msg,&q," tracked=");putunsigned(msg,&q,tracked);
+    putstr(msg,&q," changed_by_dither=");putunsigned(msg,&q,changed);
+    putstr(msg,&q," actual_black_ref_nonblack=");putunsigned(msg,&q,actual_black_ref_nonblack);
+    putstr(msg,&q," actual_black_ref_black=");putunsigned(msg,&q,actual_black_ref_black);
+    putstr(msg,&q," actual_nonblack_ref_black=");putunsigned(msg,&q,actual_nonblack_ref_black);
+    msg[q]=0;logtext(msg);
+}
+
+/* The ninth F12 diagnostic is a versioned BINARY data map, not a bitmap.
+ * Header (24 bytes): ASCII "M95LIGHT" + little-endian u32 width,height,
+ * record_bytes=5, lighting_model=0 (legacy) or 1 (experimental RGB888). Each pixel is [RGB565 sample LE16,
+ * modifier_r8,modifier_g8,modifier_b8]. sourceaudit marks validity.
+ * It never alters renderer pixels, keys, fog, shading or texture content. */
+static void capture_final_light_inputs(const char*filename){
+    if(!g_manual_capture_active||!g_initialized||!g_final_light_inputs||
+       !g_final_source_audit||g_info.msiColor.BytesPerPixel!=2||
+       g_info.msiColor.Pitch<=0)return;
+    unsigned width=(unsigned)g_info.msiColor.Pitch/2u;
+    unsigned height=(unsigned)g_info.msiColor.MemSize/(unsigned)g_info.msiColor.Pitch;
+    if(!width||width>4096u||!height||height>4096u||
+       width*height!=g_ownership_bytes)return;
+    char path[1024];DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
+    if(filename[k])return;
+    path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,
+                         CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){
+        logtext("LIGHTING_INPUT_CAPTURE WRITE ERROR: open failed");return;
+    }
+    BYTE header[24];zero(header,sizeof(header));
+    header[0]='M';header[1]='9';header[2]='5';header[3]='L';
+    header[4]='I';header[5]='G';header[6]='H';header[7]='T';
+    put32le(header+8u,width);put32le(header+12u,height);
+    put32le(header+16u,5u);
+    put32le(header+20u,(unsigned)g_rgb888_lighting_enabled);
+    const unsigned bytes=g_ownership_bytes*5u;
+    DWORD written=0;
+    BOOL ok=WriteFile(h,header,sizeof(header),&written,NULL)&&written==sizeof(header);
+    if(ok)ok=WriteFile(h,g_final_light_inputs,bytes,&written,NULL)&&written==bytes;
+    CloseHandle(h);
+    unsigned tracked=0u,modulated=0u,black_final=0u;
+    const WORD*displayed=(const WORD*)g_color;
+    for(unsigned pos=0;pos<g_ownership_bytes;pos++){
+        unsigned meta=g_final_source_audit[pos];
+        if(!(meta&0x7000u))continue;
+        tracked++;
+        if(meta&0x0200u)modulated++;
+        if(displayed[pos]==0u)black_final++;
+    }
+    char msg[360];DWORD p=0;
+    putstr(msg,&p,ok?"LIGHTING_INPUT_CAPTURE OK file=":
+        "LIGHTING_INPUT_CAPTURE WRITE ERROR file=");
+    putstr(msg,&p,filename);
+    putstr(msg,&p," frame=");putunsigned(msg,&p,g_frames);
+    putstr(msg,&p," tracked=");putunsigned(msg,&p,tracked);
+    putstr(msg,&p," modulated=");putunsigned(msg,&p,modulated);
+    putstr(msg,&p," final_black=");putunsigned(msg,&p,black_final);
+    msg[p]=0;logtext(msg);
+}
+
 /* Exported functions: MSI95 SDK explicitly declares undecorated extern "C". */
 T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL Debug,WNDPROC proc){
     ensure_log();log_runtime_host();loginit(Width,Height,Planes,ZBuffer,Debug);
+    logtext("MATROX_INDEX1_OPAQUE_PREVIEW enabled=1 scope=world_8bpp_128x128_black_rgb565_key; ONLY experimental stacked PR");
     g_guest_window_proc = (WINWNDPROC)proc;
     { char buf[160]; DWORD n=0;
       putstr(buf,&n,"GAME_WNDPROC supplied=");puthex(buf,&n,(unsigned)proc);
@@ -1293,6 +1966,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_sparse_atlas_triangles=g_sparse_atlas_drawn_pixels=0;
     g_sparse_atlas_unmapped_pixels=g_sparse_atlas_direct_pixels=0;
     g_sparse_atlas_log_count=0;
+    zero(g_triangle_opacity,sizeof(g_triangle_opacity));
+    zero(g_zplane_opacity,sizeof(g_zplane_opacity));
     g_capture_ownership=0;g_world_texture_samples=0;
     g_fx_param_updates=0;
     g_fx_dither_parameters=g_fx_modulate_parameters=g_fx_decal_parameters=0;
@@ -1306,6 +1981,11 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
 
     g_perspective_triangles=g_perspective_pixels=0;
     g_world_varying_invw=g_world_constant_invw=g_world_invalid_invw=0;
+    g_world_bilinear_triangles=g_world_bilinear_samples=g_world_bilinear_changed=0;
+    g_world_bilinear_keyed_bypass=0;
+    g_world_bilinear_palette_triangles=0;
+    g_world_bilinear_palette_samples=0;
+    g_world_bilinear_uniform_samples=0;
     g_world_blue_samples=g_world_blue_eligible=g_world_blue_skipped=0;
     g_world_blue_diagnostic_count=0;
     g_index_key_candidates=g_index_key_skipped=0;
@@ -1348,17 +2028,39 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_INDEXED_KEY",setting,sizeof(setting));
       g_index_key_enabled=(n==1u && setting[0]=='1');}
     logtext(g_index_key_enabled?"INDEXED_KEY enabled (world 8bit transparent textures only)":"INDEXED_KEY disabled (reference RGB565 color-key)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_ICON01_OPAQUE",setting,sizeof(setting));
+      g_icon01_opaque_enabled=(n==1u && setting[0]=='1');}
+    g_icon01_cache_offset=0xffffffffu;
+    g_icon01_verified_uploads=g_icon01_opaque_samples=0;
+    logtext(g_icon01_opaque_enabled?
+        "ICON01_OPAQUE enabled (EXPERIMENTAL: original 128x128 icon01 index241 black, texture fingerprint verified)":
+        "ICON01_OPAQUE disabled (reference RGB565 keyed icon01 background)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PERSPECTIVE",setting,sizeof(setting));
       g_perspective_enabled=(n==1u && setting[0]=='1');}
     logtext(g_perspective_enabled?"PERSPECTIVE_MODE enabled (world triangles only)":"PERSPECTIVE_MODE disabled (v0.19 reference rasterization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_WORLD_BILINEAR",setting,sizeof(setting));
+      g_world_bilinear_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_world_bilinear_enabled?
+        "WORLD_BILINEAR enabled (EXPERIMENTAL modern 3D opaque world filter, UI/HUD bypassed)":
+        "WORLD_BILINEAR disabled (original Mystique nearest texture sampling)");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_MODULATE",setting,sizeof(setting));
       g_msi_modulate_enabled=(n==1u && setting[0]=='1');}
     logtext(g_msi_modulate_enabled?"MSI_MODULATE enabled (opt-in per-vertex RGB, textured triangles only; Z-plane HUD excluded)":
         "MSI_MODULATE disabled (v0.32 reference textured colors)");
     {char setting[8];DWORD n=GetEnvironmentVariableA("MATROX_MSI_DITHER",setting,sizeof(setting));
       g_msi_dither_enabled=(n==1u && setting[0]=='1');}
-    logtext(g_msi_dither_enabled?"MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)":
-            "MSI_DITHER disabled (v0.33 modulation quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_RGB888_LIGHTING",setting,sizeof(setting));
+      g_rgb888_lighting_enabled=(n==1u && setting[0]=='1');}
+    logtext(g_rgb888_lighting_enabled?"MSI_LIGHTING_MODEL RGB888_DIV256_EXPERIMENTAL":
+            "MSI_LIGHTING_MODEL LEGACY_RGB565_DIV255");
+    logtext(g_msi_dither_enabled?(g_rgb888_lighting_enabled?
+            "MSI_DITHER enabled (experimental 2x2 RGB888 quantization; guest Dither gate unchanged)":
+            "MSI_DITHER enabled (experimental 4x4 ordered RGB565, modulated 3D world only)"):
+            "MSI_DITHER disabled (no ordered quantization)");
+    {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_PRESENTATION_SMOOTH",setting,sizeof(setting));
+      g_presentation_smooth_enabled=(n==1u && setting[0]=='1');}
+    g_presentation_smooth_failed=g_presentation_smooth_reported=0;
+    logtext(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy");
     {char setting[8]={0};DWORD n=GetEnvironmentVariableA("MATROX_MSI_BORDERLESS",setting,sizeof(setting));
       g_borderless_enabled=(n==1u && setting[0]=='1');}
     logtext(g_borderless_enabled?"PREVIEW_BORDERLESS requested: desktop-sized WS_POPUP, centered source 8:5":"PREVIEW_BORDERLESS disabled: original 960x600 window");
@@ -1373,6 +2075,23 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_color=alloc(framesize);g_depth=alloc(zsize);g_texture=alloc(texsize);
     g_ownership_bytes=(unsigned)Width*(unsigned)Height;
     g_ownership=(BYTE*)alloc(g_ownership_bytes);
+    g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
+    g_world_provenance=(BYTE*)alloc(g_ownership_bytes);
+    g_shadow_provenance=(BYTE*)alloc(g_ownership_bytes);
+    g_final_texel_source=(BYTE*)alloc(g_ownership_bytes);
+    g_final_source_audit=(WORD*)alloc(g_ownership_bytes*2u);
+    g_undithered_reference=(WORD*)alloc(g_ownership_bytes*2u);
+    g_final_light_inputs=(BYTE*)alloc(g_ownership_bytes*5u);
+    if(!g_final_light_inputs)
+        logtext("LIGHTING_INPUT_CAPTURE disabled: optional diagnostic allocation failed");
+    if(!g_undithered_reference)
+        logtext("UNDITHERED_CAPTURE disabled: optional reference allocation failed");
+    if(!g_final_source_audit)
+        logtext("SOURCE_AUDIT_CAPTURE disabled: optional metadata allocation failed");
+    if(!g_final_texel_source)logtext("FINAL_TEXEL_CAPTURE disabled: diagnostic allocation failed");
+    if(!g_shadow_provenance)logtext("SHADOW_CAPTURE disabled: optional diagnostic allocation failed");
+    if(!g_world_provenance)logtext("WORLD_CAPTURE disabled: optional diagnostic allocation failed");
+    if(!g_atlas_provenance)logtext("ATLAS_CAPTURE disabled: optional diagnostic allocation failed");
     g_shadow_underlay=(g_shadow_underlay_enabled||g_shadow_once_enabled)?(BYTE*)alloc(g_ownership_bytes):NULL;
     if(!g_color||!g_depth||!g_texture||!g_ownership||
        ((g_shadow_underlay_enabled||g_shadow_once_enabled) && !g_shadow_underlay)){
@@ -1399,6 +2118,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_tex_uploads=g_palette_uploads=g_drawn_triangles=g_drawn_pixels=0;
     g_disabled_tex_uploads=g_disabled_lut_uploads=g_direct_cache_reads=0;
     g_missing_textures=g_rejected_triangles=0;
+    g_vertex_region_reuses=g_vertex_region_fallbacks=0;
     g_zplanes=0;g_drawn_zplanes=g_drawn_zpixels=g_rejected_zplanes=0;
     g_first_zplane_frame=0xFFFFFFFFu;
     g_cap_qpc_ready=0;
@@ -1450,6 +2170,7 @@ BOOL __cdecl msiExit(void){
     }
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
+    log_opacity_histogram("exit");
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     clean();
@@ -1532,8 +2253,19 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     g_auto_blue_frame_samples=0;
     /* No automatic debug ownership tracking or BMP capture. */
     g_capture_ownership=g_manual_capture_active;
-    if(g_capture_ownership && g_ownership){
-        zero(g_ownership,g_ownership_bytes);
+    if(g_capture_ownership){
+        if(g_ownership)zero(g_ownership,g_ownership_bytes);
+        if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
+        if(g_world_provenance)zero(g_world_provenance,g_ownership_bytes);
+        if(g_shadow_provenance)zero(g_shadow_provenance,g_ownership_bytes);
+        if(g_final_texel_source)zero(g_final_texel_source,g_ownership_bytes);
+        if(g_final_source_audit)zero(g_final_source_audit,g_ownership_bytes*2u);
+        if(g_undithered_reference)zero(g_undithered_reference,g_ownership_bytes*2u);
+        if(g_final_light_inputs)zero(g_final_light_inputs,g_ownership_bytes*5u);
+        zero(g_world_rgbkey_index_hist,sizeof(g_world_rgbkey_index_hist));
+        zero(g_world_key_candidate_hist,sizeof(g_world_key_candidate_hist));
+        g_world_index1_preview_attempts=0;
+        g_key_alias_bind_reports=0;
         g_world_texture_samples=0;
     }
     /* Tracker is per-frame, never inherited from a preceding frame. */
@@ -1603,15 +2335,32 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
     if(g_manual_capture_active){
-        char frame[100],coverage[100];
-        if(next_capture_pair(frame,coverage)){
+        char frame[100],coverage[100],atlas[100],world[100],shadow[100],texel[100],audit[100],nodither[100],lighting[100];
+        if(next_capture_pair(frame,coverage,atlas,world,shadow,texel,audit,nodither,lighting)){
             capture_frame(frame,0u);
             capture_ownership(coverage);
+            capture_atlas_provenance(atlas);
+            capture_world_provenance(world);
+            capture_shadow_provenance(shadow);
+            capture_final_texel_source(texel);
+            capture_final_source_audit(audit);
+            capture_undithered_reference(nodither);
+            capture_final_light_inputs(lighting);
+            log_opacity_histogram("F12");
+            {char line[320];DWORD n=0;
+             putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
+             putstr(line,&n," texel=");putstr(line,&n,texel);
+             putstr(line,&n," sourceaudit=");putstr(line,&n,audit);
+             putstr(line,&n," nodither=");putstr(line,&n,nodither);
+             putstr(line,&n," lighting=");putstr(line,&n,lighting);
+             line[n]=0;logtext(line);}
             char message[350];DWORD n=0;
             putstr(message,&n,"MANUAL_CAPTURE pair frame=");
             putstr(message,&n,frame);
             putstr(message,&n," coverage=");
             putstr(message,&n,coverage);
+            putstr(message,&n," atlas=");putstr(message,&n,atlas);
+            putstr(message,&n," world=");putstr(message,&n,world);
             message[n]=0;logtext(message);
         }
         g_manual_capture_active=0;
@@ -1632,14 +2381,26 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("CACHE_UPLOAD_WHILE_DISABLED textures=",g_disabled_tex_uploads,"palettes=",g_disabled_lut_uploads);
         lognum("CACHE_DIRECT_READS triangles=",g_direct_cache_reads,NULL,0);
         lognum("RENDER_REJECTED triangles=",g_rejected_triangles,"rasterized_pixels=",g_drawn_pixels);
+        lognum("VERTEX_REGION_CHECK reused_queries=",g_vertex_region_reuses,
+               "fallback_queries=",g_vertex_region_fallbacks);
         lognum("PERSPECTIVE_UV enabled=",(unsigned)g_perspective_enabled,"triangles=",g_perspective_triangles);
         lognum("PERSPECTIVE_UV adjusted_pixels=",g_perspective_pixels,"varying_invw_world_tris=",g_world_varying_invw);
         lognum("PERSPECTIVE_UV constant_invw_world_tris=",g_world_constant_invw,"invalid_invw_world_tris=",g_world_invalid_invw);
+        lognum("WORLD_BILINEAR enabled=",(unsigned)g_world_bilinear_enabled," triangles=",g_world_bilinear_triangles);
+        lognum("WORLD_BILINEAR filtered_samples=",g_world_bilinear_samples,"changed_pixels=",g_world_bilinear_changed);
+        lognum("WORLD_BILINEAR keyed_neighbor_bypass=",g_world_bilinear_keyed_bypass,NULL,0);
+        lognum("WORLD_BILINEAR palette_cached_triangles=",g_world_bilinear_palette_triangles,
+               " palette_cached_samples=",g_world_bilinear_palette_samples);
+        lognum("WORLD_BILINEAR uniform_neighborhood_samples=",g_world_bilinear_uniform_samples,NULL,0);
         lognum("WORLD_BLUE_KEY samples=",g_world_blue_samples,"transparent_state_samples=",g_world_blue_eligible);
         lognum("WORLD_BLUE_KEY skipped=",g_world_blue_skipped,"enabled=",(unsigned)g_world_blue_key_enabled);
         lognum("INDEXED_KEY candidates=",g_index_key_candidates,"skipped=",g_index_key_skipped);
         lognum("INDEXED_KEY blue_candidates=",g_index_key_blue_candidates,"other_candidates=",g_index_key_other_candidates);
         lognum("INDEXED_KEY enabled=",(unsigned)g_index_key_enabled,NULL,0);
+        lognum("ICON01_OPAQUE enabled=",(unsigned)g_icon01_opaque_enabled,
+               " verified_uploads=",g_icon01_verified_uploads);
+        lognum("ICON01_OPAQUE source_index241_opaque_attempts=",g_icon01_opaque_samples,
+               " active_cache_offset=",g_icon01_cache_offset);
         lognum("SHADOW_BLEND dark_flat_pixels=",g_shadow_dark_candidates,"blended_pixels=",g_shadow_dark_blended);
         lognum("SHADOW_BLEND enabled=",(unsigned)g_shadow_blend_enabled,NULL,0);
         lognum("SHADOW_UNDERLAY candidates_with_texture=",g_shadow_underlay_pixels,
@@ -1658,6 +2419,15 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         lognum("ZPLANE_BLUE_KEY rgb565=0x00FF skipped_pixels=",g_zplane_blue_key_skips,NULL,0);
         lognum("LARGE_Z_ATLAS triangles=",g_sparse_atlas_triangles,"drawn_pixels=",g_sparse_atlas_drawn_pixels);
         lognum("LARGE_Z_ATLAS missing_samples=",g_sparse_atlas_unmapped_pixels,"direct_nonzero_samples=",g_sparse_atlas_direct_pixels);
+        lognum("LARGE_Z_ATLAS zero_skips_color_keyed=",g_sparse_atlas_zero_keyed_skips,
+               "zero_skips_not_keyed=",g_sparse_atlas_zero_unkeyed_skips);
+        lognum("MSI_NATIVE_REQUEST texture_transparency=",g_native_tex_transparency,
+               "alpha_mask_nonzero=",g_native_alpha_mask);
+        lognum("MSI_NATIVE_REQUEST clamp_u=",g_native_tex_clamp_u,
+               "clamp_v=",g_native_tex_clamp_v);
+        lognum("MSI_NATIVE_REQUEST depth_enabled=",g_native_depth_enabled,
+               "depth_protect=",g_native_depth_protect);
+        lognum("MSI_NATIVE_REQUEST color_protect=",g_native_color_protect,NULL,0);
         lognum("MSI_FX_STATES updates=",g_fx_param_updates,"dither=",g_fx_dither_parameters);
         lognum("MSI_FX_STATES modulate=",g_fx_modulate_parameters,"decal=",g_fx_decal_parameters);
         lognum("MSI_FX_STATES dither_textured=",g_fx_dither_textured_states,"modulate_textured=",g_fx_modulate_textured_states);
@@ -1746,6 +2516,35 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(p->msiTexture.Decal)g_fx_decal_parameters++;
     if(p->msiTexture.Enable && p->msiColor.Dither)g_fx_dither_textured_states++;
     if(p->msiTexture.Enable && p->msiTexture.Modulate)g_fx_modulate_textured_states++;
+    if(p->msiTexture.Enable){
+        if(p->msiTexture.Transparency)g_native_tex_transparency++;
+        if(p->msiTexture.Transparency && p->msiTexture.KeyingAlphaMask)
+            g_native_alpha_mask++;
+        if(p->msiTexture.Clamp_u)g_native_tex_clamp_u++;
+        if(p->msiTexture.Clamp_v)g_native_tex_clamp_v++;
+    }
+    if(p->msiDepth.Enable)g_native_depth_enabled++;
+    if(p->msiDepth.Protect)g_native_depth_protect++;
+    if(p->msiColor.Protect)g_native_color_protect++;
+    if(g_native_state_details<16u &&
+       ((p->msiTexture.Enable && p->msiTexture.Transparency &&
+         p->msiTexture.KeyingAlphaMask) ||
+        p->msiDepth.Enable || p->msiDepth.Protect ||
+        p->msiColor.Protect || p->msiTexture.Decal)){
+        char ns[500];DWORD nn=0;
+        putstr(ns,&nn,"MSI_NATIVE_STATE frame=");putunsigned(ns,&nn,g_frames);
+        putstr(ns,&nn," texture=");putunsigned(ns,&nn,(unsigned)(p->msiTexture.Enable!=0));
+        putstr(ns,&nn," transparent=");putunsigned(ns,&nn,(unsigned)(p->msiTexture.Transparency!=0));
+        putstr(ns,&nn," key_color=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingColor);
+        putstr(ns,&nn," key_color_mask=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingColorMask);
+        putstr(ns,&nn," key_alpha=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingAlpha);
+        putstr(ns,&nn," key_alpha_mask=");puthex(ns,&nn,(unsigned)p->msiTexture.KeyingAlphaMask);
+        putstr(ns,&nn," depth_enable=");putunsigned(ns,&nn,(unsigned)(p->msiDepth.Enable!=0));
+        putstr(ns,&nn," depth_compare=");putunsigned(ns,&nn,(unsigned)p->msiDepth.Compare);
+        putstr(ns,&nn," depth_protect=");putunsigned(ns,&nn,(unsigned)(p->msiDepth.Protect!=0));
+        putstr(ns,&nn," color_protect=");putunsigned(ns,&nn,(unsigned)(p->msiColor.Protect!=0));
+        ns[nn]=0;logtext(ns);g_native_state_details++;
+    }
     if(g_fx_param_state_logs<12u || (g_fx_param_updates%100000u)==0){
         char fb[360];DWORD fn=0;
         putstr(fb,&fn,"MSI_FX_PARAMS frame=");putunsigned(fb,&fn,g_frames);
@@ -1808,6 +2607,30 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
                 const BYTE *in=p->msiTexture.pMem;
                 for(unsigned j=0;j<size;j++)out[j]=in[j];
                 for(unsigned j=off/256u;j<=(off+size-1)/256u;j++)g_texture_uploaded[j]=1;
+                /* The cache can be reused: never preserve icon01 identity
+                 * after overlapping source bytes have been uploaded. */
+                if(g_icon01_cache_offset!=0xffffffffu &&
+                   off<g_icon01_cache_offset+16384u &&
+                   off+size>g_icon01_cache_offset)
+                    g_icon01_cache_offset=0xffffffffu;
+                if(g_icon01_opaque_enabled && w==128 && h==128 && bpp==8 &&
+                   size==16384u){
+                    unsigned hash=2166136261u,n0=0u,n1=0u,n241=0u;
+                    for(unsigned k=0;k<16384u;k++){
+                        unsigned v=out[k];
+                        hash=(hash^v)*16777619u;
+                        if(v==0u)n0++;
+                        if(v==1u)n1++;
+                        if(v==241u)n241++;
+                    }
+                    if(hash==0x35107cbau && n0==0u && n1==0u &&
+                       n241==6993u){
+                        g_icon01_cache_offset=off;
+                        g_icon01_verified_uploads++;
+                        lognum("ICON01_OPAQUE original_titlem=icon01_FINGERPRINT_MATCH cache_offset=",
+                               off," uploads=",g_icon01_verified_uploads);
+                    }
+                }
                 g_tex_uploads++;
                 if(!p->msiTexture.Enable)g_disabled_tex_uploads++;
                 if(g_tex_uploads<=8 || (g_tex_uploads%10000u)==0){
@@ -1849,16 +2672,46 @@ BOOL __cdecl msiSetParameters(T_msiParameters*p){
 }
 /* Pointer inspection is diagnostic-only. Never dereference the original game
  * supplied geometry unless its entire record is in committed memory. */
+/* Preserve the original readable_span protection and range semantics.
+ * A single VirtualQuery region can cover multiple independent pointers only
+ * if EVERY complete record fits in the same committed, readable region. */
+static BOOL span_in_region(const void *p,DWORD len,
+                           const MEMORY_BASIC_INFORMATION32*mem){
+    if(!p)return FALSE;
+    DWORD start=(DWORD)p;
+    if(start<65536u || start>0xffffffffu-len)return FALSE;
+    if(mem->State!=MEM_COMMIT || (mem->Protect & PAGE_GUARD) ||
+       (mem->Protect & 0xffu)==PAGE_NOACCESS)return FALSE;
+    DWORD base=(DWORD)mem->BaseAddress;
+    return start>=base && start-base<=mem->RegionSize &&
+           len<=mem->RegionSize-(start-base);
+}
 static BOOL readable_span(const void *p, DWORD len){
     if(!p)return FALSE;
     DWORD start=(DWORD)p;
     if(start<65536u || start>0xffffffffu-len)return FALSE;
     MEMORY_BASIC_INFORMATION32 mem;
     if(VirtualQuery(p,&mem,sizeof(mem))!=sizeof(mem))return FALSE;
-    if(mem.State!=MEM_COMMIT || (mem.Protect & PAGE_GUARD) ||
-       (mem.Protect & 0xffu)==PAGE_NOACCESS)return FALSE;
-    DWORD base=(DWORD)mem.BaseAddress;
-    return start>=base && start-base<=mem.RegionSize && len<=mem.RegionSize-(start-base);
+    return span_in_region(p,len,&mem);
+}
+/* Check the first vertex with one fresh VirtualQuery. Reuse its actual
+ * memory-region report only for other vertices fully contained there.
+ * Distinct/mixed/guarded regions fall back to original individual checks.
+ * This saves up to two kernel queries per game triangle without changing
+ * memory permissions, original game vertices, or rasterized pixels. */
+static BOOL readable_triangle_vertices(const T_msiVertex*a,
+                                       const T_msiVertex*b,
+                                       const T_msiVertex*c){
+    DWORD len=(DWORD)sizeof(*a);
+    if(!a || (DWORD)a<65536u || (DWORD)a>0xffffffffu-len)return FALSE;
+    MEMORY_BASIC_INFORMATION32 mem;
+    if(VirtualQuery(a,&mem,sizeof(mem))!=sizeof(mem))return FALSE;
+    if(!span_in_region(a,len,&mem))return FALSE;
+    if(span_in_region(b,len,&mem))g_vertex_region_reuses++;
+    else {g_vertex_region_fallbacks++;if(!readable_span(b,len))return FALSE;}
+    if(span_in_region(c,len,&mem))g_vertex_region_reuses++;
+    else {g_vertex_region_fallbacks++;if(!readable_span(c,len))return FALSE;}
+    return TRUE;
 }
 static void put_float_approx(char*buf,DWORD*n,float f){
     if(!(f>=-100000.0f && f<=100000.0f)){putstr(buf,n,"nan/out-of-range");return;}
@@ -1937,7 +2790,51 @@ static unsigned rgb565_modulate_ordered(unsigned color,unsigned mr,unsigned mg,
     unsigned b=modulate_channel_ordered(color&31u,mb,31u,threshold);
     return (r<<11)|(g<<5)|b;
 }
+/* Independently fitted from the owner's original MSI95 1.4 / 86Box
+ * synthetic captures: shift-expand channels to eight bits, multiply and
+ * truncate /256, then optionally add the measured 2x2 quantization offsets.
+ * This is NOT a claim of physical hardware parity. Keep existing coefficient
+ * interpolation, keying, alpha and the guest Dither gate unchanged. */
+static unsigned rgb888_modulate_565(unsigned color,unsigned mr,unsigned mg,
+                                    unsigned mb,unsigned x,unsigned y,int dither){
+    static const BYTE ranks[4]={0,3,2,1};
+    unsigned rank=dither?(unsigned)ranks[((y&1u)<<1u)|(x&1u)]:0u;
+    unsigned r=((((((color>>11)&31u)<<3u)*mr)>>8u)+2u*rank)>>3u;
+    unsigned g=((((((color>>5)&63u)<<2u)*mg)>>8u)+rank)>>2u;
+    unsigned b=(((((color&31u)<<3u)*mb)>>8u)+2u*rank)>>3u;
+    if(r>31u)r=31u;if(g>63u)g=63u;if(b>31u)b=31u;
+    return (r<<11u)|(g<<5u)|b;
+}
 static float cross2(float ax,float ay,float bx,float by){return ax*by-ay*bx;}
+/* Same source texel decoder as the nearest path, used only by optional
+ * opaque world bilinear after original cache-residency checks. */
+static unsigned world_texel_rgb565(const BYTE*tex,const BYTE*lut,unsigned planes,unsigned pos){
+    if(planes==16u)return (unsigned)tex[2u*pos]|((unsigned)tex[2u*pos+1u]<<8);
+    unsigned idx=(unsigned)tex[pos]; /* only 8bpp supported by this filter */
+    return (unsigned)lut[2u*idx]|((unsigned)lut[2u*idx+1u]<<8);
+}
+/* Caller has already processed the centre texel with the original
+ * transparency/index/blue key logic. A 2x2 neighborhood can only be
+ * mixed when every tap would also be eligible for opaque drawing.
+ * Ignore the experimental black index1/icon01 exemptions here:
+ * treating their black as a key is deliberately conservative and keeps
+ * silhouettes crisp instead of smearing neighboring black into color. */
+static int world_bilinear_tap_opaque(unsigned planes,unsigned raw_index,
+                                     unsigned rgb,unsigned transparent,
+                                     unsigned key,unsigned mask){
+    if(!transparent)return 1;
+    if(((rgb^key)&mask)==0u)return 0;
+    if(planes==8u && g_index_key_enabled && key<=255u && mask!=0u){
+        if((((raw_index^key)&(mask&255u))==0u))return 0;
+    }
+    if(g_world_blue_key_enabled && rgb==0x00FFu)return 0;
+    return 1;
+}
+static unsigned bilinear_texcoord(int p,unsigned limit,int clamp){
+    if(p<0)return clamp?0u:limit-1u;
+    if((unsigned)p>=limit)return clamp?limit-1u:0u;
+    return (unsigned)p;
+}
 static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,const T_msiVertex*c,BYTE opacity){
     if(!g_state_valid || !g_color || g_info.msiColor.BytesPerPixel!=2 || opacity==0)return;
     float x0=a->x,y0=a->y,x1=b->x,y1=b->y,x2=c->x,y2=c->y;
@@ -1974,8 +2871,9 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     const BYTE* texture=NULL;const BYTE* lut=NULL;
     unsigned texW=0,texH=0,planes=0;
     int sparseAtlas=0;
+    int sparseZeroWouldBeKeyed=0; /* diagnostic only; never affects a skip */
     unsigned texOffset=0;
-    int perspective=0;
+    int perspective=0,world_depth_varying=0,bilinear_triangle=0;
     float aow=a->invW, bow=b->invW, cow=c->invW;
     float auw=0.f, buw=0.f, cuw=0.f, avw=0.f,bvw=0.f,cvw=0.f;
     if(textured){
@@ -1993,6 +2891,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 if(bow>mx)mx=bow;if(cow>mx)mx=cow;
                 if(mx-mn>mx*0.00001f){
                     g_world_varying_invw++;
+                    world_depth_varying=1;
                     if(g_perspective_enabled){
                         perspective=1;g_perspective_triangles++;
                         auw=a->u*aow;buw=b->u*bow;cuw=c->u*cow;
@@ -2028,6 +2927,15 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             g_missing_textures++;return;
         }
         texture=(const BYTE*)g_texture+texOffset;
+        /* The original nearest center-key path always runs first.
+         * Even with game Transparency=1, fully opaque source neighborhoods
+         * in perspective-varying 3D world can be filtered safely.
+         * Each of four taps is rechecked; keyed neighbors fall back to
+         * nearest so sprites, icon01 and silhouettes never gain halos. */
+        bilinear_triangle=g_world_bilinear_enabled && world_depth_varying &&
+            !g_zplane_draw_context && opacity==100u &&
+            (planes==8u || planes==16u) && texW>=2u && texH>=2u;
+        if(bilinear_triangle)g_world_bilinear_triangles++;
         if(g_capture_ownership && !g_zplane_draw_context && g_world_texture_samples<8u){
             char binfo[400];DWORD n=0;
             putstr(binfo,&n,"WORLD_TEXTURE_BIND frame=");putunsigned(binfo,&n,g_frames);
@@ -2052,12 +2960,123 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 g_missing_textures++;return;
             }
             lut=(const BYTE*)g_texture+(unsigned)loff;
+            /* At most 24 distinct F12 world CLUT+texture+key states.
+             * Palettes are reusable independently of texture data, so
+             * count *all* RGB565 key aliases and report 0/1/241 values.
+             * This is passive; the actual transparency rule below stays
+             * exactly as it was. Do not assume unused palette slots are
+             * sampled or that key aliases prove hardware semantics. */
+            if(planes==8u && !g_zplane_draw_context && g_capture_ownership &&
+               g_state.msiTexture.Transparency && g_key_alias_bind_reports<24u){
+                unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+                unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+                unsigned fingerprint[4]={texOffset,(unsigned)loff,key,mask};
+                int already=0;
+                for(unsigned p=0;p<g_key_alias_bind_reports;p++){
+                    if(g_key_alias_seen[p][0]==fingerprint[0] &&
+                       g_key_alias_seen[p][1]==fingerprint[1] &&
+                       g_key_alias_seen[p][2]==fingerprint[2] &&
+                       g_key_alias_seen[p][3]==fingerprint[3]){already=1;break;}
+                }
+                if(!already){
+                    for(unsigned j=0;j<4;j++)
+                        g_key_alias_seen[g_key_alias_bind_reports][j]=fingerprint[j];
+                    ++g_key_alias_bind_reports;
+                    unsigned aliases=0;
+                    for(unsigned ix=0;ix<256u;ix++){
+                        unsigned rgb=(unsigned)lut[2u*ix]|((unsigned)lut[2u*ix+1u]<<8);
+                        if((rgb&mask)==(key&mask))aliases++;
+                    }
+                    unsigned ix0=(unsigned)lut[0]|((unsigned)lut[1]<<8);
+                    unsigned ix1=(unsigned)lut[2]|((unsigned)lut[3]<<8);
+                    unsigned ix241=(unsigned)lut[482]|((unsigned)lut[483]<<8);
+                    char ab[560];DWORD an=0;
+                    putstr(ab,&an,"F12_PALETTE_BIND frame=");putunsigned(ab,&an,g_frames);
+                    putstr(ab,&an," wh=");putunsigned(ab,&an,texW);
+                    putstr(ab,&an,"x");putunsigned(ab,&an,texH);
+                    putstr(ab,&an," texture_offset=");putunsigned(ab,&an,texOffset);
+                    putstr(ab,&an," lut_offset=");putunsigned(ab,&an,(unsigned)loff);
+                    putstr(ab,&an," key=");puthex(ab,&an,key);
+                    putstr(ab,&an," mask=");puthex(ab,&an,mask);
+                    putstr(ab,&an," palette_key_alias_indices=");putunsigned(ab,&an,aliases);
+                    putstr(ab,&an," lut0=");puthex(ab,&an,ix0);
+                    putstr(ab,&an," lut1=");puthex(ab,&an,ix1);
+                    putstr(ab,&an," lut241=");puthex(ab,&an,ix241);
+                    ab[an]=0;logtext(ab);
+                    /* Exact original game-resource provenance from the
+                     * owner's TITLEM.RWB, measured independently offline.
+                     * F12 ONLY: identify the true uploaded texture by a
+                     * content hash, never by a volatile heap pointer.
+                     * The first 16384 8-bit indices in original icon01
+                     * hash to FNV1a32 0x35107cba (6993 pixels index241).
+                     * Diagnostic only; no key/discard/draw state changes. */
+                    if(texW==128u && texH==128u){
+                        unsigned hash=2166136261u;
+                        unsigned n0=0,n1=0,n241=0;
+                        for(unsigned ix=0;ix<16384u;ix++){
+                            unsigned v=(unsigned)texture[ix];
+                            hash=(hash^v)*16777619u;
+                            if(v==0u)n0++;
+                            if(v==1u)n1++;
+                            if(v==241u)n241++;
+                        }
+                        char al[380];DWORD nn=0;
+                        putstr(al,&nn,"F12_TEXTURE_ATLAS frame=");putunsigned(al,&nn,g_frames);
+                        putstr(al,&nn," texture_offset=");putunsigned(al,&nn,texOffset);
+                        putstr(al,&nn," lut_offset=");putunsigned(al,&nn,(unsigned)loff);
+                        putstr(al,&nn," fnv1a32=");puthex(al,&nn,hash);
+                        putstr(al,&nn," raw_index0=");putunsigned(al,&nn,n0);
+                        putstr(al,&nn," raw_index1=");putunsigned(al,&nn,n1);
+                        putstr(al,&nn," raw_index241=");putunsigned(al,&nn,n241);
+                        if(hash==0x35107cbau && n241==6993u && n1==0u)
+                            putstr(al,&nn," original_titlem=icon01_FINGERPRINT_MATCH");
+                        al[nn]=0;logtext(al);
+                    }
+                }
+            }
+        }
+        if(sparseAtlas){
+            /* Classify a zero-valued *sample* after palette lookup, but do
+             * not assume that source zero is a valid written texel. This
+             * distinguishes a reasonable transparent skip from an ambiguous
+             * potentially opaque pixel without changing rasterization. */
+            unsigned zero_color=planes==16u?0u:
+                ((unsigned)lut[0]|((unsigned)lut[1]<<8));
+            unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+            int original_key=(g_state.msiTexture.Transparency &&
+                ((zero_color & mask)==
+                 ((unsigned)g_state.msiTexture.KeyingColor & mask)));
+            /* Existing OEM Z-plane blue-key heuristic also skips 0x00FF. */
+            sparseZeroWouldBeKeyed=original_key || zero_color==0x00FFu;
         }
         if(!(a->u>=-10000.f&&a->u<=10000.f&&b->u>=-10000.f&&b->u<=10000.f&&
              c->u>=-10000.f&&c->u<=10000.f&&a->v>=-10000.f&&a->v<=10000.f&&
              b->v>=-10000.f&&b->v<=10000.f&&c->v>=-10000.f&&c->v<=10000.f)){
             g_rejected_triangles++;return;
         }
+    }
+    /* Prepare a per-triangle CLUT+opacity lookup only for sufficiently
+     * large, eligible indexed 3D polygons. No global cache or palette
+     * generation assumptions: even direct writes to the original CLUT
+     * are seen on the next triangle. The small-triangle path retains
+     * the prior direct decoding, avoiding 256-entry setup overhead. */
+    WORD bilinear_palette_rgb[256];
+    BYTE bilinear_palette_opaque[256];
+    int bilinear_palette_ready=0;
+    if(bilinear_triangle && planes==8u && lut &&
+       (unsigned)(right-left)*(unsigned)(bottom-top)>=512u){
+        const unsigned trans=(unsigned)g_state.msiTexture.Transparency;
+        const unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+        const unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+        for(unsigned index=0;index<256u;index++){
+            unsigned rgb=(unsigned)lut[2u*index]|
+                         ((unsigned)lut[2u*index+1u]<<8);
+            bilinear_palette_rgb[index]=(WORD)rgb;
+            bilinear_palette_opaque[index]=(BYTE)world_bilinear_tap_opaque(
+                8u,index,rgb,trans,key,mask);
+        }
+        bilinear_palette_ready=1;
+        g_world_bilinear_palette_triangles++;
     }
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
@@ -2074,6 +3093,9 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             float w0=1.f-w1-w2;
             if(w0<-.00001f||w1<-.00001f||w2<-.00001f)continue;
             unsigned color=0, source_index=0, source_index_valid=0;
+            unsigned undithered_color=0u;
+            unsigned used_mr=255u,used_mg=255u,used_mb=255u;
+            unsigned prelight_rgb565=0u;
             if(textured){
                 float u=w0*a->u+w1*b->u+w2*c->u;
                 float v=w0*a->v+w1*b->v+w2*c->v;
@@ -2103,8 +3125,15 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     int marked=g_texture_uploaded[absolute/256u]!=0;
                     int nonzero=(planes==16) ? (texture[rel]!=0 || texture[rel+1u]!=0) :
                                              (texture[rel]!=0);
+                    if(g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=(BYTE)(marked?
+                            (nonzero?1u:2u):(nonzero?3u:4u));
+                    }
                     if(!marked && !nonzero){
                         g_sparse_atlas_unmapped_pixels++;
+                        if(sparseZeroWouldBeKeyed)g_sparse_atlas_zero_keyed_skips++;
+                        else g_sparse_atlas_zero_unkeyed_skips++;
                         if(g_capture_ownership && g_ownership){
                             unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
                             if(!g_ownership[j])g_ownership[j]=9;
@@ -2119,14 +3148,75 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     if(planes==8u){source_index=ix;source_index_valid=1u;}
                     color=(unsigned)lut[2*ix]|((unsigned)lut[2*ix+1]<<8);
                 }
+                /* Classify world samples before any color-key rejection. */
+                if(!g_zplane_draw_context && g_capture_ownership && g_world_provenance){
+                    unsigned kind=planes==16u?1u:(planes==8u?
+                        ((source_index_valid && source_index==0u)?3u:2u):7u);
+                    g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=(BYTE)kind;
+                }
+                /* Isolated diagnostic-render experiment (NOT on main).
+                 * F12 source-index map shows index 1 occupies the missing
+                 * black silhouette around three menu portraits. Under the
+                 * original RGB565=0 key, both palette indices 1 and 241
+                 * become black. Keep index 241 keyed, but let index 1 render
+                 * its black palette color when using 128x128 indexed menu
+                 * textures. A/B against PR #39; never apply to Z-planes. */
+                if(g_capture_ownership && !g_zplane_draw_context &&
+                   source_index_valid && g_state.msiTexture.Transparency &&
+                   ((color&g_state.msiTexture.KeyingColorMask)==
+                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)))
+                    g_world_key_candidate_hist[source_index]++;
+                int preview_index1_opaque=
+                    !g_zplane_draw_context && source_index_valid &&
+                    source_index==1u && texW==128u && texH==128u &&
+                    color==0u && g_state.msiTexture.Transparency &&
+                    g_state.msiTexture.KeyingColor==0u &&
+                    g_state.msiTexture.KeyingColorMask==0xffffu;
+                /* Original TITLEM icon01 holds 6993 index241 background
+                 * texels, confirmed by F12 on native Windows. Restore only
+                 * this specific atlas, not global post-CLUT black aliases.
+                 * Never touch Z-plane/HUD, 16-bit, 4-bit, or other textures. */
+                int preview_icon01_opaque=
+                    g_icon01_opaque_enabled && !g_zplane_draw_context &&
+                    source_index_valid && source_index==241u &&
+                    texW==128u && texH==128u && planes==8u &&
+                    texOffset==g_icon01_cache_offset &&
+                    color==0u && g_state.msiTexture.Transparency &&
+                    g_state.msiTexture.KeyingColor==0u &&
+                    g_state.msiTexture.KeyingColorMask==0xffffu;
                 if(g_state.msiTexture.Transparency &&
                    ((color&g_state.msiTexture.KeyingColorMask)==
-                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask))){
+                    (g_state.msiTexture.KeyingColor&g_state.msiTexture.KeyingColorMask)) &&
+                   !preview_index1_opaque && !preview_icon01_opaque){
+                    if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=5u;
+                    }
+                    if(!g_zplane_draw_context && g_capture_ownership && source_index_valid)
+                        g_world_rgbkey_index_hist[source_index]++;
+                    if(!g_zplane_draw_context && g_capture_ownership && g_world_provenance){
+                        unsigned kind=source_index_valid?
+                            (source_index==0u?8u:(source_index==1u?9u:
+                             (source_index==241u?10u:11u))):4u;
+                        g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=(BYTE)kind;
+                    }
                     if(g_capture_ownership && g_ownership){
                         unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
                         if(!g_ownership[j])g_ownership[j]=(BYTE)(g_zplane_draw_context?8:7);
                     }
                     continue;
+                }
+                if(preview_index1_opaque && g_capture_ownership){
+                    g_world_index1_preview_attempts++;
+                    if(g_world_provenance)
+                        g_world_provenance[(unsigned)y*(unsigned)width+
+                                           (unsigned)x]=12u;
+                }
+                if(preview_icon01_opaque){
+                    g_icon01_opaque_samples++;
+                    if(g_capture_ownership && g_world_provenance)
+                        g_world_provenance[(unsigned)y*(unsigned)width+
+                                           (unsigned)x]=13u;
                 }
                 /* The 8-bit MSI interface has a palette-index ambiguity:
                  * source pixel index zero can map through the CLUT to blue
@@ -2157,6 +3247,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         diag[n]=0;logtext(diag);g_index_key_debug++;
                     }
                     if(index_match && g_index_key_enabled){
+                        if(g_capture_ownership && g_world_provenance)
+                            g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=5u;
                         g_index_key_skipped++;
                         if(g_capture_ownership && g_ownership){
                             unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
@@ -2212,6 +3304,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                             msg[n]=0;logtext(msg);g_world_blue_diagnostic_count++;
                         }
                         if(g_world_blue_key_enabled){
+                            if(g_capture_ownership && g_world_provenance)
+                                g_world_provenance[(unsigned)y*(unsigned)width+(unsigned)x]=6u;
                             g_world_blue_skipped++;
                             if(g_capture_ownership && g_ownership){
                                 unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
@@ -2224,6 +3318,10 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 /* Experimental MSI Z-plane sprite chroma-key fallback.
                  * Do not apply to world triangles or non-textured primitives. */
                 if(g_zplane_draw_context && color==0x00FFu){
+                    if(sparseAtlas && g_capture_ownership && g_atlas_provenance){
+                        unsigned screen=(unsigned)y*(unsigned)width+(unsigned)x;
+                        g_atlas_provenance[screen]=5u;
+                    }
                     g_zplane_blue_key_skips++;
                     if(g_capture_ownership && g_ownership){
                         unsigned j=(unsigned)y*(unsigned)width+(unsigned)x;
@@ -2231,6 +3329,86 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                     }
                     continue;
                 }
+                /* Modern optional bilinear RGB565 for OPAQUE 3D only.
+                 * u/v have already undergone the original clamp/wrap.
+                 * Texel-center convention (u*width-0.5) preserves original
+                 * samples at texel centers and wraps correctly at tile seams.
+                 * DO NOT use for 2D, HUD, transparent artwork or 4bpp. */
+                if(bilinear_triangle){
+                    float sx=u*(float)texW-0.5f,sy=v*(float)texH-0.5f;
+                    int ix0=floor_clipped(sx),iy0=floor_clipped(sy);
+                    unsigned ix1=bilinear_texcoord(ix0+1,texW,(int)g_state.msiTexture.Clamp_u);
+                    unsigned iy1=bilinear_texcoord(iy0+1,texH,(int)g_state.msiTexture.Clamp_v);
+                    unsigned ix=bilinear_texcoord(ix0,texW,(int)g_state.msiTexture.Clamp_u);
+                    unsigned iy=bilinear_texcoord(iy0,texH,(int)g_state.msiTexture.Clamp_v);
+                    float fracx=sx-(float)ix0,fracy=sy-(float)iy0;
+                    unsigned wx=(unsigned)(fracx*256.0f+0.5f);
+                    unsigned wy=(unsigned)(fracy*256.0f+0.5f);
+                    unsigned p00=iy*texW+ix,p10=iy*texW+ix1;
+                    unsigned p01=iy1*texW+ix,p11=iy1*texW+ix1;
+                    unsigned c00,c10,c01,c11;
+                    int four_opaque;
+                    if(bilinear_palette_ready){
+                        /* Four one-byte indices, four predecoded CLUT
+                         * colors and four prechecked opacity flags.
+                         * The palette is local to this triangle. */
+                        unsigned i00=(unsigned)texture[p00];
+                        unsigned i10=(unsigned)texture[p10];
+                        unsigned i01=(unsigned)texture[p01];
+                        unsigned i11=(unsigned)texture[p11];
+                        c00=(unsigned)bilinear_palette_rgb[i00];
+                        c10=(unsigned)bilinear_palette_rgb[i10];
+                        c01=(unsigned)bilinear_palette_rgb[i01];
+                        c11=(unsigned)bilinear_palette_rgb[i11];
+                        four_opaque=bilinear_palette_opaque[i00] &&
+                                    bilinear_palette_opaque[i10] &&
+                                    bilinear_palette_opaque[i01] &&
+                                    bilinear_palette_opaque[i11];
+                        g_world_bilinear_palette_samples++;
+                    }else{
+                        c00=world_texel_rgb565(texture,lut,planes,p00);
+                        c10=world_texel_rgb565(texture,lut,planes,p10);
+                        c01=world_texel_rgb565(texture,lut,planes,p01);
+                        c11=world_texel_rgb565(texture,lut,planes,p11);
+                        unsigned is_transparent=(unsigned)g_state.msiTexture.Transparency;
+                        unsigned key=(unsigned)g_state.msiTexture.KeyingColor;
+                        unsigned mask=(unsigned)g_state.msiTexture.KeyingColorMask;
+                        unsigned r00=planes==8u?(unsigned)texture[p00]:0u;
+                        unsigned r10=planes==8u?(unsigned)texture[p10]:0u;
+                        unsigned r01=planes==8u?(unsigned)texture[p01]:0u;
+                        unsigned r11=planes==8u?(unsigned)texture[p11]:0u;
+                        four_opaque=
+                            world_bilinear_tap_opaque(planes,r00,c00,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r10,c10,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r01,c01,is_transparent,key,mask) &&
+                            world_bilinear_tap_opaque(planes,r11,c11,is_transparent,key,mask);
+                    }
+                    if(four_opaque){
+                        /* All four colors equal: interpolation cannot change
+                         * RGB565. Keep the same filtered/changed semantics
+                         * while avoiding twelve channel multiplications. */
+                        unsigned filtered;
+                        if(c00==c10 && c00==c01 && c00==c11){
+                            filtered=c00;
+                            g_world_bilinear_uniform_samples++;
+                        }else{
+                            filtered=msi_bilinear_mix_rgb565(c00,c10,c01,c11,wx,wy);
+                        }
+                        g_world_bilinear_samples++;
+                        if(filtered!=color)g_world_bilinear_changed++;
+                        color=filtered;
+                    }else{
+                        /* At least one texel is keyed: preserve original
+                         * nearest center and never blend an alpha halo. */
+                        g_world_bilinear_keyed_bypass++;
+                    }
+                }
+                /* Capture the post-sampling RGB565 input BEFORE optional
+                 * modulation/dither/opacity. With original nearest sampling,
+                 * this is the original CLUT-resolved (or native RGB565) texel.
+                 * Experimental bilinear, when enabled, can alter this input. */
+                if(g_capture_ownership && g_final_source_audit)
+                    prelight_rgb565=color;
                 /* Apply MSI texture color after source-index / RGB565 keying,
                  * preserving the validated transparency behavior. Never
                  * apply to HUD Z-planes or untextured shadow triangles. */
@@ -2241,12 +3419,18 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                         mg=clamp_mod_255(w0*a->mg+w1*b->mg+w2*c->mg);
                         mb=clamp_mod_255(w0*a->mb+w1*b->mb+w2*c->mb);
                     }
+                    used_mr=mr;used_mg=mg;used_mb=mb;
                     unsigned rr=(((color>>11)&31u)*mr+127u)/255u;
                     unsigned gg=(((color>>5)&63u)*mg+127u)/255u;
                     unsigned bb=((color&31u)*mb+127u)/255u;
-                    unsigned reference=(rr<<11)|(gg<<5)|bb;
+                    unsigned reference=g_rgb888_lighting_enabled?
+                        rgb888_modulate_565(color,mr,mg,mb,0u,0u,0):((rr<<11)|(gg<<5)|bb);
+                    if(g_capture_ownership && g_undithered_reference)
+                        undithered_color=reference;
                     if(g_msi_dither_enabled && g_state.msiColor.Dither){
-                        color=rgb565_modulate_ordered(color,mr,mg,mb,(unsigned)x,(unsigned)y);
+                        color=g_rgb888_lighting_enabled?
+                            rgb888_modulate_565(color,mr,mg,mb,(unsigned)x,(unsigned)y,1):
+                            rgb565_modulate_ordered(color,mr,mg,mb,(unsigned)x,(unsigned)y);
                         g_dither_candidates++;
                         if(color!=reference)g_dither_changed++;
                     }else{
@@ -2320,8 +3504,85 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 unsigned ng=((((color>>5)&63)*ar)+(((old>>5)&63)*br)+50)/100;
                 unsigned nb=(((color&31)*ar)+((old&31)*br)+50)/100;
                 color=(nr<<11)|(ng<<5)|nb;
+                if(g_capture_ownership && g_undithered_reference &&
+                   !g_zplane_draw_context && textured && modulate &&
+                   g_msi_dither_enabled && g_state.msiColor.Dither){
+                    /* Same source-over blend against the ACTUAL old dst.
+                     * Not a full-frame replay without dither: earlier
+                     * writes to old dst may themselves have used dither. */
+                    unsigned r0=((((undithered_color>>11)&31u)*ar)+(((old>>11)&31u)*br)+50u)/100u;
+                    unsigned g0=((((undithered_color>>5)&63u)*ar)+(((old>>5)&63u)*br)+50u)/100u;
+                    unsigned b0=(((undithered_color&31u)*ar)+((old&31u)*br)+50u)/100u;
+                    undithered_color=(r0<<11)|(g0<<5)|b0;
+                }
             }
             dst[y*width+x]=(WORD)color;
+            if(g_capture_ownership && g_final_light_inputs){
+                BYTE *out=g_final_light_inputs+5u*j;
+                if(!g_zplane_draw_context && textured && g_final_source_audit){
+                    out[0]=(BYTE)prelight_rgb565;
+                    out[1]=(BYTE)(prelight_rgb565>>8u);
+                    out[2]=(BYTE)used_mr;
+                    out[3]=(BYTE)used_mg;
+                    out[4]=(BYTE)used_mb;
+                }else{
+                    out[0]=out[1]=out[2]=out[3]=out[4]=0u;
+                }
+            }
+            if(g_capture_ownership && g_undithered_reference){
+                /* This does not change actual color; later writes must clear
+                 * the hypothetical reference just like source attribution. */
+                unsigned eligible=!g_zplane_draw_context && textured && modulate &&
+                                  g_msi_dither_enabled && g_state.msiColor.Dither;
+                g_undithered_reference[j]=(WORD)(eligible?undithered_color:0u);
+            }
+            if(g_capture_ownership && g_final_source_audit){
+                unsigned metadata=0u;
+                if(!g_zplane_draw_context && textured){
+                    if(planes==8u && source_index_valid)
+                        metadata=0x4000u | (source_index & 255u);
+                    else if(planes==16u)metadata=0x2000u;
+                    else if(planes==4u)metadata=0x1000u;
+                    if(metadata){
+                        if(prelight_rgb565==0u)metadata|=0x0100u;
+                        if(modulate)metadata|=0x0200u;
+                        if(modulate && g_msi_dither_enabled && g_state.msiColor.Dither)
+                            metadata|=0x0400u;
+                        if(applied_opacity<100u)metadata|=0x0800u;
+                    }
+                }
+                /* Later flat/HUD/texture writes overwrite this source tag. */
+                g_final_source_audit[j]=(WORD)metadata;
+            }
+            if(g_capture_ownership && g_final_texel_source){
+                /* Only last SUCCESSFUL writer, never a keyed/discarded attempt.
+                 * 'black' means actual final RGB565 zero after modulation/alpha,
+                 * not that all CLUT source colors with index 1 are zero. */
+                unsigned kind=0u;
+                if(!g_zplane_draw_context && textured){
+                    if(planes==8u && source_index_valid){
+                        if(color==0u)
+                            kind=source_index==1u?1u:(source_index==241u?2u:
+                                 (source_index==0u?3u:4u));
+                        else
+                            kind=source_index==1u?10u:(source_index==241u?11u:5u);
+                    }else if(planes==16u)kind=color==0u?6u:7u;
+                    else if(planes==4u)kind=color==0u?8u:9u;
+                }
+                g_final_texel_source[j]=(BYTE)kind;
+            }
+            /* Read shadow underlay BEFORE the existing state machine updates
+             * it. No source/raster change, and only record F12 final writes. */
+            if(g_capture_ownership && g_shadow_provenance){
+                unsigned prior=g_shadow_underlay?(unsigned)g_shadow_underlay[j]:0u;
+                unsigned kind=0u;
+                if(candidate){
+                    if(prior==1u||prior==2u)kind=applied_opacity==50u?1u:3u;
+                    else if(prior==0u)kind=applied_opacity==100u?2u:4u;
+                    else kind=5u;
+                }
+                g_shadow_provenance[j]=(BYTE)kind;
+            }
             if(g_shadow_underlay){
                 /* 1 = textured opaque world; 2 = textured, key-transparent
                  * capable world; 3 = dark shadow already blended this frame.
@@ -2363,18 +3624,21 @@ static void rasterize_triangle(const T_msiVertex*a,const T_msiVertex*b,const T_m
 BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE opacity){
     if(!g_initialized)return FALSE;
     g_triangles++;
+    count_opacity(g_triangle_opacity,opacity);
     g_last_triangle_frame=g_frames;
     g_last_triangle_tick=GetTickCount();
     if(g_no_geometry_logged){
        lognum("GEOMETRY_RESUMED elapsed_ms=",g_last_triangle_tick-g_boot_tick,"frame=",g_frames);
        g_no_geometry_logged=0;
     }
+    /* Validate once, not again for sampled trace messages. */
+    BOOL vertices_ok=readable_triangle_vertices(a,b,c);
     if(g_triangles<=18 || g_triangles%1000==0){
         char buf[940];DWORD n=0;
         putstr(buf,&n,"MSI_TRIANGLE frame=");putunsigned(buf,&n,g_frames);
         putstr(buf,&n," count=");putunsigned(buf,&n,g_triangles);
         putstr(buf,&n," opacity=");putunsigned(buf,&n,(unsigned)opacity);
-        if(readable_span(a,sizeof(*a))&&readable_span(b,sizeof(*b))&&readable_span(c,sizeof(*c))){
+        if(vertices_ok){
             log_vertex(buf,&n," A",a);log_vertex(buf,&n," B",b);log_vertex(buf,&n," C",c);
         } else putstr(buf,&n," INVALID_VERTEX_POINTER");
         buf[n]=0;logtext(buf);
@@ -2398,7 +3662,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
         putstr(mbuf,&mn,",");put_float_approx(mbuf,&mn,c->mb);
         putstr(mbuf,&mn,")");mbuf[mn]=0;logtext(mbuf);g_fx_vertex_color_logs++;
     }
-    if(readable_span(a,sizeof(*a))&&readable_span(b,sizeof(*b))&&readable_span(c,sizeof(*c)))
+    if(vertices_ok)
         rasterize_triangle(a,b,c,opacity);
     else g_rejected_triangles++;
     return TRUE;
@@ -2413,6 +3677,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
 BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
     if(!g_initialized)return FALSE;
     g_zplanes++;
+    count_opacity(g_zplane_opacity,opacity);
     if(g_state_valid && g_state.msiColor.Dither)g_fx_dither_zplanes++;
     if(g_state_valid && g_state.msiTexture.Modulate)g_fx_modulate_zplanes++;
     if(g_state_valid && g_state.msiTexture.Decal)g_fx_decal_zplanes++;

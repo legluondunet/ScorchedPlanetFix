@@ -36,6 +36,89 @@ jobs:
           python -m py_compile tools/matrox/analyze_runtime_log.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox runtime log triage syntax check failed' }
 
+      - name: Test F12 BMP spatial triage (synthetic RGB565 fixtures only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_f12_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 cross-layer triage tests failed' }
+          python -m py_compile tools/matrox/analyze_f12_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 cross-layer triage syntax check failed' }
+
+      - name: Test F12 last-write shadow provenance (synthetic RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_shadow_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 shadow capture tests failed' }
+          python -m py_compile tools/matrox/analyze_shadow_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox shadow analysis syntax failed' }
+
+      - name: Test F12 multi-scene cockpit HUD ownership (synthetic RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_compare_hud_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox HUD coverage comparisons failed' }
+          python -m py_compile tools/matrox/compare_hud_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox HUD analysis syntax failed' }
+
+      - name: Test optional Matrox screenshot geometry alignment (synthetic images only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check --quiet "opencv-python-headless>=4.8,<5" "numpy>=1.24,<3"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install optional image registration test requirements' }
+          python tools/matrox/test_align_reference_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox screenshot alignment tests failed' }
+          python -m py_compile tools/matrox/align_reference_captures.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox screenshot alignment syntax check failed' }
+
+      - name: Test original-format Matrox TITLEM atlas inspector (synthetic fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_inspect_titlem_atlases.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox TITLEM synthetic atlas tests failed' }
+          python -m py_compile tools/matrox/inspect_titlem_atlases.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox TITLEM atlas script syntax failed' }
+
+      - name: Test F12 last successful texel origin (synthetic RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_final_texel_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 final texel provenance tests failed' }
+          python -m py_compile tools/matrox/analyze_final_texel_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 final texel analyzer syntax failed' }
+
+      - name: Test Matrox seventh F12 pre-light and exact palette index audit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_source_audit_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 pre-light source audit tests failed' }
+          python -m py_compile tools/matrox/analyze_source_audit_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 pre-light source audit syntax failed' }
+
+      - name: Test F12 no-dither last-write reference (synthetic RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_undithered_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 no-dither last-write source audit tests failed' }
+          python -m py_compile tools/matrox/analyze_undithered_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 no-dither analyzer syntax failed' }
+
+      - name: Test exact Matrox F12 lighting inputs (synthetic native RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_lighting_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox ninth F12 lighting audit tests failed' }
+          python -m py_compile tools/matrox/analyze_lighting_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'Matrox ninth F12 lighting analyzer syntax failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -95,6 +178,112 @@ jobs:
           python tools/matrox/audit_exports.py $msi
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Build and validate standalone MSI95 synthetic lighting probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/matrox/build-lighting-probe.ps1
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-lighting-probe'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $folder
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' $folder
+          $env:MATROX_MSI_MODULATE = '1'
+          $env:MATROX_MSI_DITHER = '1'
+          $env:MATROX_MSI_FPS_LIMIT = '0'
+          $env:MATROX_MSI_BORDERLESS = '0'
+          $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          $env:MATROX_MSI_RGB888_LIGHTING = '0'
+          $env:MATROX_MSI_PRESENTATION_SMOOTH = '0'
+          Push-Location $folder
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 0) { throw "Synthetic lighting probe failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+            foreach ($key in @('MODULATE','DITHER','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','RGB888_LIGHTING','PRESENTATION_SMOOTH')) {
+              Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
+            }
+          }
+          $trace = Get-Content (Join-Path $folder 'PROBE.LOG') -Raw
+          if (!$trace.Contains('OK BMP saved') -or !$trace.Contains('Exit code=0')) { throw 'Missing successful lighting probe checkpoints' }
+          $missing = Join-Path $env:RUNNER_TEMP 'scorched-msi95-lighting-missing-dll'
+          New-Item -ItemType Directory -Force -Path $missing | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $missing
+          Push-Location $missing
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 1) { throw "Missing DLL probe returned unexpected code: $LASTEXITCODE" }
+            $trace = Get-Content 'PROBE.LOG' -Raw
+            if (!$trace.Contains('LoadLibraryA error=') -or !$trace.Contains('Exit code=1')) { throw 'Missing DLL diagnostic incomplete' }
+          } finally { Pop-Location }
+          python tools/matrox/check_lighting_probe.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Lighting comparison model self-test failed' }
+          python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_flag.bmp')
+          if ($LASTEXITCODE -ne 0) { throw 'Lighting probe pixel validation failed' }
+          python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software
+          if ($LASTEXITCODE -ne 0) { throw 'Independent dither matrix pixel validation failed' }
+          Copy-Item (Join-Path $folder 'msi95_lighting_flag.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
+          $report = Get-Content (Join-Path $folder 'msi95_lighting_probe.txt') -Raw
+          if (!$report.Contains('msiSetTextureBlend=absent')) { throw 'Unexpected standalone software DLL export state' }
+
+      - name: Verify experimental RGB888 lighting in actual MSI95 DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-rgb888-lighting'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item 'target/matrox-lighting-probe/MatroxLightingProbe.exe' $folder
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' $folder
+          $env:MATROX_MSI_MODULATE = '1'
+          $env:MATROX_MSI_DITHER = '1'
+          $env:MATROX_MSI_RGB888_LIGHTING = '1'
+          $env:MATROX_MSI_PRESENTATION_SMOOTH = '1'
+          $env:MATROX_MSI_LOG = '1'
+          $env:MATROX_MSI_FPS_LIMIT = '0'
+          $env:MATROX_MSI_BORDERLESS = '0'
+          $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          Push-Location $folder
+          try {
+            & '.\MatroxLightingProbe.exe'
+            if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG')) {
+              Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
+            }
+          }
+          $runtime = Get-Content (Join-Path (Split-Path $folder -Parent) 'ScorchedPlanetFix.log') -Raw
+          if (!$runtime.Contains('PREVIEW_SCALER HALFTONE blit succeeded') -or $runtime.Contains('HALFTONE unavailable')) { throw 'Optional HALFTONE presentation path was not successfully exercised' }
+          python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software --rgb888
+          if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
+
+      - name: Upload standalone Matrox lighting comparison probe
+        uses: actions/upload-artifact@v6
+        with:
+          name: MatroxLightingProbe-x86
+          path: |
+            target/matrox-lighting-probe/MatroxLightingProbe.exe
+            target/matrox-lighting-probe/reference-software.bmp
+          if-no-files-found: error
+
+      - name: Smoke test real x86 Matrox palette-index keying
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'scorched-msi95-palette-smoke'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item 'target/matrox-msi95-x86/msi95.dll' (Join-Path $folder 'msi95.dll')
+          $exe = Join-Path $folder 'MatroxPaletteSmoke.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_palette.rs -o $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compile real MSI95 palette-keying smoke test' }
+          Push-Location $folder
+          try {
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw 'MSI95 palette-index keying regression smoke failed' }
+          } finally {
+            Pop-Location
+          }
 
       - name: Smoke test MSI95 x86 dynamic texture-heap growth past 256 live allocations
         shell: pwsh
