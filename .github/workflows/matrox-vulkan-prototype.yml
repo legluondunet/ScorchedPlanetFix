@@ -1,0 +1,45 @@
+name: Matrox Vulkan presentation prototype
+on:
+  push:
+    branches: [feature/matrox-vulkan-presentation]
+    paths:
+      - 'tools/matrox/vulkan_probe.c'
+      - '.github/workflows/matrox-vulkan-prototype.yml'
+permissions:
+  contents: read
+jobs:
+  x86-prototype:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: b379292b2ab6df5771ba9870d53cf8b2c9295daf
+          path: third_party/vulkan-headers
+          persist-credentials: false
+      - name: Compile x86 Win32 proof, without Vulkan SDK runtime or import lib
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC installation not found' }
+          $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvarsall.bat'
+          $line = 'call "' + $vcvars + '" x86 && cl /nologo /std:c11 /W3 /O2 /Ithird_party/vulkan-headers/include tools/matrox/vulkan_probe.c /Fe:MatroxVulkanProbe.exe user32.lib kernel32.lib'
+          & cmd.exe /d /c $line
+          if ($LASTEXITCODE -ne 0) { throw 'x86 Vulkan prototype compilation failed' }
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path 'MatroxVulkanProbe.exe'))
+          $pe = [BitConverter]::ToInt32($bytes,60)
+          if ([BitConverter]::ToUInt16($bytes,$pe+4) -ne 0x14c) { throw 'Not x86 PE' }
+      - name: CPU self-test and optional real GPU presentation
+        shell: pwsh
+        run: |
+          & ./MatroxVulkanProbe.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Viewport/RGB565 self-test failed' }
+          & ./MatroxVulkanProbe.exe
+          $code = $LASTEXITCODE
+          if ($code -eq 77) { Write-Host 'GPU unavailable on this runner; real presentation NOT validated' }
+          elseif ($code -ne 0) { throw "Vulkan prototype failed: $code" }
+          else { Write-Host 'Real Vulkan presentation succeeded' }
