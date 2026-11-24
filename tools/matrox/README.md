@@ -1686,3 +1686,22 @@ The JSON ranks native RGB565 and 8-bit /256 arithmetic with coefficient
 rounding/truncation and all dither phases. It rejects blank/misaligned
 endpoint cells and reports matches, not a claim of hardware equivalence.
 The synthetic model self-test runs in Windows CI.
+
+### Original-driver probe v2: explicit blend activation
+
+The first owner-provided probe BMP (640x400 native RGB565) had 4096/4096
+interior pixels identical to the unmodulated palette sources and both
+white-texture ramps were constant FFFF. This establishes an inactive or
+ignored modulation state for that run, not hardware arithmetic. The public
+SDK TexturingTypes tutorial additionally calls msiSetTextureBlend(MODULATE).
+Probe v2 writes `msi95_lighting_flag.bmp` using the structure flag alone,
+and, if the optional export exists, `msi95_lighting_blend.bmp` with an
+explicit MODULATE call after each state update. The accompanying
+`msi95_lighting_probe.txt` records whether the export was present and whether
+both calls succeeded. Exit codes 11=explicit blend call failed, 12=report
+write failed. The nine-export software DLL runs only the flag frame; CI
+validates that frame and the missing-export report. For a comparison with
+the original driver, use a clean directory with the verified original DLL.
+An absent export does not identify a driver uniquely. The offline analyzer
+now recognizes exact unmodulated identity instead of trying to rank
+quantization models on those pixels. No runtime or defaults changed.

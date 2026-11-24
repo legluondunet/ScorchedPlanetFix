@@ -45,8 +45,10 @@ typedef BOOL (__cdecl *End)(BOOL,LONG,BOOL);
 typedef BOOL (__cdecl *Exit)(void);
 typedef BYTE* (__cdecl *Alloc)(LONG);
 typedef BOOL (__cdecl *Free)(BYTE*);
+typedef BOOL (__cdecl *Blend)(DWORD);
 static Init init; static Start start; static Set set; static Draw draw;
 static End end; static Exit finish; static Alloc alloc; static Free release;
+static Blend blend;
 static Params p;
 static Vertex v[4];
 static BYTE pixels[640u*400u*2u];
@@ -67,9 +69,8 @@ static BOOL write_exact(HANDLE h,const void *data,DWORD size){
     DWORD written=0;return WriteFile(h,data,size,&written,0)&&written==size;
 }
 static void le32(BYTE *p,DWORD n){p[0]=(BYTE)n;p[1]=(BYTE)(n>>8);p[2]=(BYTE)(n>>16);p[3]=(BYTE)(n>>24);}
-static BOOL save(void){
+static BOOL save(const char *name){
     static BYTE header[66];
-    const char *name="msi95_lighting_probe.bmp";
     HANDLE h=CreateFileA(name,0x40000000ul,0,0,1,0x80,0); /* CREATE_NEW */
     BOOL ok;
     if(h==(HANDLE)-1)return 0;
@@ -85,12 +86,14 @@ static BOOL save(void){
 }
 void __cdecl probe_main(void){
     HANDLE lib=LoadLibraryA(".\\msi95.dll");Info *info=0;BYTE *tex=0,*lut=0;
-    unsigned rc=1,i,x,y,d,row,col;
+    unsigned rc=1,i,x,y,d,row,col,mode;
+    const char *status; HANDLE report;
     if(!lib)ExitProcess(1);
     init=(Init)GetProcAddress(lib,"msiInit");start=(Start)GetProcAddress(lib,"msiStartFrame");
     set=(Set)GetProcAddress(lib,"msiSetParameters");draw=(Draw)GetProcAddress(lib,"msiRenderTriangle");
     end=(End)GetProcAddress(lib,"msiEndFrame");finish=(Exit)GetProcAddress(lib,"msiExit");
     alloc=(Alloc)GetProcAddress(lib,"msiAllocTextureHeap");release=(Free)GetProcAddress(lib,"msiFreeTextureHeap");
+    blend=(Blend)GetProcAddress(lib,"msiSetTextureBlend");
     rc=2;if(!init||!start||!set||!draw||!end||!finish||!alloc||!release)goto done;
     rc=3;info=init(640,400,16,0,0,callback);if(!info)goto done;
     rc=4;if(!start(1,80.f,80.f,80.f,0,0.f))goto done;
@@ -98,6 +101,8 @@ void __cdecl probe_main(void){
     for(y=0;y<64;y++)for(x=0;x<64;x++)tex[y*64+x]=(BYTE)(1+x/8);
     for(i=0;i<512;i++)lut[i]=0;
     for(i=0;i<8;i++){lut[2*(i+1)]=(BYTE)colors[i];lut[2*(i+1)+1]=(BYTE)(colors[i]>>8);}
+    for(mode=0;mode<(blend?2u:1u);mode++){
+    if(mode){rc=4;if(!start(1,80.f,80.f,80.f,0,0.f))goto done;}
     p.texture.enable=1;p.texture.width=p.texture.height=64;p.texture.planes=8;
     p.texture.mem=p.texture.heap=tex;p.texture.offset=0;
     p.texture.lut.mem=p.texture.lut.heap=lut;p.texture.lut.offset=4096;
@@ -106,6 +111,7 @@ void __cdecl probe_main(void){
     rc=6;
     for(d=0;d<2;d++){
         p.color.dither=(BOOL)d;if(!set(&p))goto done;
+        if(mode && !blend(2u)){rc=11;goto done;} /* SDK MODULATE */
         /* Eight source colors x sixteen constant lighting coefficients. */
         for(row=0;row<8;row++)for(col=0;col<16;col++){
             if(!rect((float)(16+38*col),(float)(8+22*(row+8*d)),32.f,18.f,
@@ -123,7 +129,15 @@ void __cdecl probe_main(void){
         pixels[y*1280+x]=info->color.mem[y*(DWORD)info->color.pitch+x];
     rc=8;p.texture.enable=0;p.texture.mem=p.texture.heap=0;p.texture.lut.mem=p.texture.lut.heap=0;
     if(!set(&p)||!end(0,0,1))goto done;
-    rc=9;if(!save())goto done;
+    rc=9;if(!save(mode?"msi95_lighting_blend.bmp":"msi95_lighting_flag.bmp"))goto done;
+    }
+    rc=12;
+    status=blend?"msiSetTextureBlend=present; MODULATE calls succeeded\r\n":"msiSetTextureBlend=absent; flag-only frame generated\r\n";
+    report=CreateFileA("msi95_lighting_probe.txt",0x40000000ul,0,0,1,0x80,0);
+    if(report==(HANDLE)-1)goto done;
+    for(i=0;status[i];i++){}
+    {BOOL ok=write_exact(report,status,i);if(!CloseHandle(report))ok=0;
+     if(!ok){DeleteFileA("msi95_lighting_probe.txt");goto done;}}
     rc=0;
 done:
     if(info){if(lut&&!release(lut)&&!rc)rc=10;if(tex&&!release(tex)&&!rc)rc=10;if(!finish()&&!rc)rc=10;}

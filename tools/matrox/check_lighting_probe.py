@@ -54,6 +54,10 @@ def model_8bit(source,m,x,y,d):
 
 def compare_pixels(pix):
     data=[(d,row,col,s,l,x,y,pix[y*640+x]) for d,row,col,s,l,x,y in samples()]
+    if all(actual==s for d,row,col,s,l,x,y,actual in data):
+        return {"sample_pixels":len(data),"status":"unmodulated_identity",
+                "identity_matches":len(data),"ranked_models":[],
+                "interpretation":"All sampled pixels equal the source texture. Modulation inactive or ignored; verify driver identity and activation state before fitting quantization."}
     # Reject blank/unrendered or grossly incorrect layouts instead of
     # presenting a best-fitting model for meaningless data.
     for d,row,col,s,l,x,y,actual in data:
@@ -98,6 +102,12 @@ def self_test():
     assert result["ranked_models"][0]["matches"]==result["sample_pixels"]
     assert result["ranked_models"][0]["model"]=="rgb888_div256"
     assert result["ranked_models"][0]["phase"]==[1,0]
+    for d,row,col,s,l,x,y in samples():
+        pix[y*640+x]=s
+    result=compare_pixels(pix)
+    assert result["status"]=="unmodulated_identity"
+    assert result["identity_matches"]==4096
+    assert not result["ranked_models"]
     try:
         compare_pixels([0]*(640*400))
     except ValueError:

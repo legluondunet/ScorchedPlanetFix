@@ -205,9 +205,11 @@ jobs:
           }
           python tools/matrox/check_lighting_probe.py --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Lighting comparison model self-test failed' }
-          python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_probe.bmp')
+          python tools/matrox/check_lighting_probe.py (Join-Path $folder 'msi95_lighting_flag.bmp')
           if ($LASTEXITCODE -ne 0) { throw 'Lighting probe pixel validation failed' }
-          Copy-Item (Join-Path $folder 'msi95_lighting_probe.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
+          Copy-Item (Join-Path $folder 'msi95_lighting_flag.bmp') 'target/matrox-lighting-probe/reference-software.bmp'
+          $report = Get-Content (Join-Path $folder 'msi95_lighting_probe.txt') -Raw
+          if (!$report.Contains('msiSetTextureBlend=absent')) { throw 'Unexpected standalone software DLL export state' }
 
       - name: Upload standalone Matrox lighting comparison probe
         uses: actions/upload-artifact@v6
