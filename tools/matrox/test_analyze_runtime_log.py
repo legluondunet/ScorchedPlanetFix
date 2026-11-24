@@ -194,6 +194,15 @@ MSI_OPACITY_END
 """)["opacity_audit"]
         self.assertEqual(r["status"], "invalid")
 
+    def test_opacity_malformed_records_and_nested_headers(self):
+        for body in (
+            "MSI_OPACITY_BEGIN scope=F12 frame=20\nMSI_OPACITY bogus\nMSI_OPACITY_END\n",
+            "MSI_OPACITY_BEGIN scope=F12 frame=20\nMSI_OPACITY_BEGIN scope=F12 frame=21\nMSI_OPACITY_END\n",
+            "MSI_OPACITY_END\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(self.parse(body)["opacity_audit"]["status"], "invalid")
+
     def test_opacity_reset_on_reinit(self):
         r = self.parse("""msiInit width=640
 MSI_OPACITY_BEGIN scope=F12 frame=20
