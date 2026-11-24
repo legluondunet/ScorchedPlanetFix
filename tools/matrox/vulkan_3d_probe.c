@@ -217,14 +217,14 @@ static int nearest_boundary_match(double *w,double x,double y,unsigned f,uint16_
     return 0;
 }
 static void oracle_selftest(void){
-    double w[3],far[3];
+    double w[3],interior_weights[3];
     double x=1083.5*640/1440,y=295.5*400/1080;
-    weights(x,y,w);weights(200.5,150.5,far);
+    weights(x,y,w);weights(200.5,150.5,interior_weights);
     NEED(refpixel(w,x,y,0)==0x001f);
     NEED(nearest_boundary_match(w,x,y,0,0xf800));
     NEED(!nearest_boundary_match(w,x,y,0,0x07e0));
     NEED(!nearest_boundary_match(w,x,y,8,0xf800));
-    NEED(!nearest_boundary_match(far,200.5,150.5,0,0xdead));
+    NEED(!nearest_boundary_match(interior_weights,200.5,150.5,0,0xdead));
     puts("VULKAN_3D_ORACLE_SELFTEST_PASS");
 }
 static int absdiff(unsigned a,unsigned b){return a>b?(int)(a-b):(int)(b-a);}
