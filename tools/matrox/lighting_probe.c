@@ -106,7 +106,7 @@ void __cdecl probe_main(void){
     unsigned rc=1,i,x,y,d,row,col,mode;
     const char *status; HANDLE report;
     trace=CreateFileA("PROBE.LOG",0x40000000ul,0,0,2,0x80,0); /* CREATE_ALWAYS */
-    trace_text("MatroxLightingProbe v3 / Win32 x86 diagnostic\r\n");
+    trace_text("MatroxLightingProbe v4 / Pentium i586 diagnostic\r\n");
     trace_text("CALL LoadLibraryA .\\msi95.dll\r\n");
     lib=LoadLibraryA(".\\msi95.dll");
     if(!lib){DWORD error=GetLastError();trace_number("LoadLibraryA error=",error);goto done;}

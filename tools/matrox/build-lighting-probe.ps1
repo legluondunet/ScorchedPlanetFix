@@ -21,8 +21,14 @@ foreach ($lib in @('kernel32','user32')) {
 }
 $obj = Join-Path $out 'lighting_probe.obj'
 $exe = Join-Path $out 'MatroxLightingProbe.exe'
-& clang --target=i686-pc-windows-msvc -O2 -ffreestanding -fno-stack-protector -mno-sse -mno-sse2 -c "$root/lighting_probe.c" -o $obj
+& clang --target=i586-pc-windows-msvc -march=pentium -mtune=pentium -O2 -ffreestanding -fno-stack-protector -mno-mmx -mno-sse -mno-sse2 -c "$root/lighting_probe.c" -o $obj
 if ($LASTEXITCODE -ne 0) { throw 'Lighting probe C compile failed' }
 & lld-link /MACHINE:X86 /NODEFAULTLIB /ENTRY:probe_main /SUBSYSTEM:CONSOLE,4.0 /OSVERSION:4.0 /DYNAMICBASE:NO /NXCOMPAT:NO "/OUT:$exe" $obj @libs @aliases
 if ($LASTEXITCODE -ne 0) { throw 'Lighting probe link failed' }
+# Audit linked machine code, not just the compiler flags.
+$disassembly = & llvm-objdump -d --x86-asm-syntax=intel $exe
+if ($LASTEXITCODE -ne 0) { throw 'Cannot disassemble lighting probe' }
+$forbidden = $disassembly | Where-Object { $_ -match '\b(cmov[a-z]+|fcmov[a-z]+|fcomi[p]?|fucomi[p]?|sysenter|sysexit|ud2|nop[wdl]?\s+(?:word|dword|qword)\s+ptr)\b' -or $_ -match '^\s*[0-9a-f]+:\s+(?:(?:66|2e|3e|67)\s+)*0f\s+1f\s' }
+if ($forbidden) { throw "Post-Pentium instructions found: $forbidden" }
+Write-Host 'MATROX_LIGHTING_PROBE_PENTIUM_ISA_AUDIT_PASS'
 Write-Host "MATROX_LIGHTING_PROBE=$exe"
