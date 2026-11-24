@@ -1487,3 +1487,83 @@ Even a large last-write dither effect is **not evidence** that the
 real 1996 Mystique uses different rounding thresholds: only a
 camera-matched native Matrox-driver image can establish pixel parity.
 No game assets or user screenshots are committed.
+
+## 2026-11-24 — Exact per-pixel MSI95 texture lighting input audit
+
+The owner's native Windows #0008 and #0009 eight-layer F12 screenshots
+established that 2,625 / 558 black textured pixels respectively remain
+black **even with the last-write ordered dithering removed**, whereas
+454 / 470 final black pixels arise specifically from last-write dither.
+The large black terrain patches are therefore primarily connected to
+**modulation/quantization**, not a bad chroma-key or the 4x4 dither alone.
+
+The missing evidence is the precise **per-pixel original 8-bit Gouraud
+coefficients** and source RGB565 that this experimental software renderer
+multiplies. Do not change render brightness until we can identify whether
+values are genuinely small or the CPU implementation is inconsistent.
+
+This follow-up records a **ninth** same-serial, F12-only diagnostic
+`matrox_capture_XXXX_lighting.bin`. This is intentionally a compact
+**binary data stream**, not a screenshot/texture image. It contains no
+original game file assets. The fixed-format, 24-byte little-endian header:
+
+| Offset | Type | Value |
+| ---: | --- | --- |
+| 0 | ASCII[8] | `M95LIGHT` |
+| 8 | uint32 | Native image width |
+| 12 | uint32 | Native image height |
+| 16 | uint32 | Record size, exactly 5 bytes |
+| 20 | uint32 | Reserved, 0 |
+
+Each *row-major* 5-byte record at offset `24+5*(y*width+x)` stores:
+
+| Offset within record | Type | Meaning |
+| ---: | --- | --- |
+| 0 | uint16 LE | Exactly sampled texture RGB565 **before** modulation/dither |
+| 2 | uint8 | Applied interpolated/clamped red multiplier, 0..255 |
+| 3 | uint8 | Applied interpolated/clamped green multiplier, 0..255 |
+| 4 | uint8 | Applied interpolated/clamped blue multiplier, 0..255 |
+
+Use the **seventh `_sourceaudit.bmp` 8/16/4-bit source flags** to
+identify valid final ordinary textured MSI writes. A nonmodulated texel
+records neutral multipliers `255,255,255`. HUD, untextured flat/shadow
+and unowned pixels have an all-zero record, and subsequent writes
+overwrite the previous pixel's record; keyed/discarded draws never
+become last successful writers. The existing eight RGB565 BMPs remain
+unchanged and use the same serial; all nine filenames participate in
+non-overwriting `CREATE_NEW` collision handling.
+
+```sh
+python tools/matrox/analyze_lighting_capture.py game/matrox_capture_0010
+python tools/matrox/analyze_lighting_capture.py game/matrox_capture_0010 --json
+python tools/matrox/test_analyze_lighting_capture.py
+```
+
+The stdlib-only offline analyzer first verifies the previous eight
+layers, then uses exact native source samples and per-pixel RGB
+multipliers to *independently reproduce* the CPU renderer's existing
+round-to-nearest RGB565 modulation:
+
+`round(channel_5or6 * coeff_8 / 255)` as integer `(numerator+127)//255`.
+
+When ordered dithering is active, it reproduces the precise 4x4 Bayer
+threshold used by this **experimental software renderer**, with
+`rem>threshold` deciding whether to round up. For non-alpha last
+writes, the actual framebuffer and eighth undithered reference must
+match these independent calculations **exactly** or the analyzer
+rejects the trace. For alpha last writes, the earlier background
+framebuffer is not stored, so it skips the exact final composite check
+while retaining the lighting data. Reports include black rate by
+mean RGB coefficient 0..31, 32..63, ..., 224..255; actual RGB coefficient
+variation, per-index attribution and per-pixel consistency.
+
+**Limits**: Only verifies mathematical consistency of this emulator
+with the modifier values received from the original game. It does
+**not** prove the Matrox Mystique hardware's actual integer precision,
+color scaling, alpha, gamma or dither hardware rules. The 1996 MSI
+SDK advertises Gouraud/textured triangles, not a particular channel
+rounding algorithm. This branch does not change default settings,
+shadows, raw palette, texture keying, modulation, dither, scene content,
+or displayed game pixels. Additional optional diagnostic memory is
+5 bytes/native pixel (~1.28 MB at 640x400) and is updated only on F12.
+No screenshots, copyrighted game data or logs are committed.
