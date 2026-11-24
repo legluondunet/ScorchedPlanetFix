@@ -1426,3 +1426,64 @@ Mystique silicon's actual threshold matrix (or prove a regression)
 without same-scene hardware reference. Do not silently disable
 native MSI modulation or alter original dither/filter settings.
 Real user captures remain private, not committed.
+
+## 2026-11-24 — What part of final black is CAUSED by ordered dithering?
+
+The owner's real F12 #0007 demonstrated **3,242 final black 3D pixels**
+that were *all nonblack before modulation* and *all modulated and ordered
+dithered*. The monotone 4x4 Bayer incidence (0.36% rank 0 to 6.76% rank 15)
+implicates the dither thresholds, but **does not prove which pixels would
+have remained black with the same modulation and no dithering**.
+
+This strict, passive extension captures an **eighth** same-serial F12 BMP
+`matrox_capture_XXXX_nodither.bmp`. It contains the code's EXISTING,
+undithered RGB565 modulation reference for each **last successful
+modulated-and-dithered MSI world-texture write**. For opacity below 100%,
+it uses the **same actual framebuffer underlay** as the game, including
+the same integer source-over blending and rounding. It does **not**
+alter the actual output color. Subsequent world, HUD or flat/shadow
+writes clear the reference: only final successful world texture pixels
+are counted. It is RGB565 as a 16-bit BI_BITFIELDS BMP, like the other
+F12 layers. All eight numbered outputs share a serial, are written
+`CREATE_NEW`, and will never overwrite prior captures.
+
+**Critical interpretation:** The eighth bitmap is a sparse **data map**,
+NOT a full no-dither screenshot! Its RGB565 value `0x0000` can mean
+either a valid **black** undithered reference or an untracked last
+write. Use **bit 10** of the paired seventh
+`_sourceaudit.bmp` to identify valid reference pixels. The exact
+counterfactual is *only the final MSI write with dithering replaced by
+the already computed undithered modulation color*, keeping the actual
+prior framebuffer (including any earlier dithered overdraw). It is
+NOT a full-frame no-dither replay. Alpha blends are classified
+separately so a full-scene causal conclusion is not exaggerated.
+
+```sh
+python tools/matrox/analyze_undithered_capture.py game/matrox_capture_0008
+python tools/matrox/analyze_undithered_capture.py game/matrox_capture_0008 --json
+python tools/matrox/test_analyze_undithered_capture.py
+```
+
+The analyzer first verifies the seventh source audit, sixth texel-source
+layer, raw frame and coverage consistency. It then distinguishes:
+
+- Final RGB565 black **and would remain black** without ordered
+  dithering of this last write (modulation alone enough for black)
+- Final RGB565 black but **undithered reference was nonblack**
+  (dithering **created** black on the last write)
+- Final RGB565 nonblack but undithered reference was black
+  (dithering **prevented** black on the last write)
+- Other changed vs identical nonblack colors, 4×4 Bayer rank incidence,
+  source-index histogram, alpha-use, and four-connected spatial regions.
+
+An independent **eight synthetic tests** cover black creation,
+prevention, unchanged dark, alpha, overdraw/HUD clearing, ROI,
+collision/size errors and non-dither final writes. The native renderer
+remains byte-for-byte unchanged for game pixels, palette/keying,
+modulation, dither, shadows and filters; the additional **2 bytes per
+pixel** (~512 KiB at 640×400) are F12-only diagnostic metadata.
+
+Even a large last-write dither effect is **not evidence** that the
+real 1996 Mystique uses different rounding thresholds: only a
+camera-matched native Matrox-driver image can establish pixel parity.
+No game assets or user screenshots are committed.
