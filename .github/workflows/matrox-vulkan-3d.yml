@@ -1,0 +1,30 @@
+name: Matrox Vulkan 3D shader validation
+on:
+  pull_request:
+    branches: [feature/matrox-vulkan-presentation]
+    paths:
+      - 'tools/matrox/shaders/**'
+      - '.github/workflows/matrox-vulkan-3d.yml'
+permissions:
+  contents: read
+jobs:
+  shader-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build-only GLSL and SPIR-V validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends glslang-tools spirv-tools
+          glslangValidator --version
+      - name: Compile and validate both shaders
+        run: |
+          set -eu
+          mkdir -p /tmp/matrox-spv
+          glslangValidator -V --target-env vulkan1.0 tools/matrox/shaders/opaque_world.vert -o /tmp/matrox-spv/world.vert.spv
+          glslangValidator -V --target-env vulkan1.0 tools/matrox/shaders/opaque_world.frag -o /tmp/matrox-spv/world.frag.spv
+          spirv-val --target-env vulkan1.0 /tmp/matrox-spv/world.vert.spv
+          spirv-val --target-env vulkan1.0 /tmp/matrox-spv/world.frag.spv
+          glslangValidator -V --target-env vulkan1.0 -l tools/matrox/shaders/opaque_world.vert tools/matrox/shaders/opaque_world.frag -o /tmp/matrox-spv/linked.spv
+          echo "Vulkan shader compile/interface validation passed; GPU pixel readback not yet implemented"
