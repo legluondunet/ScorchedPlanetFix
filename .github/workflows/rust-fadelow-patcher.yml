@@ -101,6 +101,15 @@ jobs:
           python -m py_compile tools/matrox/analyze_source_audit_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'Matrox F12 pre-light source audit syntax failed' }
 
+      - name: Test F12 no-dither last-write reference (synthetic RGB565 fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/matrox/test_analyze_undithered_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 no-dither last-write source audit tests failed' }
+          python -m py_compile tools/matrox/analyze_undithered_capture.py
+          if ($LASTEXITCODE -ne 0) { throw 'F12 no-dither analyzer syntax failed' }
+
       - name: Rust toolchain with Windows x86 and x64
         uses: dtolnay/rust-toolchain@stable
         with:
