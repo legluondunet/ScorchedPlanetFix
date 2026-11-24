@@ -1280,3 +1280,47 @@ writes or deliberately untextured background geometry remain possible.
 Only an authentic same-scene Mystique-driver reference can justify
 changing this renderer rule. Original 1996 nearest sampling stays the
 default, no extra postfilter is introduced.
+
+## 2026-11-24 — Distinguish **final visible world black** by actual source
+
+The owner's real F12 #0005 (Wine 11.19, frame 1706, captured 2026-11-23)
+had **2,471 RGB565-black final textured-world pixels** (and **1,614**
+nonblack final shadow pixels, disjoint from black). The previous fifth
+`_shadow.bmp` ruled out the *opaque-no-textured-underlay* shadow theory
+for this scene. But `_world.bmp` is **last attempted world sample**,
+including samples later overwritten by CPU/HUD/world draws; its broad
+8bpp class cannot attribute a specific black final pixel to the original
+palette index. Moreover `F12_PALETTE_KEY_CANDIDATES` counted **3,817**
+black-key candidate *attempts* of source index 1, not final pixels.
+
+This new strictly **diagnostic-only** sixth same-serial BMP
+`matrox_capture_XXXX_texel.bmp` captures the **last successful MSI
+writer's source class per pixel**, reset each selected F12 frame and
+overwritten whenever a later MSI draw succeeds (including HUD and flat
+shadow). It identifies final black RGB565 by 8bpp original source
+index `1`, `241`, `0`, another indexed source, 16bpp texels, or
+4bpp texels. Separate classes retain nonblack 8bpp/index1/index241,
+16bpp and 4bpp. Source classification is updated **only after successful
+raster writes**; any key-discard, blue-key skip, absent texture or prior
+overdraw has no final ownership.
+
+```text
+python tools/matrox/analyze_final_texel_capture.py game/matrox_capture_0006 --json
+python tools/matrox/test_analyze_final_texel_capture.py
+```
+
+The analyzer checks per-pixel invariants against real `_frame.bmp`
+and `_coverage.bmp`: every final world textured-black pixel must have
+a black source class, and the provenance source's *final* black flag
+must match the RGB565 framebuffer. ROI is half-open native pixels and
+connected components locate each source. It refuses missing or
+different-size layers. Synthetic Windows CI validates all eight cases.
+
+**Limitations:** This tracks final *MSI rasterizer* writes, not later
+uninstrumented game **CPU framebuffer writes**. It records the source
+index even if color is later modulated or blended, so categories describe
+the **actual final RGB565 output color**, not necessarily raw source
+palette RGB. No raw original Matrox driver evidence exists yet to claim
+source index 1 should be keyed or drawn. **No changed keys, palettes,
+filter defaults, shadow blending, geometry or graphics behavior** in
+this branch. No user/game screenshots or textures committed.
