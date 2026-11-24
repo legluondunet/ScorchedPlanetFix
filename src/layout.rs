@@ -34,6 +34,8 @@ Icon01Opaque=0\r\n\
 WorldBilinear=0\r\n\
 ; Smooth final 4:3 image enlargement, including HUD; 0=legacy, 1=GDI HALFTONE (experimental)\r\n\
 PresentationSmooth=0\r\n\
+; Experimental presentation backend: software (default), auto, vulkan; safe GDI fallback\r\n\
+Renderer=software\r\n\
 \r\n\
 [Cheats]\r\n\
 ; All cheats default to 0 (off). Automatic activation is NOT implemented yet.\r\n\

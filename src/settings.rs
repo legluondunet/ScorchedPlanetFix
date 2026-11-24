@@ -23,7 +23,13 @@ pub const DEFAULT_FPS:u32=60;
 pub const MAX_FPS:u32=240;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum MatroxRenderer{Software,Auto,Vulkan}
+impl MatroxRenderer{
+    pub fn as_str(self)->&'static str{match self{Self::Software=>"software",Self::Auto=>"auto",Self::Vulkan=>"vulkan"}}
+}
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct GameSettings{
+    pub renderer:MatroxRenderer,
     pub fps_limit:u32,
     pub dither:bool,
     pub rgb888_lighting:bool,
@@ -36,12 +42,12 @@ pub struct GameSettings{
     pub log:bool,
 }
 impl Default for GameSettings {
-    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
+    fn default()->Self{Self{fps_limit:DEFAULT_FPS,dither:false,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,renderer:MatroxRenderer::Software,unlimited_fuel:false,aliah:false,fatal:false,log:false}}
 }
 #[derive(Default)]
 struct Presence{
     graphics:bool,matrox:bool,cheats:bool,
-    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,rgb888_lighting:bool,presentation_smooth:bool,unlimited_fuel:bool,
+    graphics_fps:bool,legacy_fps:bool,dither:bool,icon01_opaque:bool,world_bilinear:bool,rgb888_lighting:bool,presentation_smooth:bool,renderer:bool,unlimited_fuel:bool,
     aliah:bool,fatal:bool,debug:bool,log:bool,
     legacy_value:Option<u32>,
 }
@@ -120,6 +126,14 @@ fn parse(data:&[u8])->Result<(GameSettings,Presence),String>{
                 if seen.rgb888_lighting{return Err("INI: duplicate [Matrox] RGB888Lighting".into());}
                 seen.rgb888_lighting=true;result.rgb888_lighting=switch(value,"[Matrox] RGB888Lighting")?;
             },
+            3 if name.eq_ignore_ascii_case(b"Renderer")=>{
+                if seen.renderer{return Err("INI: duplicate [Matrox] Renderer".into());}
+                seen.renderer=true;
+                result.renderer=if value.eq_ignore_ascii_case(b"software"){MatroxRenderer::Software}
+                    else if value.eq_ignore_ascii_case(b"auto"){MatroxRenderer::Auto}
+                    else if value.eq_ignore_ascii_case(b"vulkan"){MatroxRenderer::Vulkan}
+                    else{return Err("INI: [Matrox] Renderer must be software, auto or vulkan".into());};
+            },
             3 if name.eq_ignore_ascii_case(b"PresentationSmooth")=>{
                 if seen.presentation_smooth{return Err("INI: duplicate [Matrox] PresentationSmooth".into());}
                 seen.presentation_smooth=true;result.presentation_smooth=switch(value,"[Matrox] PresentationSmooth")?;
@@ -177,6 +191,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_dither=matrox&&!seen.dither;
     let add_rgb888=matrox&&!seen.rgb888_lighting;
     let add_smooth=matrox&&!seen.presentation_smooth;
+    let add_renderer=matrox&&!seen.renderer;
     let add_icon01_opaque=matrox&&!seen.icon01_opaque;
     let add_world_bilinear=matrox&&!seen.world_bilinear;
     let add_fuel=!seen.unlimited_fuel;
@@ -185,7 +200,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let add_log=!seen.log;
     let add_descriptions=!original.windows(OPTION_HELP_MARKER.len())
         .any(|slice|slice==OPTION_HELP_MARKER);
-    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_rgb888&&!add_smooth&&!add_icon01_opaque&&!add_world_bilinear&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
+    if existing.is_some()&&!add_descriptions&&!add_fps&&!add_dither&&!add_rgb888&&!add_smooth&&!add_renderer&&!add_icon01_opaque&&!add_world_bilinear&&!add_fuel&&!add_aliah&&!add_fatal&&!add_log&&!seen.legacy_fps{return Ok(());}
     let fpsline=format!("FPSLimit={}",before.fps_limit);
     let mut out=Vec::with_capacity(original.len()+OPTION_HELP.len()+160);
     if add_descriptions {out.extend_from_slice(OPTION_HELP);}
@@ -194,6 +209,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     let mut did_dither=false;
     let mut did_rgb888=false;
     let mut did_smooth=false;
+    let mut did_renderer=false;
     let mut did_icon01_opaque=false;
     let mut did_world_bilinear=false;
     let mut did_fuel=false;
@@ -204,6 +220,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
         if old==1&&add_fps&&!did_fps{append(out,fpsline.as_bytes());did_fps=true;}
         if old==3&&add_dither&&!did_dither{append(out,b"Dither=0");did_dither=true;}
         if old==3&&add_rgb888&&!did_rgb888{append(out,b"; Experimental RGB888 /256 lighting; 0=legacy, 1=experimental");append(out,b"RGB888Lighting=0");did_rgb888=true;}
+        if old==3&&add_renderer&&!did_renderer{append(out,b"; Experimental GPU presentation: software (default), auto, vulkan; GDI fallback");append(out,b"Renderer=software");did_renderer=true;}
         if old==3&&add_smooth&&!did_smooth{append(out,b"; Smooth final image enlargement (GDI HALFTONE); 0=legacy, 1=experimental");append(out,b"PresentationSmooth=0");did_smooth=true;}
         if old==3&&add_icon01_opaque&&!did_icon01_opaque{
             append(out,b"; Original Matrox title atlas icon01 only; experimental, default off");
@@ -240,6 +257,7 @@ pub fn ensure_defaults(path:&Path,matrox:bool)->Result<(),String>{
     if matrox&&!seen.matrox{append(&mut out,b"[matrox]");}
     if add_dither&&!did_dither{append(&mut out,b"Dither=0");}
     if add_rgb888&&!did_rgb888{append(&mut out,b"; Experimental RGB888 /256 lighting; 0=legacy, 1=experimental");append(&mut out,b"RGB888Lighting=0");}
+    if add_renderer&&!did_renderer{append(&mut out,b"; Experimental GPU presentation: software (default), auto, vulkan; GDI fallback");append(&mut out,b"Renderer=software");}
     if add_smooth&&!did_smooth{append(&mut out,b"; Smooth final image enlargement (GDI HALFTONE); 0=legacy, 1=experimental");append(&mut out,b"PresentationSmooth=0");}
     if add_icon01_opaque&&!did_icon01_opaque{
         append(&mut out,b"; Original Matrox title atlas icon01 only; experimental, default off");
@@ -315,11 +333,16 @@ mod tests{
     fn graphics_fps_and_matrox_dither_and_cheat_are_separate(){
         let data=b"[Graphics]\nFPSLimit=120\n[matrox]\nDither=1\n[Cheats]\nUnlimitedFuel=1\nALIAH=1\nFATAL=1\n";
         assert_eq!(parse(data).unwrap().0,GameSettings{
-            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,unlimited_fuel:true,aliah:true,fatal:true,log:false});
+            fps_limit:120,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,renderer:MatroxRenderer::Software,unlimited_fuel:true,aliah:true,fatal:true,log:false});
         assert_eq!(parse(b"[Graphics]\nFPSLimit=0\n").unwrap().0.fps_limit,0);
         assert!(parse(b"[Graphics]\nFPSLimit=-1").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=241").is_err());
         assert!(parse(b"[Graphics]\nFPSLimit=60\nfpslimit=30").is_err());
+        assert!(parse(b"[Matrox]\nRenderer=invalid").is_err());
+        assert!(parse(b"[Matrox]\nRenderer=auto\nrenderer=vulkan").is_err());
+        assert_eq!(parse(b"[Matrox]\nRenderer=Vulkan").unwrap().0.renderer,MatroxRenderer::Vulkan);
+        assert_eq!(parse(b"[Matrox]\nRenderer=auto").unwrap().0.renderer,MatroxRenderer::Auto);
+        assert_eq!(parse(b"").unwrap().0.renderer,MatroxRenderer::Software);
         assert!(parse(b"[Matrox]\nPresentationSmooth=2").is_err());
         assert!(parse(b"[Matrox]\nPresentationSmooth=1\npresentationsmooth=0").is_err());
         assert!(parse(b"[Matrox]\nPresentationSmooth=1").unwrap().0.presentation_smooth);
@@ -368,7 +391,7 @@ mod tests{
         assert!(out.windows(b"[Debug]".len()).any(|v|v==b"[Debug]"));
         assert!(out.windows(b"Log=0".len()).any(|v|v==b"Log=0"));
         assert_eq!(out.windows(b"FPSLimit=".len()).filter(|s|*s==b"FPSLimit=").count(),1);
-        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,unlimited_fuel:false,aliah:false,fatal:false,log:false});
+        assert_eq!(read_settings(&ini).unwrap(),GameSettings{fps_limit:75,dither:true,icon01_opaque:false,world_bilinear:false,rgb888_lighting:false,presentation_smooth:false,renderer:MatroxRenderer::Software,unlimited_fuel:false,aliah:false,fatal:false,log:false});
         ensure_defaults(&ini,true).unwrap();
         assert_eq!(fs::read(&ini).unwrap(),out);
         fs::remove_dir_all(p).unwrap();
@@ -384,6 +407,7 @@ mod tests{
         assert!(s.contains("Dither=0"));
         assert!(s.contains("RGB888Lighting=0"));
         assert!(s.contains("PresentationSmooth=0"));
+        assert!(s.contains("Renderer=software"));
         assert!(s.contains("Icon01Opaque=0"));
         assert!(s.contains("WorldBilinear=0"));
         assert!(s.contains("[Cheats]\r\n"));

@@ -19,3 +19,5 @@ EXPORTS
  BeginPaint
  EndPaint
  GetSystemMetrics
+ IsWindow
+ IsIconic
