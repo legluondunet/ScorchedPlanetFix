@@ -3,3 +3,4 @@ tools/matrox/msi95_probe.c text eol=lf
 tools/matrox/*.def text eol=lf
 tools/matrox/vulkan_present.c text eol=lf
 tools/matrox/vulkan_present.h text eol=lf
+tools/matrox/msi_gpu_batch.h text eol=lf

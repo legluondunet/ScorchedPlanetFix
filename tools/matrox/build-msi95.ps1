@@ -8,9 +8,11 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "9bc130b40b7196f5eecf7507fd6e0b60528b566ac3fa2d18a0f01e18fc8a7173"
+$expectedSourceHash = "deea90e92d3b03f06bc2988a085d12934321ad51409c272f3a0f7b2e4331f68c"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
+$waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($waveHeaderHash -cne "521478141d660739d7f29fba2d8e8c5bb52201d42ef3a2bc56f89d113164f1d9") { throw "GPU wave header checksum mismatch: $waveHeaderHash" }
 
 foreach ($lib in @("kernel32", "user32", "gdi32")) {
     $def = (Resolve-Path (Join-Path $sourceRoot "$lib.def")).Path

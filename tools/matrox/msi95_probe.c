@@ -7,6 +7,7 @@
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_world_bilinear.h"
 #include "vulkan_present.h"
+#include "msi_gpu_batch.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -447,6 +448,18 @@ static int g_preview_created = 0;
 static int g_viewport_reported=0;
 static int g_vk_requested=0,g_vk_active=0,g_vk_attempted=0;
 static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0,g_vk_recreates=0,g_vk_retry_streak=0;
+/* Read-only candidate profiling: no GPU rasterization or texture copies.
+ * One native frame in 60, only with Vulkan requested and logging enabled.
+ * Logical bounds are conservatively mapped to the synthetic 1440x1080 target. */
+static MsiGpuWave g_gpu_profile_wave;
+static unsigned g_gpu_profile_enabled,g_gpu_profile_active;
+static struct {
+    unsigned sampled,eligible,opaque,alpha,keyed,flat,rgb888,other;
+    unsigned waves,opaque_waves,alpha_waves,singletons,max_wave,split;
+    unsigned zplanes,remaps,sentinels,state_calls,heap_calls;
+    unsigned tex4,tex8,tex16,drawn_frames,empty_frames;
+    unsigned frame_candidates;
+} g_gpu_profile;
 static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
@@ -770,6 +783,62 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
 static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
   char buf[940];DWORD p=0;putstr(buf,&p,name);putstr(buf,&p," ");putunsigned(buf,&p,a);
   if(label2){putstr(buf,&p," ");putstr(buf,&p,label2);putstr(buf,&p," ");putunsigned(buf,&p,b);}buf[p]=0;logtext(buf);
+}
+/* No rendering side effects: collect hypothetical waves, never submit. */
+static void gpu_profile_flush(void){
+    unsigned count=g_gpu_profile_wave.count;
+    if(!count)return;
+    g_gpu_profile.waves++;
+    if(g_gpu_profile_wave.needs_prior)g_gpu_profile.alpha_waves++;
+    else g_gpu_profile.opaque_waves++;
+    if(count==1u)g_gpu_profile.singletons++;
+    if(count>g_gpu_profile.max_wave)g_gpu_profile.max_wave=count;
+    msi_gpu_wave_reset(&g_gpu_profile_wave);
+}
+static void gpu_profile_finish(void){
+    if(!g_gpu_profile_active)return;
+    gpu_profile_flush();
+    if(g_gpu_profile.frame_candidates)g_gpu_profile.drawn_frames++;
+    else g_gpu_profile.empty_frames++;
+    g_gpu_profile_active=0;
+}
+static void gpu_profile_candidate(int left,int top,int right,int bottom,
+    int width,int height,int textured,int modulate,unsigned planes,unsigned opacity){
+    if(!g_gpu_profile_active||g_zplane_draw_context)return;
+    if(width!=640||height!=400||opacity>100u){g_gpu_profile.other++;gpu_profile_flush();return;}
+    if(!textured){g_gpu_profile.flat++;gpu_profile_flush();return;}
+    if(modulate&&g_rgb888_lighting_enabled){g_gpu_profile.rgb888++;gpu_profile_flush();return;}
+    if(planes!=4u&&planes!=8u&&planes!=16u){g_gpu_profile.other++;gpu_profile_flush();return;}
+    MsiGpuRect rect={(unsigned)left*1440u/640u,(unsigned)top*1080u/400u,
+        ((unsigned)right*1440u+639u)/640u,((unsigned)bottom*1080u+399u)/400u};
+    unsigned prior=opacity<100u;
+    int result=msi_gpu_wave_push(&g_gpu_profile_wave,rect,prior);
+    if(result==MSI_GPU_WAVE_FLUSH){
+        g_gpu_profile.split++;gpu_profile_flush();
+        result=msi_gpu_wave_push(&g_gpu_profile_wave,rect,prior);
+    }
+    if(result!=MSI_GPU_WAVE_ACCEPT){g_gpu_profile.other++;gpu_profile_flush();return;}
+    g_gpu_profile.eligible++;g_gpu_profile.frame_candidates++;
+    if(prior)g_gpu_profile.alpha++;else g_gpu_profile.opaque++;
+    if(g_state.msiTexture.Transparency)g_gpu_profile.keyed++;
+    if(planes==4u)g_gpu_profile.tex4++;else if(planes==8u)g_gpu_profile.tex8++;else g_gpu_profile.tex16++;
+}
+static void gpu_profile_report(void){
+    if(!g_gpu_profile_enabled)return;
+    gpu_profile_finish();
+    lognum("GPU_PROFILE sampled_frames=",g_gpu_profile.sampled,"frames_with_candidates=",g_gpu_profile.drawn_frames);
+    lognum("GPU_PROFILE eligible=",g_gpu_profile.eligible,"empty_frames=",g_gpu_profile.empty_frames);
+    lognum("GPU_PROFILE opaque=",g_gpu_profile.opaque,"alpha=",g_gpu_profile.alpha);
+    lognum("GPU_PROFILE keyed=",g_gpu_profile.keyed,"flat_excluded=",g_gpu_profile.flat);
+    lognum("GPU_PROFILE rgb888_excluded=",g_gpu_profile.rgb888,"other_excluded=",g_gpu_profile.other);
+    lognum("GPU_PROFILE tex4=",g_gpu_profile.tex4,"tex8=",g_gpu_profile.tex8);
+    lognum("GPU_PROFILE tex16=",g_gpu_profile.tex16,NULL,0);
+    lognum("GPU_PROFILE waves=",g_gpu_profile.waves,"singletons=",g_gpu_profile.singletons);
+    lognum("GPU_PROFILE opaque_waves=",g_gpu_profile.opaque_waves,"alpha_waves=",g_gpu_profile.alpha_waves);
+    lognum("GPU_PROFILE max_wave=",g_gpu_profile.max_wave,"planner_splits=",g_gpu_profile.split);
+    lognum("GPU_PROFILE zplane_barriers=",g_gpu_profile.zplanes,"null_remaps=",g_gpu_profile.remaps);
+    lognum("GPU_PROFILE sentinel_barriers=",g_gpu_profile.sentinels,"heap_barriers=",g_gpu_profile.heap_calls);
+    lognum("GPU_PROFILE state_calls=",g_gpu_profile.state_calls,NULL,0);
 }
 /* Sparse histogram: absent values have zero requests. Emit at F12 and exit
  * only, avoiding additional per-triangle logging or duplicated Z-plane halves. */
@@ -2106,6 +2175,9 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_vk_requested=(n==4u&&setting[0]=='a'&&setting[1]=='u'&&setting[2]=='t'&&setting[3]=='o')||
         (n==6u&&setting[0]=='v'&&setting[1]=='u'&&setting[2]=='l'&&setting[3]=='k'&&setting[4]=='a'&&setting[5]=='n');
     }
+    zero(&g_gpu_profile,sizeof(g_gpu_profile));msi_gpu_wave_reset(&g_gpu_profile_wave);
+    g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
+    if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1");
     logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");
     logtext(g_vk_requested?(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=GPU linear (GDI HALFTONE fallback)":"PREVIEW_SCALER requested=GPU nearest (GDI legacy fallback)"):
         (g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy"));
@@ -2219,6 +2291,7 @@ BOOL __cdecl msiExit(void){
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     log_opacity_histogram("exit");
+    gpu_profile_report();
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,"recreates=",g_vk_recreates);}
@@ -2253,6 +2326,7 @@ static BOOL grow_heap_tracker(void){
     return TRUE;
 }
 LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
+    if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
     if(Pages<=0||Pages>131072){
         lognum("msiAllocTextureHeap INVALID pages=",(unsigned)Pages,NULL,0);
@@ -2278,6 +2352,7 @@ LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     return (LPBYTE)ptr;
 }
 BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
+    if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
     if(!pTextureHeap)return FALSE;
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i]==pTextureHeap){
@@ -2302,6 +2377,10 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     g_auto_blue_frame_samples=0;
     /* No automatic debug ownership tracking or BMP capture. */
     g_capture_ownership=g_manual_capture_active;
+    gpu_profile_finish();
+    if(g_gpu_profile_enabled&&!g_capture_ownership&&g_endframe_depth==0u&&g_frames%60u==0u){
+        g_gpu_profile_active=1;g_gpu_profile.sampled++;g_gpu_profile.frame_candidates=0;
+    }
     if(g_capture_ownership){
         if(g_ownership)zero(g_ownership,g_ownership_bytes);
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
@@ -2380,6 +2459,7 @@ static void frame_limit(void){
 BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     (void)Dump;(void)Frame;(void)Wait;
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
+    if(g_endframe_depth==0u)gpu_profile_finish();
     g_endframe_depth++;
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
@@ -2524,6 +2604,11 @@ static BOOL readable_parameters(const T_msiParameters *p){
 static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(!g_initialized){logtext("msiSetParameters called BEFORE successful msiInit");return FALSE;}
     g_params++;
+    if(g_gpu_profile_active){
+        if(!p){g_gpu_profile.remaps++;gpu_profile_flush();}
+        else if(p==(T_msiParameters*)0xffffffffu){g_gpu_profile.sentinels++;gpu_profile_flush();}
+        else g_gpu_profile.state_calls++;
+    }
     /* No automatic buffer BMPs; only deliberate F12 pairs are saved. */
     if(p==(T_msiParameters*)0xffffffffu){
         if(g_params<=20 || g_params%200==0)
@@ -3127,6 +3212,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
         bilinear_palette_ready=1;
         g_world_bilinear_palette_triangles++;
     }
+    gpu_profile_candidate(left,top,right,bottom,width,height,textured,modulate,planes,opacity);
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
     unsigned pixelCount=0;
@@ -3726,6 +3812,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
 BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
     if(!g_initialized)return FALSE;
     g_zplanes++;
+    if(g_gpu_profile_active){g_gpu_profile.zplanes++;gpu_profile_flush();}
     count_opacity(g_zplane_opacity,opacity);
     if(g_state_valid && g_state.msiColor.Dither)g_fx_dither_zplanes++;
     if(g_state_valid && g_state.msiTexture.Modulate)g_fx_modulate_zplanes++;

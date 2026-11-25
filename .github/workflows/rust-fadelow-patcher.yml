@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, diagnostics/matrox-f12-lighting-input-20261124]
+    branches: [main, diagnostics/matrox-f12-lighting-input-20261124, feature/matrox-vulkan-presentation]
   workflow_dispatch:
 
 permissions:
@@ -265,6 +265,8 @@ jobs:
           }
           $runtime = Get-Content (Join-Path (Split-Path $folder -Parent) 'ScorchedPlanetFix.log') -Raw
           if (!$runtime.Contains('PREVIEW_RENDERER requested=vulkan')) { throw 'Vulkan request not passed' }
+          if (!$runtime.Contains('GPU_PROFILE enabled sample=1/60') -or $runtime -notmatch 'GPU_PROFILE sampled_frames=\s*[1-9][0-9]*') { throw 'Read-only GPU candidate profiling not exercised' }
+          if ($runtime -notmatch 'GPU_PROFILE rgb888_excluded=\s*[1-9][0-9]*') { throw 'GPU profile must exclude experimental RGB888 lighting' }
           if ($runtime.Contains('PREVIEW_RENDERER active=vulkan')) {
             if ($runtime -notmatch 'SESSION_VULKAN frames=\s*[1-9][0-9]*') { throw 'Vulkan selected but no presented frames' }
           } elseif (!$runtime.Contains('active=software') -or !$runtime.Contains('PREVIEW_SCALER HALFTONE blit succeeded')) {
@@ -274,7 +276,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
 
       - name: Upload standalone Matrox lighting comparison probe
-        if: github.base_ref != 'diagnostics/matrox-f12-lighting-input-20261124'
+        if: github.base_ref != 'diagnostics/matrox-f12-lighting-input-20261124' && github.base_ref != 'feature/matrox-vulkan-presentation'
         uses: actions/upload-artifact@v6
         with:
           name: MatroxLightingProbe-x86
