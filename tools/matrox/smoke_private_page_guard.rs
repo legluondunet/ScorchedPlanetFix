@@ -85,12 +85,19 @@ fn main(){
         // must not be consumed. Exercise classifier with synthetic records.
         let mut r=Record{code:0xc0000005,flags:0,next:ptr::null_mut(),address:ptr::null_mut(),count:2,info:[0;15]};
         let mut p=ExceptionPointers{record:&mut r,context:ptr::null_mut()};
+        // Keep the logical guard armed so rejection is attributable to
+        // the tested predicate, not merely to an inactive guard.
+        ARMED.store(1,SeqCst);
         r.info[1]=base as usize+SIZE;
         assert_eq!(handler(&mut p),0);
+        assert_eq!(ARMED.load(SeqCst),1);
         r.info[1]=alias as usize;r.info[0]=8;
         assert_eq!(handler(&mut p),0);
+        assert_eq!(ARMED.load(SeqCst),1);
         r.info[0]=0;OWNER.store(0,SeqCst);
         assert_eq!(handler(&mut p),0);
+        assert_eq!(ARMED.load(SeqCst),1);
+        ARMED.store(0,SeqCst);
         assert_ne!(RemoveVectoredExceptionHandler(veh),0);
         BASE.store(0,SeqCst);
         assert_ne!(VirtualFree(base,0,0x8000),0);
