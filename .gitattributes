@@ -7,3 +7,10 @@ tools/matrox/msi_gpu_batch.h text eol=lf
 tools/matrox/msi_gpu_draw_batch.h text eol=lf
 tools/matrox/msi_gpu_snapshot.h text eol=lf
 tools/matrox/msi_gpu_texel.h text eol=lf
+# Hash-pinned Vulkan shadow sources and generated shader words.
+tools/matrox/msi_vk_*.h text eol=lf
+tools/matrox/msi_vk_*.c text eol=lf
+tools/matrox/msi_gpu_compare.h text eol=lf
+tools/matrox/world_spv_embedded.h text eol=lf
+tools/matrox/shaders/*.vert text eol=lf
+tools/matrox/shaders/*.frag text eol=lf
