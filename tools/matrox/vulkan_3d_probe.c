@@ -18,6 +18,7 @@
 #include "world_spv.h"
 #include "msi_world_bilinear.h"
 #include "msi_gpu_texel.h"
+#include "msi_gpu_batch.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -479,16 +480,19 @@ static unsigned batch_snapshot(VkCommandBuffer cmd,Image out,Image prior,
     transition(cmd,prior.i,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
     VkImageCopy copies[BATCH_COUNT]={0};unsigned n=0,total=0;
+    MsiGpuWave planned={0};msi_gpu_wave_reset(&planned);
     for(unsigned i=0;i<BATCH_COUNT;i++){
         if(wave==2&&(i&1u))continue;
         unsigned lx=(i%8u)*80u+8u,ly=(i/8u)*80u+8u;
         unsigned x0=lx*w/640u,y0=ly*h/400u;
         unsigned x1=((lx+32u)*w+639u)/640u,y1=((ly+32u)*h+399u)/400u;
+        NEED(msi_gpu_wave_push(&planned,(MsiGpuRect){x0,y0,x1,y1},1)==MSI_GPU_WAVE_ACCEPT);
         VkImageCopy *r=&copies[n++];
         r->srcSubresource=r->dstSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
         r->srcOffset=r->dstOffset=(VkOffset3D){(int32_t)x0,(int32_t)y0,0};
         r->extent=(VkExtent3D){x1-x0,y1-y0,1};total+=(x1-x0)*(y1-y0);
     }
+    NEED(planned.count==n);
     vkCmdCopyImage(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,n,copies);
     transition(cmd,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
