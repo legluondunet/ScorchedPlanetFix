@@ -943,7 +943,10 @@ static void gpu_capture_copy(BYTE *out,const BYTE *src){
 static void gpu_capture_barrier(void){
     if(!g_gpu_capture_active||g_gpu_capture_frozen)return;
     g_gpu_capture_draw=0;
-    if(g_gpu_capture_batch.count>=8u){g_gpu_capture_frozen=1;return;}
+    if(g_gpu_capture_batch.count>=8u&&
+       !msi_gpu_snapshot_equal(g_gpu_capture_before,g_gpu_capture_after,GPU_CAPTURE_NATIVE_BYTES)){
+        g_gpu_capture_frozen=1;return;
+    }
     msi_gpu_draw_batch_reset(&g_gpu_capture_batch);
 }
 static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,const T_msiVertex *c,
@@ -991,7 +994,8 @@ static void gpu_capture_draw_complete(void){
     if(!g_gpu_capture_draw)return;
     g_gpu_capture_draw=0;
     gpu_capture_copy(g_gpu_capture_after,(const BYTE*)g_color);
-    if(g_gpu_capture_batch.count>=32u)g_gpu_capture_frozen=1;
+    /* Do not retain a fully discarded or completely overwritten wave. */
+    if(g_gpu_capture_batch.count>=32u)gpu_capture_barrier();
 }
 
 /* GDI presents the original CPU RGB565 framebuffer plus experimental
@@ -1494,7 +1498,7 @@ static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
 static void gpu_capture_save(void){
     if(!g_gpu_capture_active)return;
     gpu_capture_barrier();
-    if(!g_gpu_capture_frozen){logtext("GPU_CAPTURE no contiguous indexed8 wave of at least 8 draws");return;}
+    if(!g_gpu_capture_frozen){logtext("GPU_CAPTURE no changed contiguous indexed8 wave of at least 8 draws");return;}
     char name[100],path[1024];
     capture_name(name,g_manual_capture_sequence,"_gpu.bin");
     DWORD n=GetModuleFileNameA(g_module,path,1023);
