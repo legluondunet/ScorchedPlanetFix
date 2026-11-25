@@ -11,6 +11,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_gpu_shadow_sampler.h"
 #include "msi_gpu_publish.h"
 #include "msi_gpu_coverage.h"
+#include "msi_gpu_cpu_replay.h"
 #include "msi_gpu_bypass.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -1571,6 +1572,44 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
     if(g_endframe_depth!=(publish?0u:1u)||g_guest_callback_depth){logtext("GPU_SHADOW SKIP nested frame");return 0;}
     WORD *scratch=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
     if(!scratch){logtext("GPU_SHADOW SKIP scratch allocation failed");return -1;}
+    /* Validate recovery against the original rasterizer, not against
+     * the GPU tolerance. Never touch the live framebuffer during replay. */
+    BYTE *replayed_mask=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+    DWORD replay_started=GetTickCount();
+    if(!replayed_mask){
+        VirtualFree(scratch,0,MEM_RELEASE);logtext("GPU_CPU_REPLAY ERROR allocation");
+        return MSI_SHADOW_ERROR;
+    }
+    int replay_ok=msi_gpu_cpu_replay(&best->batch,640u,400u,
+        (const WORD*)best->before,scratch,replayed_mask);
+    unsigned exact=0,mask_diff=0,written=0,first=GPU_CAPTURE_NATIVE_BYTES/2u;
+    if(replay_ok)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++){
+        unsigned same=scratch[j]==((const WORD*)best->after)[j];
+        unsigned same_mask=replayed_mask[j]==best->written[j];
+        exact+=same;mask_diff+=!same_mask;written+=replayed_mask[j]!=0;
+        if((!same||!same_mask)&&first==GPU_CAPTURE_NATIVE_BYTES/2u)first=j;
+    }
+    int replay_pass=replay_ok&&exact==GPU_CAPTURE_NATIVE_BYTES/2u&&!mask_diff&&written;
+    char replay_msg[320];DWORD rn=0;
+    putstr(replay_msg,&rn,replay_pass?"GPU_CPU_REPLAY PASS frame=":"GPU_CPU_REPLAY DIFFERENCES frame=");
+    putunsigned(replay_msg,&rn,g_frames);
+    putstr(replay_msg,&rn," draws=");putunsigned(replay_msg,&rn,best->batch.count);
+    putstr(replay_msg,&rn," exact=");putunsigned(replay_msg,&rn,exact);
+    putstr(replay_msg,&rn," mask_diff=");putunsigned(replay_msg,&rn,mask_diff);
+    putstr(replay_msg,&rn," written=");putunsigned(replay_msg,&rn,written);
+    putstr(replay_msg,&rn," elapsed_ms=");putunsigned(replay_msg,&rn,GetTickCount()-replay_started);
+    replay_msg[rn]=0;logtext(replay_msg);
+    if(!replay_pass&&first<GPU_CAPTURE_NATIVE_BYTES/2u){
+        rn=0;putstr(replay_msg,&rn,"GPU_CPU_REPLAY MISMATCH x=");putunsigned(replay_msg,&rn,first%640u);
+        putstr(replay_msg,&rn," y=");putunsigned(replay_msg,&rn,first/640u);
+        putstr(replay_msg,&rn," expected=");puthex(replay_msg,&rn,((const WORD*)best->after)[first]);
+        putstr(replay_msg,&rn," replay=");puthex(replay_msg,&rn,scratch[first]);
+        putstr(replay_msg,&rn," expected_mask=");putunsigned(replay_msg,&rn,best->written[first]);
+        putstr(replay_msg,&rn," replay_mask=");putunsigned(replay_msg,&rn,replayed_mask[first]);
+        replay_msg[rn]=0;logtext(replay_msg);
+    }
+    VirtualFree(replayed_mask,0,MEM_RELEASE);
+    if(!replay_pass){VirtualFree(scratch,0,MEM_RELEASE);return replay_ok?2:MSI_SHADOW_ERROR;}
     MsiGpuCompare stats;DWORD started=GetTickCount();
     int rc=matrox_vk_shadow_compare(&best->batch,(const WORD*)best->before,(const WORD*)best->after,scratch,&stats);
     char msg[400];DWORD n=0;

@@ -18,3 +18,4 @@ tools/matrox/msi_gpu_shadow_sampler.h text eol=lf
 tools/matrox/msi_gpu_publish.h text eol=lf
 tools/matrox/msi_gpu_coverage.h text eol=lf
 tools/matrox/msi_gpu_bypass.h text eol=lf
+tools/matrox/msi_gpu_cpu_replay.h text eol=lf

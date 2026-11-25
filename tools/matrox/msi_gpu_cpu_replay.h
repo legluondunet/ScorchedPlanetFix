@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Recorded opaque indexed8 CPU fallback proof. All input comes from immutable
  * snapshots; no live parameters/cache or guest pointers. Output is private
- * scratch, which must be discarded on error. This is not wired to MSI95 yet.
+ * scratch, which must be discarded on error. MSI95 uses it only as a diagnostic.
  * Explicit float32 rounding preserves legacy incremental scanline arithmetic
  * even with x87 excess precision. Never substitute direct barycentrics.
  */
