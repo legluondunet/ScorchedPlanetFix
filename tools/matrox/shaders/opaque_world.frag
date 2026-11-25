@@ -1,7 +1,8 @@
 #version 450
 // SPDX-License-Identifier: GPL-3.0-or-later
-// No blending, depth, keying or HUD here. Host must reject those draws.
-// Input is CLUT-resolved, entirely opaque RGB565 stored in R16_UINT.
+// No blending, depth or HUD here. Host must reject those draws.
+// Input R32_UINT: RGB565 low 16, bit 16 center discard, bit 17 filter veto.
+// Host resolves CLUT, residency and original index/color key exceptions.
 // Output is packed RGB565 in an R16_UINT color attachment for readback.
 layout(set=0,binding=0) uniform usampler2D sourceTex;
 layout(location=0) noperspective in vec2 uvWeighted;
@@ -11,7 +12,7 @@ layout(location=0) out uint packedColor;
 layout(push_constant) uniform Draw {
     vec2 logicalExtent;
     vec2 targetExtent;
-    uint flags; // perspective=1, clamp U=2, clamp V=4, bilinear=8, modulate=16, dither=32
+    uint flags; // perspective=1, clamp U=2, clamp V=4, bilinear=8, modulate=16, dither=32, key metadata=64
     uint reserved;
 } draw;
 const uint bayer[16]=uint[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
@@ -35,15 +36,20 @@ uint sample565(vec2 uv){
     ivec2 size=textureSize(sourceTex,0);
     uv.x=(draw.flags&2u)!=0u?clamp(uv.x,0.0,1.0):fract(uv.x);
     uv.y=(draw.flags&4u)!=0u?clamp(uv.y,0.0,1.0):fract(uv.y);
-    if((draw.flags&8u)==0u){
-        ivec2 center=min(ivec2(uv*vec2(size)),size-1);
-        return tap(center,size);
-    }
+    ivec2 center=min(ivec2(uv*vec2(size)),size-1);
+    uint nearest=tap(center,size);
+    bool keyed=(draw.flags&64u)!=0u;
+    if(keyed&&(nearest&0x10000u)!=0u)discard;
+    if((draw.flags&8u)==0u)return nearest&65535u;
     vec2 p=uv*vec2(size)-0.5;
     ivec2 i=ivec2(floor(p));
     uvec2 w=uvec2(fract(p)*256.0+0.5);
-    return mix565(unpack565(tap(i,size)),unpack565(tap(i+ivec2(1,0),size)),
-        unpack565(tap(i+ivec2(0,1),size)),unpack565(tap(i+ivec2(1,1),size)),w);
+    uint a=tap(i,size),b=tap(i+ivec2(1,0),size);
+    uint c=tap(i+ivec2(0,1),size),d=tap(i+ivec2(1,1),size);
+    // A visible center may still veto interpolation (index exceptions).
+    if(keyed&&((a|b|c|d)&0x30000u)!=0u)return nearest&65535u;
+    return mix565(unpack565(a&65535u),unpack565(b&65535u),
+        unpack565(c&65535u),unpack565(d&65535u),w);
 }
 void main(){
     // Host validates finite, positive invW for perspective draws.

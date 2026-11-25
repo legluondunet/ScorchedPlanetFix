@@ -45,7 +45,8 @@ static VkSampler sampler;
 static Image tex;
 static Buffer vb,upload;
 static uint32_t qfamily;
-static const uint16_t pixels[4]={0xf800,0x07e0,0x001f,0xffff};
+/* Green is discarded; white is visible but forbids filtering (index exception). */
+static const uint32_t pixels[4]={0xf800,0x107e0,0x001f,0x2ffff};
 /* Asymmetric triangle, deliberate negative and >1 UVs, varying invW
  * and lighting. Test far from edges; separately count coverage errors. */
 static const Vertex tri[3]={
@@ -71,11 +72,11 @@ static void writebuf(Buffer b,const void *p,size_t n){
     void *d;NEED(n<=b.size);OK(vkMapMemory(dev,b.m,0,b.size,0,&d));memcpy(d,p,n);vkUnmapMemory(dev,b.m);
 }
 static void freebuf(Buffer b){vkDestroyBuffer(dev,b.b,0);vkFreeMemory(dev,b.m,0);}
-static Image image(uint32_t w,uint32_t h,VkImageUsageFlags usage){
+static Image image(uint32_t w,uint32_t h,VkFormat format,VkImageUsageFlags usage){
     Image a={0};
-    VkImageFormatProperties p;OK(vkGetPhysicalDeviceImageFormatProperties(phys,VK_FORMAT_R16_UINT,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,usage,0,&p));
+    VkImageFormatProperties p;OK(vkGetPhysicalDeviceImageFormatProperties(phys,format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,usage,0,&p));
     NEED(p.maxExtent.width>=w&&p.maxExtent.height>=h);
-    VkImageCreateInfo ci=S(IMAGE_CREATE_INFO);ci.imageType=VK_IMAGE_TYPE_2D;ci.format=VK_FORMAT_R16_UINT;
+    VkImageCreateInfo ci=S(IMAGE_CREATE_INFO);ci.imageType=VK_IMAGE_TYPE_2D;ci.format=format;
     ci.extent=(VkExtent3D){w,h,1};ci.mipLevels=1;ci.arrayLayers=1;ci.samples=VK_SAMPLE_COUNT_1_BIT;
     ci.tiling=VK_IMAGE_TILING_OPTIMAL;ci.usage=usage;ci.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     OK(vkCreateImage(dev,&ci,0,&a.i));
@@ -117,9 +118,11 @@ static void setup(void){
         printf("VULKAN_3D_CANDIDATE %s type=%u\n",candidate.deviceName,candidate.deviceType);
         if(candidate.deviceType==VK_PHYSICAL_DEVICE_TYPE_CPU)continue;
 #endif
-        VkFormatProperties f;vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R16_UINT,&f);
-        VkFormatFeatureFlags want=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
-        if((f.optimalTilingFeatures&want)!=want)continue;
+        VkFormatProperties f;
+        vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R16_UINT,&f);
+        if(!(f.optimalTilingFeatures&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))continue;
+        vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R32_UINT,&f);
+        if(!(f.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))continue;
         uint32_t q=0;vkGetPhysicalDeviceQueueFamilyProperties(p[i],&q,0);
         VkQueueFamilyProperties *qs=calloc(q,sizeof(*qs));NEED(qs);vkGetPhysicalDeviceQueueFamilyProperties(p[i],&q,qs);
         for(uint32_t j=0;j<q;j++)if(qs[j].queueCount&&(qs[j].queueFlags&VK_QUEUE_GRAPHICS_BIT)){phys=p[i];qfamily=j;break;}
@@ -132,7 +135,7 @@ static void setup(void){
     VkDeviceCreateInfo di=S(DEVICE_CREATE_INFO);di.queueCreateInfoCount=1;di.pQueueCreateInfos=&qi;
     OK(vkCreateDevice(phys,&di,0,&dev));vkGetDeviceQueue(dev,qfamily,0,&queue);vkGetPhysicalDeviceMemoryProperties(phys,&mem);
     VkCommandPoolCreateInfo pi=S(COMMAND_POOL_CREATE_INFO);pi.queueFamilyIndex=qfamily;OK(vkCreateCommandPool(dev,&pi,0,&cp));
-    tex=image(2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    tex=image(2,2,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     upload=buffer(sizeof(pixels),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);writebuf(upload,pixels,sizeof(pixels));
     vb=buffer(sizeof(tri),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(vb,tri,sizeof(tri));
     VkCommandBuffer c=begin();
@@ -190,11 +193,16 @@ static uint16_t refpixel_offset(double *w,double x,double y,unsigned f,double du
     double u=0,v=0,iw=0,m[3]={0};
     for(int i=0;i<3;i++){double t=w[i]*((f&1)?tri[i].iw:1);iw+=t;u+=t*tri[i].uv[0];v+=t*tri[i].uv[1];for(int k=0;k<3;k++)m[k]+=w[i]*tri[i].m[k];}
     u=coord(u/iw+du,f&2);v=coord(v/iw+dv,f&4);
-    unsigned color;
+    int nx=(int)(u*2),ny=(int)(v*2);
+    unsigned nearest=tap(nx>1?1:nx,ny>1?1:ny,f);
+    if((f&64)&&(nearest&0x10000u))return 0xdead;
+    unsigned color=nearest&65535u;
     if(f&8){double sx=u*2-.5,sy=v*2-.5;int ix=(int)floor(sx),iy=(int)floor(sy);
         unsigned wx=(unsigned)((sx-ix)*256+.5),wy=(unsigned)((sy-iy)*256+.5);
-        color=msi_bilinear_mix_rgb565(tap(ix,iy,f),tap(ix+1,iy,f),tap(ix,iy+1,f),tap(ix+1,iy+1,f),wx,wy);
-    }else{int ix=(int)(u*2),iy=(int)(v*2);color=tap(ix>1?1:ix,iy>1?1:iy,f);}
+        unsigned a=tap(ix,iy,f),b=tap(ix+1,iy,f),c=tap(ix,iy+1,f),d=tap(ix+1,iy+1,f);
+        if(!(f&64)||!((a|b|c|d)&0x30000u))
+            color=msi_bilinear_mix_rgb565(a&65535u,b&65535u,c&65535u,d&65535u,wx,wy);
+    }
     if(f&16){static const unsigned bayer[]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
         unsigned rank=bayer[((unsigned)y&3)*4+((unsigned)x&3)],t=((2*rank+1)*255)/32;
         unsigned r=mod(color>>11,(unsigned)(m[0]+.5),t,f&32),g=mod((color>>5)&63,(unsigned)(m[1]+.5),t,f&32),b=mod(color&31,(unsigned)(m[2]+.5),t,f&32);
@@ -206,12 +214,14 @@ static uint16_t refpixel(double *w,double x,double y,unsigned f){return refpixel
 /* Only accept exact alternate texel colors within a tiny normalized UV
  * interval at nearest-sampling discontinuities in this 2x2 fixture. */
 static int nearest_boundary_match(double *w,double x,double y,unsigned f,uint16_t actual){
-    if(f&8)return 0;
+    if((f&8)&&!(f&64))return 0;
     const double eps=0.000002;
     uint16_t base=refpixel(w,x,y,f);
     for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++){
         if(!i&&!j)continue;
         uint16_t alt=refpixel_offset(w,x,y,f,i*eps,j*eps);
+        /* For keyed bilinear, only allow a real discard discontinuity. */
+        if((f&8)&&base!=0xdead&&alt!=0xdead)continue;
         if(alt!=base&&actual==alt)return 1;
     }
     return 0;
@@ -237,6 +247,11 @@ static void oracle_selftest(void){
     NEED(refpixel(w,314,150,63)==0x554d);
     NEED(refpixel_offset(w,313,150,63,0,-0.000002)==0x4d4b);
     NEED(refpixel_offset(w,314,150,63,0,-0.000002)==0x4d4c);
+    /* Direct barycentric samples at the vertices: fixed wrapped UVs.
+       Compare host metadata independently of the shader. */
+    NEED(tap(1,0,64)==0x107e0);
+    NEED(tap(1,1,64)==0x2ffff);
+    NEED((tap(1,1,64)&0x10000u)==0);
     puts("VULKAN_3D_ORACLE_SELFTEST_PASS");
 }
 static int absdiff(unsigned a,unsigned b){return a>b?(int)(a-b):(int)(b-a);}
@@ -246,7 +261,7 @@ static int channel_error(uint16_t a,uint16_t b){
 }
 static int test(uint32_t w,uint32_t h,unsigned flags){
     NEED(w>0&&h>0&&w<=16384&&h<=16384);
-    Image out=image(w,h,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
     VkCommandBuffer c=begin();VkClearValue clear={.color.uint32={0xdead,0,0,0}};
@@ -263,38 +278,39 @@ static int test(uint32_t w,uint32_t h,unsigned flags){
     VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(c,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(c);
     void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
-    unsigned interior=0,exact=0,one=0,boundary=0,bad=0,outside=0,coverage=0,edges=0;
+    unsigned interior=0,exact=0,one=0,boundary=0,bad=0,outside=0,coverage=0,edges=0,discarded=0;
     for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h,b[3];weights(lx,ly,b);
         double mn=fmin(b[0],fmin(b[1],b[2]));uint16_t actual=p[(size_t)y*w+x];
         unsigned dx=logical_pixel(x,640,w),dy=logical_pixel(y,400,h);
         /* exclude a thin geometric edge band from strict interior checks */
-        if(mn>.002){interior++;uint16_t ref=refpixel(b,dx,dy,flags);int e=channel_error(actual,ref);if(!e)exact++;else if(e==1)one++;else if(nearest_boundary_match(b,dx,dy,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
+        if(mn>.002){interior++;uint16_t ref=refpixel(b,dx,dy,flags);int e=channel_error(actual,ref);if((flags&64)&&ref==0xdead)discarded++;if(!e)exact++;else if(e==1&&(!(flags&64)||(ref!=0xdead&&actual!=0xdead)))one++;else if(nearest_boundary_match(b,dx,dy,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
         else if(mn<-.002){outside++;if(actual!=0xdead)coverage++;}
         else edges++;
     }
-    printf("VULKAN_3D_CASE %ux%u flags=%u interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u\n",w,h,flags,interior,exact,one,boundary,bad,outside,coverage,edges);
+    printf("VULKAN_3D_CASE %ux%u flags=%u interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u discarded=%u\n",w,h,flags,interior,exact,one,boundary,bad,outside,coverage,edges,discarded);
     vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);freeimage(out);freebuf(read);
     /* Keep strict error checks, but collect all cases before returning. */
-    return interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u&&boundary*10000u<=interior;
+    return interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u&&boundary*10000u<=interior&&
+        (!(flags&64)||(discarded>1000&&interior-discarded>1000));
 }
 int main(void){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v3 / embedded opaque world shaders");
+    puts("MatroxVulkan3DProbe x86 v4 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
     setup();
-    const unsigned modes[]={0,1,7,9,15,25,63};
+    const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     unsigned failures=0;
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=14");
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=22");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
