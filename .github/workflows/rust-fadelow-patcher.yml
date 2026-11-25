@@ -253,13 +253,14 @@ jobs:
           $env:MATROX_MSI_FPS_LIMIT = '0'
           $env:MATROX_MSI_BORDERLESS = '0'
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
+          $env:MATROX_MSI_GPU_CAPTURE_SMOKE = '1'
           Push-Location $folder
           try {
             & '.\MatroxLightingProbe.exe'
             if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG','RENDERER')) {
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG','RENDERER','GPU_CAPTURE_SMOKE')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }
@@ -274,6 +275,10 @@ jobs:
           }
           python tools/matrox/check_dither_matrix.py (Join-Path $folder 'DITHER.BIN') --software --rgb888
           if ($LASTEXITCODE -ne 0) { throw 'RGB888 matrix pixel validation failed' }
+          $captures = @(Get-ChildItem -LiteralPath $folder -Filter 'matrox_capture_*_gpu.bin')
+          if ($captures.Count -ne 1 -or !$runtime.Contains('GPU_CAPTURE OK file=')) { throw 'F12 GPU capture smoke failed' }
+          python tools/matrox/check_gpu_capture_smoke.py $captures[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Actual MSI95 capture bytes mismatch' }
 
       - name: Upload standalone Matrox lighting comparison probe
         if: github.base_ref != 'diagnostics/matrox-f12-lighting-input-20261124' && github.base_ref != 'feature/matrox-vulkan-presentation'
