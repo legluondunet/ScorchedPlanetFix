@@ -437,12 +437,123 @@ static int test_case(uint32_t w,uint32_t h,unsigned flags,int opacity,unsigned s
         (sync_mode!=2||(cpu_bad==0&&cpu_checked>10000&&cpu_written>1000&&patched_outside>1000));
 }
 static int test(uint32_t w,uint32_t h,unsigned flags){return test_case(w,h,flags,-1,0);}
+
+/* Conservative disjoint bounding boxes: one snapshot per wave rather than
+ * one per primitive. All commands recorded before the single submission.
+ * Deliberately simple solid-color fixture: texture descriptor batching and
+ * ownership of actual game shadows are not claimed here. */
+#define BATCH_COUNT 40u
+static unsigned batch_color(unsigned i){return ((4u+i%24u)<<11)|((17u+i%31u)<<5)|(3u+i%23u);}
+static uint16_t batch_blend(uint16_t src,uint16_t dst,unsigned opacity){
+    unsigned inv=100u-opacity;
+    return (uint16_t)(((((src>>11)*opacity+(dst>>11)*inv+50u)/100u)<<11)|
+        (((((src>>5)&63u)*opacity+((dst>>5)&63u)*inv+50u)/100u)<<5)|
+        (((src&31u)*opacity+(dst&31u)*inv+50u)/100u));
+}
+static void batch_draw(VkCommandBuffer cmd,VkFramebuffer fb,VkRenderPass pass,
+    Buffer vertices,unsigned w,unsigned h,unsigned wave){
+    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
+    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=pass;bi.framebuffer=fb;
+    bi.renderArea.extent=(VkExtent2D){w,h};if(pass==rp){bi.clearValueCount=1;bi.pClearValues=&clear;}
+    vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
+    vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&ds,0,0);
+    VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&vertices.b,&off);
+    for(unsigned i=0;i<BATCH_COUNT;i++){
+        if(wave==2&&(i&1u))continue;
+        unsigned color=wave==0?batch_color(i):wave==1?0x0841u:0xf800u;
+        unsigned opacity=wave==1?50u:25u;
+        Push push={{640,400},{(float)w,(float)h},wave?384u:128u,color|(wave?opacity<<16u:0u)};
+        vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
+        vkCmdDraw(cmd,3,1,i*3u,0);
+    }
+    vkCmdEndRenderPass(cmd);
+}
+static unsigned batch_snapshot(VkCommandBuffer cmd,Image out,Image prior,
+    unsigned w,unsigned h,unsigned wave){
+    transition(cmd,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+    transition(cmd,prior.i,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageCopy copies[BATCH_COUNT]={0};unsigned n=0,total=0;
+    for(unsigned i=0;i<BATCH_COUNT;i++){
+        if(wave==2&&(i&1u))continue;
+        unsigned lx=(i%8u)*80u+8u,ly=(i/8u)*80u+8u;
+        unsigned x0=lx*w/640u,y0=ly*h/400u;
+        unsigned x1=((lx+32u)*w+639u)/640u,y1=((ly+32u)*h+399u)/400u;
+        VkImageCopy *r=&copies[n++];
+        r->srcSubresource=r->dstSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        r->srcOffset=r->dstOffset=(VkOffset3D){(int32_t)x0,(int32_t)y0,0};
+        r->extent=(VkExtent3D){x1-x0,y1-y0,1};total+=(x1-x0)*(y1-y0);
+    }
+    vkCmdCopyImage(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,n,copies);
+    transition(cmd,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
+    transition(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_TRANSFER_READ_BIT,
+        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    return total;
+}
+static int test_batch(unsigned w,unsigned h){
+    Vertex verts[BATCH_COUNT*3u]={0};
+    for(unsigned i=0;i<BATCH_COUNT;i++){
+        float x=(float)((i%8u)*80u+8u),y=(float)((i/8u)*80u+8u);
+        verts[3*i].xy[0]=x;verts[3*i].xy[1]=y;
+        verts[3*i+1].xy[0]=x+32;verts[3*i+1].xy[1]=y;
+        verts[3*i+2].xy[0]=x;verts[3*i+2].xy[1]=y+32;
+    }
+    Buffer vertices=buffer(sizeof(verts),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(vertices,verts,sizeof(verts));
+    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    Image prior=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
+    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;
+    OK(vkCreateFramebuffer(dev,&fi,0,&fb));bind_previous(prior);
+    VkCommandBuffer cmd=begin();
+    transition(cmd,prior.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,VK_ACCESS_SHADER_READ_BIT);
+    batch_draw(cmd,fb,rp,vertices,w,h,0);
+    unsigned copied=batch_snapshot(cmd,out,prior,w,h,1);
+    batch_draw(cmd,fb,rp_load,vertices,w,h,1);
+    copied+=batch_snapshot(cmd,out,prior,w,h,2);
+    batch_draw(cmd,fb,rp_load,vertices,w,h,2);
+    transition(cmd,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
+    vkCmdCopyImageToBuffer(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&br);
+    VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+    bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);
+    end(cmd);
+    void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
+    unsigned checked=0,errors=0,inside=0,edges=0;
+    for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
+        double lx=(x+.5)*640/w,ly=(y+.5)*400/h;
+        unsigned tile=(unsigned)(ly/80)*8u+(unsigned)(lx/80);
+        double a=lx-(double)((tile%8u)*80u+8u),b=ly-(double)((tile/8u)*80u+8u);
+        double m=fmin(a,fmin(b,32-a-b));
+        if(fabs(m)<.1){edges++;continue;}
+        uint16_t want=0xdead;
+        if(m>0){inside++;want=batch_blend(0x0841u,(uint16_t)batch_color(tile),50);
+            if(!(tile&1u))want=batch_blend(0xf800u,want,25);}
+        checked++;
+        if(p[(size_t)y*w+x]!=want){if(errors<3)fprintf(stderr,"batch pixel %u,%u expected=%04x got=%04x\n",x,y,want,p[(size_t)y*w+x]);errors++;}
+    }
+    printf("VULKAN_3D_BATCH %ux%u draws=100 submissions=1 snapshot_calls=2 copied_pixels=%u full_snapshot_pixels=%u checked=%u inside=%u edge_band=%u errors=%u\n",
+        w,h,copied,2u*w*h,checked,inside,edges,errors);
+    vkUnmapMemory(dev,read.m);bind_previous(tex);vkDestroyFramebuffer(dev,fb,0);
+    freeimage(prior);freeimage(out);freebuf(vertices);freebuf(read);
+    return checked>10000&&inside>1000&&errors==0&&copied<2u*w*h;
+}
+
 int main(void){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v7 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v8 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
@@ -471,10 +582,11 @@ int main(void){
     const unsigned opacities[]={0,25,50,100};
     for(unsigned i=0;i<4;i++){failures+=!test_case(640,400,127,(int)opacities[i],0);failures+=!test_case(1440,1080,127,(int)opacities[i],0);}
     for(unsigned mode=1;mode<=2;mode++){failures+=!test_case(640,400,127,50,mode);failures+=!test_case(1440,1080,127,50,mode);}
+    failures+=!test_batch(640,400);failures+=!test_batch(1440,1080);
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=52");
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=54");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif

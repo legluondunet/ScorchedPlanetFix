@@ -15,7 +15,7 @@ layout(push_constant) uniform Draw {
     vec2 logicalExtent;
     vec2 targetExtent;
     uint flags; // perspective=1, clamp U=2, clamp V=4, bilinear=8, modulate=16, dither=32, key metadata=64
-    uint reserved; // packed solid RGB565 (flag 128), or opacity 0..100 (flag 256)
+    uint reserved; // solid RGB565 low 16; opacity high 16 if solid+alpha, else low
 } draw;
 const uint bayer[16]=uint[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
 uvec3 unpack565(uint c){return uvec3(c>>11u,(c>>5u)&63u,c&31u);}
@@ -74,7 +74,7 @@ void main(){
         }else c=pack565((n+uvec3(127u))/255u);
     }
     if((draw.flags&256u)!=0u){
-        uint opacity=min(draw.reserved,100u);
+        uint opacity=min((draw.flags&128u)!=0u?draw.reserved>>16u:draw.reserved,100u);
         if(opacity==0u)discard;
         uvec3 old=unpack565(texelFetch(previousColor,ivec2(gl_FragCoord.xy),0).r);
         c=pack565((unpack565(c)*opacity+old*(100u-opacity)+uvec3(50u))/100u);
