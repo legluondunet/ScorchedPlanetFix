@@ -1625,9 +1625,40 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
         MsiGpuCoverage coverage;
         msi_gpu_coverage(&coverage,&best->batch,640u,400u,best->written,
             (const WORD*)best->before,(const WORD*)best->after,scratch,alternate);
-        VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
         pass=msi_gpu_coverage_pass(&coverage);
-        n=0;putstr(msg,&n,pass?"GPU_COVERAGE PASS frame=":"GPU_COVERAGE DIFFERENCES frame=");
+        /* Check the whole real-game batch through the single-pass path
+         * before any live publication. CPU remains authoritative. */
+        if(pass){
+            uint32_t *tagged=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
+            DWORD tag_start=GetTickCount();
+            int tag_rc=tagged?matrox_vk_shadow_tagged(&best->batch,tagged):-1;
+            if(tag_rc){
+                lognum("GPU_TAGGED_BATCH ERROR code=",(unsigned)tag_rc,NULL,0);
+                if(tagged)VirtualFree(tagged,0,MEM_RELEASE);
+                VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+                VirtualFree(scratch,0,MEM_RELEASE);return MSI_SHADOW_ERROR;
+            }
+            MsiGpuTaggedCheck check;
+            msi_gpu_tagged_check(&check,&best->batch,GPU_CAPTURE_NATIVE_BYTES/2u,
+                best->written,scratch,alternate,tagged);
+            VirtualFree(tagged,0,MEM_RELEASE);
+            pass=msi_gpu_tagged_pass(&check,GPU_CAPTURE_NATIVE_BYTES/2u);
+            n=0;putstr(msg,&n,pass?"GPU_TAGGED_BATCH PASS frame=":"GPU_TAGGED_BATCH DIFFERENCES frame=");
+            putunsigned(msg,&n,g_frames);
+            putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+            putstr(msg,&n," written=");putunsigned(msg,&n,check.written);
+            putstr(msg,&n," untouched=");putunsigned(msg,&n,check.untouched);
+            putstr(msg,&n," color_diff=");putunsigned(msg,&n,check.color_diff);
+            putstr(msg,&n," coverage_diff=");putunsigned(msg,&n,check.coverage_diff);
+            putstr(msg,&n," invalid=");putunsigned(msg,&n,check.invalid);
+            putstr(msg,&n," homogeneous=");putunsigned(msg,&n,check.homogeneous);
+            putstr(msg,&n," provenance_checked=");putunsigned(msg,&n,check.provenance_checked);
+            putstr(msg,&n," provenance_diff=");putunsigned(msg,&n,check.provenance_diff);
+            putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-tag_start);
+            msg[n]=0;logtext(msg);
+        }
+        VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+        n=0;putstr(msg,&n,msi_gpu_coverage_pass(&coverage)?"GPU_COVERAGE PASS frame=":"GPU_COVERAGE DIFFERENCES frame=");
         putunsigned(msg,&n,g_frames);
         putstr(msg,&n," cpu_written=");putunsigned(msg,&n,coverage.cpu_written);
         putstr(msg,&n," gpu_written=");putunsigned(msg,&n,coverage.gpu_written);
@@ -4050,7 +4081,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 }
             }
             dst[y*width+x]=(WORD)color;
-            if(g_gpu_capture_draw)g_gpu_capture_current->written[j]=1u;
+            if(g_gpu_capture_draw)g_gpu_capture_current->written[j]=(BYTE)(g_state.msiTexture.Transparency?2u:1u);
             if(g_capture_ownership && g_final_light_inputs){
                 BYTE *out=g_final_light_inputs+5u*j;
                 if(!g_zplane_draw_context && textured && g_final_source_audit){

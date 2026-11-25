@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "f1186149267866364f356e8641fedc9e9c6f03d36381094727a2d83b8f22017f"
+$expectedSourceHash = "6bf8761fc6097dbb22caaa999d40c34704bfcef6f12ee7d306cd9523fd0db1a3"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -44,7 +44,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.vert") -Algorithm
 if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.frag") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "eca7a42521fcf7ab765a7ecd99a627b18c64a30f6b64412120f695d8a875230e") { throw "Shadow source checksum mismatch: shaders/opaque_world.frag" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_shadow_sampler.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "27b4c493b33f3283466ada32e516f1f5ee5fc808c763fb5666f6cbecc76e4dd9") { throw "Shadow source checksum mismatch: msi_gpu_shadow_sampler.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_publish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b0046243701d3a62e661bf785ad619efed429f20457fe340de903ee3ff176fd0") { throw "Shadow source checksum mismatch: msi_gpu_publish.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_coverage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "29974e1783d1ef9d74bb88268f3343d21c6a6f43119c35d52917c462d82c274f") { throw "Shadow source checksum mismatch: msi_gpu_coverage.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_coverage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "ebb7194bd204cb643229e1fe3006c49374e26329f008f6e80481e5febd30f46f") { throw "Shadow source checksum mismatch: msi_gpu_coverage.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "aa62b904f871f738ffa6eea227d0aad320fdbe6bd020425cf2e6e06c521fab50") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
 $vkRoot = Join-Path $projectRoot "third_party/vulkan-headers"
 if (!(Test-Path (Join-Path $vkRoot "include/vulkan/vulkan.h"))) { throw "Pinned Vulkan-Headers checkout required" }

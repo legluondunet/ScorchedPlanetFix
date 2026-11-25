@@ -26,5 +26,28 @@ int main(void){
     gpu[24]=0;alt[24]=123;
     msi_gpu_coverage(&r,&b,5,5,mask,before,cpu,gpu,alt);
     assert(!msi_gpu_coverage_pass(&r)&&r.invalid==1);
+    uint8_t categories[4]={2,0,2,0};
+    uint16_t a[4]={0,123,65535,22},alt[4]={0,456,65535,33};
+    uint32_t tagged[4]={0,65536u,65535u,65536u};
+    b.count=1;b.draws[0].flags=73;
+    MsiGpuTaggedCheck tagged_check;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(msi_gpu_tagged_pass(&tagged_check,4)&&tagged_check.written==2&&tagged_check.provenance_checked==2);
+    tagged[0]=1;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(!msi_gpu_tagged_pass(&tagged_check,4)&&tagged_check.color_diff==1);
+    tagged[0]=65536u;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(!msi_gpu_tagged_pass(&tagged_check,4)&&tagged_check.coverage_diff==1);
+    tagged[0]=0;categories[0]=1;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(!msi_gpu_tagged_pass(&tagged_check,4)&&tagged_check.provenance_diff==1);
+    b.count=2;b.draws[1].flags=9;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(msi_gpu_tagged_pass(&tagged_check,4)&&!tagged_check.homogeneous&&!tagged_check.provenance_checked);
+    tagged[0]=65537u;
+    msi_gpu_tagged_check(&tagged_check,&b,4,categories,a,alt,tagged);
+    assert(!msi_gpu_tagged_pass(&tagged_check,4)&&tagged_check.invalid==1);
+    puts("MSI_GPU_TAGGED_CHECK_PASS");
     puts("MSI_GPU_COVERAGE_PASS");return 0;
 }

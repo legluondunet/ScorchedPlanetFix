@@ -40,4 +40,33 @@ static inline int msi_gpu_coverage_pass(const MsiGpuCoverage *r){
         r->cpu_written==r->both+r->cpu_only&&r->gpu_written==r->both+r->gpu_only&&
         r->cpu_only+r->gpu_only==r->edge;
 }
+/* Cross-check tagged R32 against both independent R16 replays.
+ * cpu_mask records the last successful CPU write category (1/2).
+ * A homogeneous batch has unambiguous provenance even with overlap.
+ * Mixed categories are counted but never guessed from final color. */
+typedef struct {unsigned written,untouched,color_diff,coverage_diff,invalid,provenance_diff,homogeneous,provenance_checked;} MsiGpuTaggedCheck;
+static inline void msi_gpu_tagged_check(MsiGpuTaggedCheck *r,const MsiGpuDrawBatch *b,
+    unsigned n,const uint8_t *cpu_mask,const uint16_t *a,const uint16_t *alt,const uint32_t *tagged){
+    *r=(MsiGpuTaggedCheck){0};
+    if(!b->count){r->invalid=1;return;}
+    unsigned category=(b->draws[0].flags&64u)?2u:1u;
+    r->homogeneous=1;
+    for(unsigned k=0;k<b->count;k++)
+        if(((b->draws[k].flags&64u)?2u:1u)!=category)r->homogeneous=0;
+    for(unsigned j=0;j<n;j++){
+        if(tagged[j]>65536u||cpu_mask[j]>2u){r->invalid++;continue;}
+        unsigned written=tagged[j]!=65536u;
+        r->written+=written;r->untouched+=!written;
+        if(written!=(a[j]==alt[j]))r->coverage_diff++;
+        else if(written&&tagged[j]!=a[j])r->color_diff++;
+        if(r->homogeneous&&written&&cpu_mask[j]){
+            r->provenance_checked++;
+            if(cpu_mask[j]!=category)r->provenance_diff++;
+        }
+    }
+}
+static inline int msi_gpu_tagged_pass(const MsiGpuTaggedCheck *r,unsigned n){
+    return r->written+r->untouched==n&&r->written&&
+        !r->color_diff&&!r->coverage_diff&&!r->invalid&&!r->provenance_diff;
+}
 #endif
