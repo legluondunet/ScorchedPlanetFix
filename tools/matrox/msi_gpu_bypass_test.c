@@ -37,6 +37,21 @@ int main(void){
     tagged[3]=65536u;
     assert(msi_gpu_bypass_tagged_commit(&r,4,4,&b,live,under,before,tagged));
     assert(r.written==3&&r.changed==2&&live[1]==0&&live[2]==65535u&&under[0]==2&&under[3]==3);
+    /* Two disjoint bounds: the gap lies inside the enclosing AABB,
+     * but is not in either rectangle. Reject it transactionally. */
+    b.count=2;b.draws[0].bounds=(MsiGpuRect){0,0,1,2};
+    b.draws[1].bounds=(MsiGpuRect){3,0,4,2};b.draws[1].flags=73;
+    for(unsigned i=0;i<16;i++){live[i]=before[i];under[i]=3;tagged[i]=65536u;}
+    tagged[0]=before[0];tagged[3]=0;tagged[1]=42;
+    assert(!msi_gpu_bypass_tagged_batch_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    tagged[1]=65536u;b.draws[1].flags=9;
+    assert(!msi_gpu_bypass_tagged_batch_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    b.draws[1].flags=73;live[15]=7;
+    assert(!msi_gpu_bypass_tagged_batch_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    live[15]=before[15];
+    assert(msi_gpu_bypass_tagged_batch_commit(&r,4,4,&b,live,under,before,tagged));
+    assert(r.written==2&&r.changed==1&&live[3]==0&&under[0]==2&&under[3]==2&&under[1]==3);
+    puts("MSI_GPU_BYPASS_BATCH_PASS");
     puts("MSI_GPU_BYPASS_TAGGED_PASS");
     puts("MSI_GPU_BYPASS_PASS");return 0;
 }

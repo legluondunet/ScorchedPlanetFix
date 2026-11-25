@@ -65,4 +65,44 @@ static inline int msi_gpu_bypass_tagged_commit(MsiGpuBypass *r,unsigned w,unsign
     }
     r->written=written;r->changed=changed;return 1;
 }
+/* Future bounded batch path. All draws must have the same shadow
+ * provenance category. Mixed categories require a last-writer tag;
+ * reject them rather than guessing ownership from final color.
+ * Validate against the union of individual bounds, not just its AABB.
+ * Caller must guarantee order and immutable textures and flush before
+ * guest reads/writes; this helper does not itself defer guest draws. */
+static inline int msi_gpu_bypass_tagged_batch_commit(MsiGpuBypass *r,unsigned w,unsigned h,
+    const MsiGpuDrawBatch *b,uint16_t *live,uint8_t *underlay,
+    const uint16_t *before,const uint32_t *gpu){
+    *r=(MsiGpuBypass){0};
+    if(!b||!b->count||b->count>32u||!w||!h||w>4096u||h>4096u||
+       !live||!before||!gpu||live==before||(const void*)live==(const void*)gpu||
+       (const void*)before==(const void*)gpu)return 0;
+    const unsigned key=b->draws[0].flags&64u;
+    for(unsigned k=0;k<b->count;k++){
+        const MsiGpuDraw *d=&b->draws[k];MsiGpuRect q=d->bounds;
+        if((d->flags&~127u)||(d->flags&64u)!=key||(d->flags&9u)!=9u||
+           q.x0>=q.x1||q.y0>=q.y1||q.x1>w||q.y1>h)return 0;
+    }
+    unsigned written=0,changed=0;
+    for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
+        size_t j=(size_t)y*w+x;
+        if(live[j]!=before[j])return 0;
+        if(gpu[j]==65536u)continue;
+        if(gpu[j]>65535u)return 0;
+        int in=0;
+        for(unsigned k=0;k<b->count&&!in;k++){
+            MsiGpuRect q=b->draws[k].bounds;
+            in=x>=q.x0&&x<q.x1&&y>=q.y0&&y<q.y1;
+        }
+        if(!in)return 0;
+        written++;changed+=gpu[j]!=before[j];
+    }
+    if(!written)return 0;
+    for(size_t j=0;j<(size_t)w*h;j++){
+        if(gpu[j]==65536u)continue;
+        live[j]=(uint16_t)gpu[j];if(underlay)underlay[j]=key?2u:1u;
+    }
+    r->written=written;r->changed=changed;return 1;
+}
 #endif

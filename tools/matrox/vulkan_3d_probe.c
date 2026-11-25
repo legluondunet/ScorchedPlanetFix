@@ -21,6 +21,7 @@
 #include "msi_gpu_batch.h"
 #include "msi_gpu_draw_batch.h"
 #include "msi_gpu_compare.h"
+#include "msi_gpu_bypass.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -610,6 +611,52 @@ static void test_tagged_output(const MsiGpuDrawBatch *batch){
     free(before);free(a);free(b);free(result);
     printf("VULKAN_3D_TAGGED_OUTPUT_PASS written=%u untouched=%u\n",written,untouched);
 }
+/* Exercise real ordered overlapping draws with immutable snapshots.
+ * Compare one tagged batch against sequential tagged single submissions.
+ * All triangles share keyed provenance, but textures and colors differ. */
+static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
+    NEED(batch->count>=4u);
+    MsiGpuDrawBatch *ordered=malloc(sizeof(*ordered)),*one=malloc(sizeof(*one));
+    NEED(ordered&&one);*ordered=*batch;ordered->count=4;
+    for(unsigned i=0;i<4u;i++){
+        ordered->draws[i].flags=79u;
+        ordered->draws[i].bounds=(MsiGpuRect){8u+8u*i,8,72u+8u*i,72};
+        for(unsigned j=0;j<3u;j++){
+            ordered->vertices[3u*i+j]=batch->vertices[j];
+            ordered->vertices[3u*i+j].xy[0]+=8.f*i;
+            ordered->vertices[3u*i+j].iw=1.f;
+        }
+    }
+    MsiVkBatchContext tagged={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.tagged_output=1};
+    MsiVkBatchWork work={0};const size_t n=640u*400u;
+    uint16_t *before=malloc(n*2u),*live=malloc(n*2u),*reference=malloc(n*2u);
+    uint8_t *under=malloc(n),*ref_under=malloc(n);
+    uint32_t *out=malloc(n*4u);NEED(before&&live&&reference&&under&&ref_under&&out);
+    for(size_t j=0;j<n;j++){before[j]=live[j]=reference[j]=0xdead;under[j]=ref_under[j]=3;}
+    OK(msi_vk_batch_pipeline_create(&tagged,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    *one=*ordered;one->count=1;
+    unsigned overwritten=0;
+    for(unsigned i=0;i<ordered->count;i++){
+        one->draws[0]=ordered->draws[i];
+        for(unsigned j=0;j<3u;j++)one->vertices[j]=ordered->vertices[3u*i+j];
+        OK(msi_vk_batch_render(&tagged,&work,one,640,400,NULL,out,0));
+        for(size_t j=0;j<n;j++){
+            if(out[j]==65536u)continue;
+            NEED(out[j]<=65535u);
+            overwritten+=ref_under[j]==2;
+            reference[j]=(uint16_t)out[j];ref_under[j]=2;
+        }
+    }
+    NEED(overwritten>0);
+    OK(msi_vk_batch_render(&tagged,&work,ordered,640,400,NULL,out,0));
+    MsiGpuBypass result;
+    NEED(msi_gpu_bypass_tagged_batch_commit(&result,640,400,ordered,live,under,before,out));
+    NEED(result.written>0&&result.changed>0);
+    for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);
+    printf("VULKAN_3D_TAGGED_BATCH_COMMIT_PASS draws=4 written=%u overwritten=%u\n",result.written,overwritten);
+    msi_vk_batch_pipeline_destroy(&tagged);
+    free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
+}
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){
     MsiVkShadowSession session={0};
     const size_t n=640u*400u;
@@ -725,7 +772,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
-    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);}
+    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);test_tagged_batch_commit(&multi_batch);}
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;

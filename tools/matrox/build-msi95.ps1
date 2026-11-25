@@ -45,7 +45,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.frag") -Algorithm
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_shadow_sampler.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "27b4c493b33f3283466ada32e516f1f5ee5fc808c763fb5666f6cbecc76e4dd9") { throw "Shadow source checksum mismatch: msi_gpu_shadow_sampler.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_publish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b0046243701d3a62e661bf785ad619efed429f20457fe340de903ee3ff176fd0") { throw "Shadow source checksum mismatch: msi_gpu_publish.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_coverage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "29974e1783d1ef9d74bb88268f3343d21c6a6f43119c35d52917c462d82c274f") { throw "Shadow source checksum mismatch: msi_gpu_coverage.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "1369fb274b666e7209c6c28547b72a6177ac2d3d9ccfb7df91d6709dcc640105") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "aa62b904f871f738ffa6eea227d0aad320fdbe6bd020425cf2e6e06c521fab50") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
 $vkRoot = Join-Path $projectRoot "third_party/vulkan-headers"
 if (!(Test-Path (Join-Path $vkRoot "include/vulkan/vulkan.h"))) { throw "Pinned Vulkan-Headers checkout required" }
 $vkCommit = (& git -C $vkRoot rev-parse HEAD).Trim()
