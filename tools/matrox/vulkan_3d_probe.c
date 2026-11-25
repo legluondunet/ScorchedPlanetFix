@@ -24,6 +24,8 @@
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
+#include "msi_vk_batch_replay.h"
+static MsiVkBatchContext batch_context;
 #define OK(x) do { VkResult r_=(x); if(r_!=VK_SUCCESS){fprintf(stderr,"%s: %d\n",#x,r_);exit(1);} }while(0)
 #define NEED(x) do {if(!(x)){fprintf(stderr,"check failed: %s\n",#x);exit(1);}}while(0)
 #define S(t) {.sType=VK_STRUCTURE_TYPE_##t}
@@ -113,10 +115,6 @@ static void transition(VkCommandBuffer c,VkImage i,VkImageLayout old,VkImageLayo
     m.subresourceRange=(VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
     vkCmdPipelineBarrier(c,a,b,0,0,0,0,0,1,&m);
 }
-static VkShaderModule shader(const uint32_t *p,size_t n){
-    VkShaderModule m;VkShaderModuleCreateInfo a=S(SHADER_MODULE_CREATE_INFO);a.codeSize=n;a.pCode=p;
-    OK(vkCreateShaderModule(dev,&a,0,&m));return m;
-}
 static void setup(void){
     VkApplicationInfo ai=S(APPLICATION_INFO);ai.pApplicationName="Matrox offscreen 3D proof";ai.apiVersion=VK_API_VERSION_1_0;
     VkInstanceCreateInfo ci=S(INSTANCE_CREATE_INFO);ci.pApplicationInfo=&ai;OK(vkCreateInstance(&ci,0,&inst));
@@ -154,45 +152,15 @@ static void setup(void){
     VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){2,2,1};
     vkCmdCopyBufferToImage(c,upload.b,tex.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
     transition(c,tex.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);end(c);
-    VkSamplerCreateInfo si=S(SAMPLER_CREATE_INFO);si.magFilter=si.minFilter=VK_FILTER_NEAREST;si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=0;
-    OK(vkCreateSampler(dev,&si,0,&sampler));
-    VkDescriptorSetLayoutBinding bindings[2]={
-        {0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0},
-        {1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0}};
-    VkDescriptorSetLayoutCreateInfo dl=S(DESCRIPTOR_SET_LAYOUT_CREATE_INFO);dl.bindingCount=2;dl.pBindings=bindings;OK(vkCreateDescriptorSetLayout(dev,&dl,0,&dsl));
-    VkPushConstantRange range={VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(Push)};
-    VkPipelineLayoutCreateInfo li=S(PIPELINE_LAYOUT_CREATE_INFO);li.setLayoutCount=1;li.pSetLayouts=&dsl;li.pushConstantRangeCount=1;li.pPushConstantRanges=&range;
-    OK(vkCreatePipelineLayout(dev,&li,0,&pl));
+    batch_context=(MsiVkBatchContext){.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.dummy=tex.v};
+    OK(msi_vk_batch_pipeline_create(&batch_context,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    sampler=batch_context.sampler;dsl=batch_context.dsl;pl=batch_context.pl;rp=batch_context.rp;rp_load=batch_context.rp_load;pipe=batch_context.pipe;
     VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2};
     VkDescriptorPoolCreateInfo pd=S(DESCRIPTOR_POOL_CREATE_INFO);pd.maxSets=1;pd.poolSizeCount=1;pd.pPoolSizes=&ps;OK(vkCreateDescriptorPool(dev,&pd,0,&dp));
     VkDescriptorSetAllocateInfo da=S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=dp;da.descriptorSetCount=1;da.pSetLayouts=&dsl;OK(vkAllocateDescriptorSets(dev,&da,&ds));
     VkDescriptorImageInfo ti={sampler,tex.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet wr=S(WRITE_DESCRIPTOR_SET);wr.dstSet=ds;wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr.pImageInfo=&ti;vkUpdateDescriptorSets(dev,1,&wr,0,0);
     wr.dstBinding=1;vkUpdateDescriptorSets(dev,1,&wr,0,0);
-    VkAttachmentDescription ad={0};ad.format=VK_FORMAT_R16_UINT;ad.samples=VK_SAMPLE_COUNT_1_BIT;ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
-    ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;ad.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;ad.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    VkAttachmentReference ar={0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription sub={0};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&ar;
-    VkRenderPassCreateInfo ri=S(RENDER_PASS_CREATE_INFO);ri.attachmentCount=1;ri.pAttachments=&ad;ri.subpassCount=1;ri.pSubpasses=&sub;OK(vkCreateRenderPass(dev,&ri,0,&rp));
-    ad.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;ad.initialLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    OK(vkCreateRenderPass(dev,&ri,0,&rp_load));
-    VkShaderModule vs=shader(world_vert,sizeof(world_vert)),fs=shader(world_frag,sizeof(world_frag));
-    VkPipelineShaderStageCreateInfo stages[2]={S(PIPELINE_SHADER_STAGE_CREATE_INFO),S(PIPELINE_SHADER_STAGE_CREATE_INFO)};
-    stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fs;stages[1].pName="main";
-    VkVertexInputBindingDescription bd={0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[]={{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,xy)},{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,uv)},{2,0,VK_FORMAT_R32_SFLOAT,offsetof(Vertex,iw)},{3,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(Vertex,m)}};
-    VkPipelineVertexInputStateCreateInfo vi=S(PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);vi.vertexBindingDescriptionCount=1;vi.pVertexBindingDescriptions=&bd;vi.vertexAttributeDescriptionCount=4;vi.pVertexAttributeDescriptions=attrs;
-    VkPipelineInputAssemblyStateCreateInfo ia=S(PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo vp=S(PIPELINE_VIEWPORT_STATE_CREATE_INFO);vp.viewportCount=vp.scissorCount=1;
-    VkPipelineRasterizationStateCreateInfo rs=S(PIPELINE_RASTERIZATION_STATE_CREATE_INFO);rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
-    VkPipelineMultisampleStateCreateInfo ms=S(PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineColorBlendAttachmentState ba={0};ba.colorWriteMask=VK_COLOR_COMPONENT_R_BIT;
-    VkPipelineColorBlendStateCreateInfo bs=S(PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);bs.attachmentCount=1;bs.pAttachments=&ba;
-    VkDynamicState dyn[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dy=S(PIPELINE_DYNAMIC_STATE_CREATE_INFO);dy.dynamicStateCount=2;dy.pDynamicStates=dyn;
-    VkGraphicsPipelineCreateInfo gi=S(GRAPHICS_PIPELINE_CREATE_INFO);gi.stageCount=2;gi.pStages=stages;gi.pVertexInputState=&vi;gi.pInputAssemblyState=&ia;gi.pViewportState=&vp;gi.pRasterizationState=&rs;gi.pMultisampleState=&ms;gi.pColorBlendState=&bs;gi.pDynamicState=&dy;gi.layout=pl;gi.renderPass=rp;
-    OK(vkCreateGraphicsPipelines(dev,VK_NULL_HANDLE,1,&gi,0,&pipe));vkDestroyShaderModule(dev,vs,0);vkDestroyShaderModule(dev,fs,0);
 }
 /* Replace the sampled image contents only after prior draws have completed.
  * The independent expected packed array drives the CPU oracle; the GPU
@@ -566,13 +534,24 @@ static MsiGpuDrawBatch multi_batch;
 static void set_palette_color(uint8_t *p,unsigned idx,unsigned color){
     p[2u*idx]=(uint8_t)color;p[2u*idx+1u]=(uint8_t)(color>>8);
 }
-#include "msi_vk_batch_replay.h"
 static uint16_t *render_recorded(const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before){
     MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
     MsiVkBatchWork work={0};
     uint16_t *result=malloc((size_t)w*h*2);NEED(result);
     OK(msi_vk_batch_render(&c,&work,batch,w,h,before,result,0));
     return result;
+}
+static void test_pipeline_recovery(void){
+    MsiVkBatchContext c={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.dummy=tex.v};
+    for(unsigned fault=1;fault<=8;fault++){
+        NEED(msi_vk_batch_pipeline_create(&c,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!c.pipe&&!c.rp_load&&!c.rp&&!c.pl&&!c.dsl&&!c.sampler&&c.dev==dev);
+    }
+    OK(msi_vk_batch_pipeline_create(&c,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    NEED(c.pipe&&c.rp_load&&c.rp&&c.pl&&c.dsl&&c.sampler);
+    msi_vk_batch_pipeline_destroy(&c);msi_vk_batch_pipeline_destroy(&c);
+    NEED(!c.pipe&&!c.rp_load&&!c.rp&&!c.pl&&!c.dsl&&!c.sampler&&c.dev==dev);
+    puts("VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8");
 }
 static void test_batch_recovery(const MsiGpuDrawBatch *batch){
     MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
@@ -742,7 +721,7 @@ int main(int argc,char **argv){
         }
         printf("VULKAN_3D_REPLAY_SUMMARY total=%d passed=%u differences=%u invalid=%u\n",argc-1,passed,failures,invalid);
     }else {
-    setup();ready=1;
+    setup();ready=1;test_pipeline_recovery();
     const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
     /* Real source encodings: decoded upload versus independently specified
@@ -770,8 +749,8 @@ int main(int argc,char **argv){
     failures+=!test_indexed_batch(640,400);failures+=!test_indexed_batch(1440,1080);
     }
     if(ready){
-    vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
-    vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
+    vkDestroyDescriptorPool(dev,dp,0);msi_vk_batch_pipeline_destroy(&batch_context);
+    freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     }
     if(argc==1){
         if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);

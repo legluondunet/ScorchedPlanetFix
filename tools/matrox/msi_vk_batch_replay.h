@@ -8,6 +8,7 @@
 #ifndef MSI_VK_BATCH_REPLAY_H
 #define MSI_VK_BATCH_REPLAY_H
 #include <vulkan/vulkan.h>
+#include <stddef.h>
 #include "msi_gpu_draw_batch.h"
 #define MVK_S(t) {.sType=VK_STRUCTURE_TYPE_##t}
 typedef struct {
@@ -25,6 +26,69 @@ typedef struct {
     unsigned pending;
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
+/* Persistent pipeline objects are owned by this context; device, queue,
+ * command pool and dummy image are borrowed. Destroy only after all work
+ * has drained. No device teardown, host allocation or fatal exit here. */
+static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
+    if(c->pipe)vkDestroyPipeline(c->dev,c->pipe,0);
+    if(c->rp_load)vkDestroyRenderPass(c->dev,c->rp_load,0);
+    if(c->rp)vkDestroyRenderPass(c->dev,c->rp,0);
+    if(c->pl)vkDestroyPipelineLayout(c->dev,c->pl,0);
+    if(c->dsl)vkDestroyDescriptorSetLayout(c->dev,c->dsl,0);
+    if(c->sampler)vkDestroySampler(c->dev,c->sampler,0);
+    c->pipe=VK_NULL_HANDLE;c->rp_load=c->rp=VK_NULL_HANDLE;
+    c->pl=VK_NULL_HANDLE;c->dsl=VK_NULL_HANDLE;c->sampler=VK_NULL_HANDLE;
+}
+static VkResult msi_vk_batch_pipeline_create(MsiVkBatchContext *c,
+    const uint32_t *vs_code,size_t vs_bytes,const uint32_t *fs_code,size_t fs_bytes,unsigned fault){
+    if(!c||!c->dev||!vs_code||!fs_code||!vs_bytes||!fs_bytes||vs_bytes%4u||fs_bytes%4u||
+       c->pipe||c->rp||c->rp_load||c->pl||c->dsl||c->sampler)return VK_ERROR_INITIALIZATION_FAILED;
+    VkResult rc=VK_SUCCESS;VkShaderModule vs=VK_NULL_HANDLE,fs=VK_NULL_HANDLE;
+#define MP_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
+#define MP_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
+    VkSamplerCreateInfo si=MVK_S(SAMPLER_CREATE_INFO);si.magFilter=si.minFilter=VK_FILTER_NEAREST;si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=0;
+    MP_TRY(vkCreateSampler(c->dev,&si,0,&c->sampler));MP_FAULT(1);
+    VkDescriptorSetLayoutBinding bindings[2]={
+        {0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0},
+        {1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0}};
+    VkDescriptorSetLayoutCreateInfo dl=MVK_S(DESCRIPTOR_SET_LAYOUT_CREATE_INFO);dl.bindingCount=2;dl.pBindings=bindings;MP_TRY(vkCreateDescriptorSetLayout(c->dev,&dl,0,&c->dsl));MP_FAULT(2);
+    VkPushConstantRange range={VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(MsiVkPush)};
+    VkPipelineLayoutCreateInfo li=MVK_S(PIPELINE_LAYOUT_CREATE_INFO);li.setLayoutCount=1;li.pSetLayouts=&c->dsl;li.pushConstantRangeCount=1;li.pPushConstantRanges=&range;
+    MP_TRY(vkCreatePipelineLayout(c->dev,&li,0,&c->pl));MP_FAULT(3);
+    VkAttachmentDescription ad={0};ad.format=VK_FORMAT_R16_UINT;ad.samples=VK_SAMPLE_COUNT_1_BIT;ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+    ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;ad.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;ad.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference ar={0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub={0};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&ar;
+    VkRenderPassCreateInfo ri=MVK_S(RENDER_PASS_CREATE_INFO);ri.attachmentCount=1;ri.pAttachments=&ad;ri.subpassCount=1;ri.pSubpasses=&sub;MP_TRY(vkCreateRenderPass(c->dev,&ri,0,&c->rp));MP_FAULT(4);
+    ad.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;ad.initialLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    MP_TRY(vkCreateRenderPass(c->dev,&ri,0,&c->rp_load));MP_FAULT(5);
+    VkShaderModuleCreateInfo sm=MVK_S(SHADER_MODULE_CREATE_INFO);sm.codeSize=vs_bytes;sm.pCode=vs_code;
+    MP_TRY(vkCreateShaderModule(c->dev,&sm,0,&vs));MP_FAULT(6);
+    sm.codeSize=fs_bytes;sm.pCode=fs_code;MP_TRY(vkCreateShaderModule(c->dev,&sm,0,&fs));MP_FAULT(7);
+    VkPipelineShaderStageCreateInfo stages[2]={MVK_S(PIPELINE_SHADER_STAGE_CREATE_INFO),MVK_S(PIPELINE_SHADER_STAGE_CREATE_INFO)};
+    stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fs;stages[1].pName="main";
+    VkVertexInputBindingDescription bd={0,sizeof(MsiGpuVertex),VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[]={{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(MsiGpuVertex,xy)},{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(MsiGpuVertex,uv)},{2,0,VK_FORMAT_R32_SFLOAT,offsetof(MsiGpuVertex,iw)},{3,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(MsiGpuVertex,m)}};
+    VkPipelineVertexInputStateCreateInfo vi=MVK_S(PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);vi.vertexBindingDescriptionCount=1;vi.pVertexBindingDescriptions=&bd;vi.vertexAttributeDescriptionCount=4;vi.pVertexAttributeDescriptions=attrs;
+    VkPipelineInputAssemblyStateCreateInfo ia=MVK_S(PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp=MVK_S(PIPELINE_VIEWPORT_STATE_CREATE_INFO);vp.viewportCount=vp.scissorCount=1;
+    VkPipelineRasterizationStateCreateInfo rs=MVK_S(PIPELINE_RASTERIZATION_STATE_CREATE_INFO);rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
+    VkPipelineMultisampleStateCreateInfo ms=MVK_S(PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState ba={0};ba.colorWriteMask=VK_COLOR_COMPONENT_R_BIT;
+    VkPipelineColorBlendStateCreateInfo bs=MVK_S(PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);bs.attachmentCount=1;bs.pAttachments=&ba;
+    VkDynamicState dyn[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy=MVK_S(PIPELINE_DYNAMIC_STATE_CREATE_INFO);dy.dynamicStateCount=2;dy.pDynamicStates=dyn;
+    VkGraphicsPipelineCreateInfo gi=MVK_S(GRAPHICS_PIPELINE_CREATE_INFO);gi.stageCount=2;gi.pStages=stages;gi.pVertexInputState=&vi;gi.pInputAssemblyState=&ia;gi.pViewportState=&vp;gi.pRasterizationState=&rs;gi.pMultisampleState=&ms;gi.pColorBlendState=&bs;gi.pDynamicState=&dy;gi.layout=c->pl;gi.renderPass=c->rp;
+    MP_TRY(vkCreateGraphicsPipelines(c->dev,VK_NULL_HANDLE,1,&gi,0,&c->pipe));MP_FAULT(8);
+done:
+    if(fs)vkDestroyShaderModule(c->dev,fs,0);
+    if(vs)vkDestroyShaderModule(c->dev,vs,0);
+    if(rc!=VK_SUCCESS)msi_vk_batch_pipeline_destroy(c);
+#undef MP_TRY
+#undef MP_FAULT
+    return rc;
+}
 static uint32_t mvk_mt(const MsiVkBatchContext *c,uint32_t bits,VkMemoryPropertyFlags flags){
     for(uint32_t i=0;i<c->mem.memoryTypeCount;i++)
         if((bits&(1u<<i))&&(c->mem.memoryTypes[i].propertyFlags&flags)==flags)return i;
