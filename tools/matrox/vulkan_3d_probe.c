@@ -20,6 +20,7 @@
 #include "msi_gpu_texel.h"
 #include "msi_gpu_batch.h"
 #include "msi_gpu_draw_batch.h"
+#include "msi_gpu_compare.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -756,53 +757,24 @@ done:
 static int replay_capture(void){
     MsiGpuDrawBatch *b=&replay_batch;
     uint16_t *p=render_recorded(b,640,400,replay_before);
-    unsigned exact=0,one=0,edge=0,bad=0,outside=0,cpu_changed=0,gpu_changed=0;
-    unsigned active=0,active_exact=0,cpu_only=0,gpu_only=0,both_changed=0;
-    unsigned perspective=0,bilinear=0,affine_nearest=0,modulated=0,dithered=0,keyed=0;
-    for(unsigned j=0;j<b->count;j++){
-        unsigned f=b->draws[j].flags;
-        perspective+=!!(f&1u);bilinear+=!!(f&8u);affine_nearest+=!(f&9u);
-        modulated+=!!(f&16u);dithered+=!!(f&32u);keyed+=!!(f&64u);
-    }
-    for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
-        unsigned pos=y*640u+x;uint16_t want=replay_after[pos],got=p[pos];
-        unsigned cc=want!=replay_before[pos],gc=got!=replay_before[pos];
-        cpu_changed+=cc;gpu_changed+=gc;
-        active+=cc||gc;cpu_only+=cc&&!gc;gpu_only+=gc&&!cc;both_changed+=cc&&gc;
-        if(want==got){exact++;active_exact+=cc||gc;continue;}
-        int in_bounds=0,near_edge=0;
-        for(unsigned j=0;j<b->count;j++){
-            const MsiGpuRect q=b->draws[j].bounds;
-            if(x<q.x0||x>=q.x1||y<q.y0||y>=q.y1)continue;
-            in_bounds=1;
-            const Vertex *v=&b->vertices[3*j];
-            for(unsigned k=0;k<3;k++){
-                unsigned next=(k+1)%3;
-                double dx=(double)v[next].xy[0]-v[k].xy[0],dy=(double)v[next].xy[1]-v[k].xy[1];
-                double len=sqrt(dx*dx+dy*dy);
-                if(len>0&&fabs(cross(dx,dy,x+.5-v[k].xy[0],y+.5-v[k].xy[1]))<=.05*len)near_edge=1;
-            }
-        }
-        if(!in_bounds){outside++;continue;}
-        if(near_edge){edge++;continue;}
-        if(channel_error(got,want)==1){one++;continue;}
-        if(bad<12)fprintf(stderr,"replay mismatch %u,%u expected=%04x got=%04x\n",x,y,want,got);
-        bad++;
+    MsiGpuCompare r;
+    msi_gpu_compare(&r,b,640,400,replay_before,replay_after,p);
+    for(unsigned j=0;j<r.bad&&j<MSI_GPU_COMPARE_EXAMPLES;j++){
+        const MsiGpuCompareExample *e=&r.examples[j];
+        fprintf(stderr,"replay mismatch %u,%u expected=%04x got=%04x\n",e->x,e->y,e->expected,e->actual);
     }
     printf("VULKAN_3D_REPLAY frame=%u draws=%u textures=%u exact=%u one_lsb=%u edge=%u unexplained=%u outside_bounds=%u cpu_changed=%u gpu_changed=%u\n",
-        replay_frame,b->count,b->snapshots.count,exact,one,edge,bad,outside,cpu_changed,gpu_changed);
+        replay_frame,b->count,b->snapshots.count,r.exact,r.one,r.edge,r.bad,r.outside,r.cpu_changed,r.gpu_changed);
     printf("VULKAN_3D_REPLAY_ACTIVE union=%u exact=%u one_lsb=%u edge=%u unexplained=%u outside_bounds=%u cpu_only=%u gpu_only=%u both_changed=%u\n",
-        active,active_exact,one,edge,bad,outside,cpu_only,gpu_only,both_changed);
+        r.active,r.active_exact,r.one,r.edge,r.bad,r.outside,r.cpu_only,r.gpu_only,r.both_changed);
     printf("VULKAN_3D_REPLAY_FLAGS perspective=%u bilinear=%u affine_nearest=%u modulated=%u dithered=%u keyed=%u\n",
-        perspective,bilinear,affine_nearest,modulated,dithered,keyed);
-    int counts_ok=active==cpu_only+gpu_only+both_changed&&cpu_changed==cpu_only+both_changed&&
-        gpu_changed==gpu_only+both_changed&&active==active_exact+one+edge+bad+outside&&
-        exact==CAPTURE_PIXELS-active+active_exact;
+        r.perspective,r.bilinear,r.affine_nearest,r.modulated,r.dithered,r.keyed);
+    int counts_ok=msi_gpu_compare_counts_ok(&r,CAPTURE_PIXELS);
     if(!counts_ok)fprintf(stderr,"inconsistent replay pixel accounting\n");
     free(p);free(b->snapshots.decoded);b->snapshots.decoded=NULL;
     /* A diagnostic, not a bit-exact certification. Report all categories.
        No arbitrary acceptance of large errors away from geometric edges. */
-    return counts_ok&&bad==0&&outside==0&&cpu_changed>0&&gpu_changed>0;
+    return msi_gpu_compare_pass(&r,CAPTURE_PIXELS);
 }
 
 int main(int argc,char **argv){
