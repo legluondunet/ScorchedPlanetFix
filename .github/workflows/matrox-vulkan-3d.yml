@@ -67,6 +67,7 @@ jobs:
           grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=56' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_BATCH_RECOVERY_PASS injected=6' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2' /tmp/matrox-spv/probe.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
           python3 tools/matrox/make_gpu_replay_fixture.py /tmp/matrox-spv/replay.bin
           python3 tools/matrox/diagnose_gpu_capture.py /tmp/matrox-spv/replay.bin --require-exact > /tmp/matrox-spv/cpu-replay.log

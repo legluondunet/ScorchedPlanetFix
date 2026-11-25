@@ -2,8 +2,9 @@
  * Recoverable, synchronous opaque batch replay. Includes no loader, allocation
  * of host memory, logging, or process termination. Caller owns a ready Vulkan
  * device/pipeline and a separate output buffer. On a failed queue wait the
- * work stays owned and pending; caller MUST stop using the context and drain
- * or tear down the device before freeing it. Never publish output on failure.
+ * work stays owned and pending unless the device is lost; caller MUST stop
+ * using the context and retire pending work before destroying owned objects.
+ * Never publish output on failure.
  */
 #ifndef MSI_VK_BATCH_REPLAY_H
 #define MSI_VK_BATCH_REPLAY_H
@@ -16,6 +17,7 @@ typedef struct {
     VkPhysicalDeviceMemoryProperties mem;
     VkDescriptorSetLayout dsl;VkPipelineLayout pl;VkRenderPass rp,rp_load;
     VkPipeline pipe;VkSampler sampler;VkImageView dummy;
+    unsigned unusable; /* never reset except by a fresh device context */
 } MsiVkBatchContext;
 typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} MsiVkBuffer;
 typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
@@ -41,7 +43,7 @@ static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
 }
 static VkResult msi_vk_batch_pipeline_create(MsiVkBatchContext *c,
     const uint32_t *vs_code,size_t vs_bytes,const uint32_t *fs_code,size_t fs_bytes,unsigned fault){
-    if(!c||!c->dev||!vs_code||!fs_code||!vs_bytes||!fs_bytes||vs_bytes%4u||fs_bytes%4u||
+    if(!c||!c->dev||c->unusable||!vs_code||!fs_code||!vs_bytes||!fs_bytes||vs_bytes%4u||fs_bytes%4u||
        c->pipe||c->rp||c->rp_load||c->pl||c->dsl||c->sampler)return VK_ERROR_INITIALIZATION_FAILED;
     VkResult rc=VK_SUCCESS;VkShaderModule vs=VK_NULL_HANDLE,fs=VK_NULL_HANDLE;
 #define MP_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
@@ -84,6 +86,7 @@ static VkResult msi_vk_batch_pipeline_create(MsiVkBatchContext *c,
 done:
     if(fs)vkDestroyShaderModule(c->dev,fs,0);
     if(vs)vkDestroyShaderModule(c->dev,vs,0);
+    if(rc==VK_ERROR_DEVICE_LOST)c->unusable=1;
     if(rc!=VK_SUCCESS)msi_vk_batch_pipeline_destroy(c);
 #undef MP_TRY
 #undef MP_FAULT
@@ -148,11 +151,23 @@ static void mvk_transition(VkCommandBuffer cmd,VkImage i,VkImageLayout old,VkIma
     m.subresourceRange=(VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
     vkCmdPipelineBarrier(cmd,a,b,0,0,0,0,0,1,&m);
 }
+/* A lost device counts as completion for object lifetime, never for
+ * output validity (Vulkan specification, Lost Device). Other wait errors
+ * retain pending ownership until a later successful/lost-device wait. */
+static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
+    if(!k->pending)return VK_SUCCESS;
+    VkResult r=vkQueueWaitIdle(c->queue);
+    if(r!=VK_SUCCESS)c->unusable=1;
+    if(r==VK_SUCCESS||r==VK_ERROR_DEVICE_LOST){
+        k->pending=0;mvk_cleanup(c,k);
+    }
+    return r;
+}
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
- * failures after ownership is acquired, never while submission is pending. */
-static VkResult msi_vk_batch_render(const MsiVkBatchContext *c,MsiVkBatchWork *k,
+ * acquisition failures. 7/8 simulate wait errors ONLY after real idle. */
+static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,uint16_t *result,unsigned fault){
-    if(!c||!k||k->pending||k->pool||!batch||!result||result==before||
+    if(!c||!k||c->unusable||k->pending||k->pool||!batch||!result||result==before||
        !w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
        !batch->snapshots.count||batch->snapshots.count>MSI_GPU_SNAPSHOT_MAX||
        !batch->snapshots.decoded||!batch->snapshots.decoded_used||batch->snapshots.decoded_used>2097152u)
@@ -247,15 +262,19 @@ static VkResult msi_vk_batch_render(const MsiVkBatchContext *c,MsiVkBatchWork *k
     MVK_TRY(vkEndCommandBuffer(cmd));MVK_FAULT(5);
     VkSubmitInfo submit=MVK_S(SUBMIT_INFO);submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;
     MVK_TRY(vkQueueSubmit(c->queue,1,&submit,VK_NULL_HANDLE));k->pending=1;
-    rc=vkQueueWaitIdle(c->queue);if(rc!=VK_SUCCESS)goto done;
+    rc=vkQueueWaitIdle(c->queue);
+    if(rc==VK_SUCCESS&&fault==7)rc=VK_ERROR_OUT_OF_HOST_MEMORY;
+    if(rc==VK_SUCCESS&&fault==8)rc=VK_ERROR_DEVICE_LOST;
+    if(rc!=VK_SUCCESS){c->unusable=1;goto done;}
     k->pending=0;MVK_FAULT(6);
     void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,k->read.size,0,&mapped));
     for(size_t i=0;i<(size_t)w*h;i++)result[i]=((const uint16_t*)mapped)[i];
     vkUnmapMemory(c->dev,k->read.m);
 
 done:
-    /* Device lost or any failed wait is not a normal retry. Keep pending
-     * work owned by the caller until device teardown/drain. */
+    /* The specification permits freeing in-use objects on device loss.
+     * Any other failed wait leaves the exact work retained for retirement. */
+    if(rc==VK_ERROR_DEVICE_LOST){c->unusable=1;k->pending=0;}
     if(!k->pending)mvk_cleanup(c,k);
 #undef MVK_TRY
 #undef MVK_FAULT

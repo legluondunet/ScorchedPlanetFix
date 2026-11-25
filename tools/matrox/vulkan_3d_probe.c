@@ -535,10 +535,9 @@ static void set_palette_color(uint8_t *p,unsigned idx,unsigned color){
     p[2u*idx]=(uint8_t)color;p[2u*idx+1u]=(uint8_t)(color>>8);
 }
 static uint16_t *render_recorded(const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before){
-    MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
     MsiVkBatchWork work={0};
     uint16_t *result=malloc((size_t)w*h*2);NEED(result);
-    OK(msi_vk_batch_render(&c,&work,batch,w,h,before,result,0));
+    OK(msi_vk_batch_render(&batch_context,&work,batch,w,h,before,result,0));
     return result;
 }
 static void test_pipeline_recovery(void){
@@ -554,7 +553,7 @@ static void test_pipeline_recovery(void){
     puts("VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8");
 }
 static void test_batch_recovery(const MsiGpuDrawBatch *batch){
-    MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
+    MsiVkBatchContext c=batch_context; /* test-only borrowed copy, no destruction */
     MsiVkBatchWork work={0};uint16_t result[64];
     for(unsigned fault=1;fault<=6;fault++){
         for(unsigned i=0;i<64;i++)result[i]=0xbeef;
@@ -565,6 +564,21 @@ static void test_batch_recovery(const MsiGpuDrawBatch *batch){
     OK(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,0));
     NEED(!work.pending&&!work.pool&&!work.cmd);
     puts("VULKAN_3D_BATCH_RECOVERY_PASS injected=6");
+    for(unsigned i=0;i<64;i++)result[i]=0xbeef;
+    NEED(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(c.unusable&&work.pending&&work.pool&&work.cmd);
+    NEED(!mvk_cleanup(&c,&work));
+    NEED(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,0)==VK_ERROR_INITIALIZATION_FAILED);
+    for(unsigned i=0;i<64;i++)NEED(result[i]==0xbeef);
+    OK(msi_vk_batch_retire(&c,&work));NEED(!work.pending&&!work.pool&&c.unusable);
+    /* Both injected wait errors follow actual successful idle: the real
+     * device is healthy; use a fresh test-only context copy for lost case. */
+    c=batch_context;
+    NEED(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,8)==VK_ERROR_DEVICE_LOST);
+    NEED(c.unusable&&!work.pending&&!work.pool&&!work.cmd);
+    NEED(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,0)==VK_ERROR_INITIALIZATION_FAILED);
+    for(unsigned i=0;i<64;i++)NEED(result[i]==0xbeef);
+    puts("VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2");
 }
 
 static int test_indexed_batch(unsigned w,unsigned h){
