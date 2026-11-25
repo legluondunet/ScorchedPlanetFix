@@ -69,6 +69,18 @@ jobs:
           grep -q 'VULKAN_3D_REPLAY_PASS' /tmp/matrox-spv/replay.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/replay.log; then exit 1; fi
           if /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bad; then echo "accepted truncated capture"; exit 1; fi
+          # Multiple valid inputs in a single Vulkan device session.
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/multi.log 2>&1
+          cat /tmp/matrox-spv/multi.log
+          grep -q 'VULKAN_3D_REPLAY_SUMMARY total=2 passed=2 differences=0 invalid=0' /tmp/matrox-spv/multi.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/multi.log; then exit 1; fi
+          # Invalid input must not abort remaining valid input or be counted as a pass.
+          rc=0
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin /tmp/matrox-spv/replay.bad /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/mixed.log 2>&1 || rc=$?
+          cat /tmp/matrox-spv/mixed.log
+          test "$rc" -eq 2
+          grep -q 'VULKAN_3D_REPLAY_SUMMARY total=3 passed=2 differences=0 invalid=1' /tmp/matrox-spv/mixed.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/mixed.log; then exit 1; fi
       - name: Cross-compile standalone Win32 x86 GPU verification executable
         run: |
           set -eu

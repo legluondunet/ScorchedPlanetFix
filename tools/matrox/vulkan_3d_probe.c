@@ -711,6 +711,8 @@ static MsiGpuDrawBatch replay_batch;
 static uint16_t replay_before[CAPTURE_PIXELS],replay_after[CAPTURE_PIXELS];
 static unsigned replay_frame;
 static int read_capture(const char *path){
+    /* Every input starts with empty ownership and counts, including after a rejected file. */
+    msi_gpu_draw_batch_reset(&replay_batch);
     FILE *f=fopen(path,"rb");if(!f){fprintf(stderr,"capture open failed\n");return 0;}
     uint8_t magic[8];uint32_t hdr[6],rec[3];unsigned ok=0;
     MsiGpuDrawBatch *b=&replay_batch;
@@ -808,16 +810,26 @@ int main(int argc,char **argv){
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v12 / active-pixel replay diagnostics");
+    puts("MatroxVulkan3DProbe x86 v13 / multi-capture replay diagnostics");
     if(!load_world_vk())return 1;
 #endif
-    if(argc>2){fprintf(stderr,"usage: MatroxVulkan3DProbe [capture.bin]\n");return 2;}
-    if(argc==2&&!read_capture(argv[1]))return 2;
+    if(argc>65){fprintf(stderr,"usage: MatroxVulkan3DProbe [capture.bin ...] (up to 64)\n");return 2;}
     oracle_selftest();
-    setup();
-    unsigned failures=0;
-    if(argc==2)failures=!replay_capture();
-    else {
+    unsigned failures=0,invalid=0,passed=0;
+    int ready=0;
+    if(argc>1){
+        for(int i=1;i<argc;i++){
+            printf("VULKAN_3D_REPLAY_INPUT index=%d file=%s\n",i,argv[i]);
+            if(!read_capture(argv[i])){
+                invalid++;puts("VULKAN_3D_REPLAY_INVALID");continue;
+            }
+            if(!ready){setup();ready=1;}
+            if(replay_capture()){passed++;puts("VULKAN_3D_REPLAY_PASS");}
+            else {failures++;puts("VULKAN_3D_REPLAY_DIFFERENCES");}
+        }
+        printf("VULKAN_3D_REPLAY_SUMMARY total=%d passed=%u differences=%u invalid=%u\n",argc-1,passed,failures,invalid);
+    }else {
+    setup();ready=1;
     const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
     /* Real source encodings: decoded upload versus independently specified
@@ -844,13 +856,16 @@ int main(int argc,char **argv){
     failures+=!test_batch(640,400);failures+=!test_batch(1440,1080);
     failures+=!test_indexed_batch(640,400);failures+=!test_indexed_batch(1440,1080);
     }
+    if(ready){
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
-    if(argc==2)puts(failures?"VULKAN_3D_REPLAY_DIFFERENCES":"VULKAN_3D_REPLAY_PASS");
-    else if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=56");
+    }
+    if(argc==1){
+        if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
+        else puts("VULKAN_3D_OFFSCREEN_PASS cases=56");
+    }
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
-    return failures?1:0;
+    return invalid?2:(failures?1:0);
 }
