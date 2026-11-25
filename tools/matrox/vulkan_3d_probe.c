@@ -26,6 +26,7 @@
 #endif
 #include "msi_vk_batch_replay.h"
 #include "msi_vk_shadow_session.h"
+#include "msi_vk_shadow_bridge.h"
 static MsiVkBatchContext batch_context;
 #define OK(x) do { VkResult r_=(x); if(r_!=VK_SUCCESS){fprintf(stderr,"%s: %d\n",#x,r_);exit(1);} }while(0)
 #define NEED(x) do {if(!(x)){fprintf(stderr,"check failed: %s\n",#x);exit(1);}}while(0)
@@ -611,6 +612,43 @@ static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *exp
     OK(msi_vk_shadow_close(&session));free(before);free(scratch);
     puts("VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1");
 }
+static PFN_vkGetInstanceProcAddr bridge_test_gipa;
+static PFN_vkGetDeviceProcAddr bridge_test_gdpa;
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL bridge_missing_device_command(VkDevice d,const char *name){
+    if(strcmp(name,"vkCreateGraphicsPipelines")==0)return NULL;
+    return bridge_test_gdpa(d,name);
+}
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL bridge_missing_instance_command(VkInstance i,const char *name){
+    if(strcmp(name,"vkGetDeviceProcAddr")==0)return (PFN_vkVoidFunction)bridge_missing_device_command;
+    return bridge_test_gipa(i,name);
+}
+static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expected){
+#ifdef _WIN32
+    bridge_test_gipa=(PFN_vkGetInstanceProcAddr)GetProcAddress(world_vk_loader,"vkGetInstanceProcAddr");
+#else
+    bridge_test_gipa=vkGetInstanceProcAddr;
+#endif
+    NEED(bridge_test_gipa);
+    bridge_test_gdpa=(PFN_vkGetDeviceProcAddr)bridge_test_gipa(inst,"vkGetDeviceProcAddr");
+    NEED(bridge_test_gdpa);
+    const size_t n=640u*400u;
+    uint16_t *before=malloc(n*2u),*scratch=malloc(n*2u);NEED(before&&scratch);
+    for(size_t i=0;i<n;i++){before[i]=0xdead;scratch[i]=0xbeef;}
+    MsiGpuCompare stats={0};
+    NEED(msi_vk_bridge_open(inst,phys,dev,queue,qfamily,bridge_missing_instance_command,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag))==VK_ERROR_INITIALIZATION_FAILED);
+    NEED(msi_vk_bridge_compare(batch,before,expected,scratch,&stats)==VK_ERROR_INITIALIZATION_FAILED);
+    for(size_t i=0;i<n;i++)NEED(scratch[i]==0xbeef);
+    OK(msi_vk_bridge_close());
+    for(unsigned run=0;run<2;run++){
+        OK(msi_vk_bridge_open(inst,phys,dev,queue,qfamily,bridge_test_gipa,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)));
+        NEED(msi_vk_bridge_open(inst,phys,dev,queue,qfamily,bridge_test_gipa,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag))==VK_ERROR_INITIALIZATION_FAILED);
+        OK(msi_vk_bridge_compare(batch,before,expected,scratch,&stats));
+        NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
+        OK(msi_vk_bridge_close());OK(msi_vk_bridge_close());
+    }
+    free(before);free(scratch);
+    puts("VULKAN_3D_SHADOW_BRIDGE_PASS missing_dispatch=1 reopen=1");
+}
 static int test_indexed_batch(unsigned w,unsigned h){
     MsiGpuTexture state={2,2,8,1,0,0xffff,1,0,0};
     uint8_t source[4]={1,0,1,1},palette[512]={0};
@@ -646,7 +684,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
-    if(w==640u&&h==400u)test_shadow_session(&multi_batch,p);
+    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);}
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;
