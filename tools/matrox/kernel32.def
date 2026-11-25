@@ -12,6 +12,7 @@ EXPORTS
  CloseHandle
  GetModuleFileNameA
  GetFileAttributesA
+ GetLastError
  VirtualAlloc
  VirtualFree
  AddVectoredExceptionHandler

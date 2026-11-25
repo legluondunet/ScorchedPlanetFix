@@ -83,6 +83,7 @@ __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
 __declspec(dllimport) BOOL __stdcall WriteFile(HANDLE,const void*,DWORD,DWORD*,void*);
 __declspec(dllimport) DWORD __stdcall GetModuleFileNameA(void*,char*,DWORD);
 __declspec(dllimport) DWORD __stdcall GetFileAttributesA(const char*);
+__declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) DWORD __stdcall GetTickCount(void);
 /* Monotonic Windows performance counter is available on Windows XP+ and Wine.
  * Keep timing at MSI end-of-frame so the original OEM EXE and resources stay
@@ -1475,7 +1476,10 @@ static int capture_file_present(const char*filename){
     while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
     if(filename[k])return -1;
     path[i+k]=0;
-    return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
+    if(GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)return 1;
+    DWORD error=GetLastError();
+    if(error==2u||error==3u)return 0; /* FILE_NOT_FOUND / PATH_NOT_FOUND */
+    lognum("MANUAL_CAPTURE file attribute error=",error,NULL,0);return -1;
 }
 static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered,char*lighting){
     for(unsigned tries=0;tries<999999u;tries++){
@@ -1499,11 +1503,13 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         int audit_exists=capture_file_present(audit);
         int nodither_exists=capture_file_present(undithered);
         int lighting_exists=capture_file_present(lighting);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0){
+        char gpu[100];capture_name(gpu,serial,"_gpu.bin");
+        int gpu_exists=capture_file_present(gpu);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0||gpu_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists&&!gpu_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1534,7 +1540,7 @@ static void gpu_capture_save(void){
     DWORD k=0;while(name[k]&&i+k<1022){path[i+k]=name[k];k++;}
     if(name[k])return;path[i+k]=0;
     HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
-    if(h==INVALID_HANDLE_VALUE){logtext("GPU_CAPTURE create failed");return;}
+    if(h==INVALID_HANDLE_VALUE){DWORD error=GetLastError();lognum("GPU_CAPTURE create failed win32_error=",error,NULL,0);return;}
     BYTE header[32];const char *magic="M95GPU01";
     for(unsigned j=0;j<8;j++)header[j]=(BYTE)magic[j];
     put32le(header+8,640);put32le(header+12,400);
