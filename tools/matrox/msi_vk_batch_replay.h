@@ -201,9 +201,9 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
         VkDescriptorImageInfo ti[2]={{c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
         VkWriteDescriptorSet wr[2]={MVK_S(WRITE_DESCRIPTOR_SET),MVK_S(WRITE_DESCRIPTOR_SET)};
-        for(unsigned k=0;k<2;k++){
-            wr[k].dstSet=k->sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
-            wr[k].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[k].pImageInfo=&ti[k];
+        for(unsigned binding=0;binding<2;binding++){
+            wr[binding].dstSet=k->sets[i];wr[binding].dstBinding=binding;wr[binding].descriptorCount=1;
+            wr[binding].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[binding].pImageInfo=&ti[binding];
         }
         vkUpdateDescriptorSets(c->dev,2,wr,0,0);
     }
