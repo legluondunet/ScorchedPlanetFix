@@ -24,6 +24,8 @@ on:
       - 'tools/matrox/msi_gpu_publish_test.c'
       - 'tools/matrox/msi_gpu_coverage.h'
       - 'tools/matrox/msi_gpu_coverage_test.c'
+      - 'tools/matrox/msi_gpu_bypass.h'
+      - 'tools/matrox/msi_gpu_bypass_test.c'
       - 'tools/matrox/msi_gpu_shadow_sampler.h'
       - 'tools/matrox/msi_gpu_shadow_sampler_test.c'
       - 'tools/matrox/msi_gpu_draw_batch_test.c'
@@ -72,6 +74,8 @@ jobs:
           /tmp/matrox-spv/publish-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_coverage_test.c -o /tmp/matrox-spv/coverage-test
           /tmp/matrox-spv/coverage-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_bypass_test.c -o /tmp/matrox-spv/bypass-test
+          /tmp/matrox-spv/bypass-test
           cc -std=c11 -O2 -Wall -Wextra -Werror tools/matrox/msi_gpu_shadow_sampler_test.c -o /tmp/matrox-spv/shadow-sampler-test
           /tmp/matrox-spv/shadow-sampler-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_draw_batch_test.c -o /tmp/matrox-spv/draw-batch-test
