@@ -14,6 +14,7 @@ on:
       - 'tools/matrox/msi_gpu_snapshot_test.c'
       - 'tools/matrox/msi_gpu_draw_batch.h'
       - 'tools/matrox/msi_gpu_draw_batch_test.c'
+      - 'tools/matrox/make_gpu_replay_fixture.py'
       - 'tools/matrox/embed_world_spv.py'
       - 'tools/matrox/gen_world_vk_dispatch.py'
       - '.github/workflows/matrox-vulkan-3d.yml'
@@ -59,6 +60,12 @@ jobs:
           cat /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=56' /tmp/matrox-spv/probe.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
+          python3 tools/matrox/make_gpu_replay_fixture.py /tmp/matrox-spv/replay.bin
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/replay.log 2>&1 || { cat /tmp/matrox-spv/replay.log; exit 1; }
+          cat /tmp/matrox-spv/replay.log
+          grep -q 'VULKAN_3D_REPLAY_PASS' /tmp/matrox-spv/replay.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/replay.log; then exit 1; fi
+          if /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bad; then echo "accepted truncated capture"; exit 1; fi
       - name: Cross-compile standalone Win32 x86 GPU verification executable
         run: |
           set -eu

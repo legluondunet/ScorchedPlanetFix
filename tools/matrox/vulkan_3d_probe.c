@@ -565,6 +565,88 @@ static MsiGpuDrawBatch multi_batch;
 static void set_palette_color(uint8_t *p,unsigned idx,unsigned color){
     p[2u*idx]=(uint8_t)color;p[2u*idx+1u]=(uint8_t)(color>>8);
 }
+static uint16_t *render_recorded(const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before){
+    Image textures[MSI_GPU_SNAPSHOT_MAX]={0};
+    VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX]={0};VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
+    VkDescriptorPool pool;VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*batch->snapshots.count};
+    VkDescriptorPoolCreateInfo pi=S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=batch->snapshots.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
+    OK(vkCreateDescriptorPool(dev,&pi,0,&pool));
+    for(unsigned i=0;i<batch->snapshots.count;i++)layouts[i]=dsl;
+    VkDescriptorSetAllocateInfo da=S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=layouts;
+    OK(vkAllocateDescriptorSets(dev,&da,sets));
+    Buffer stage=buffer(batch->snapshots.decoded_used*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    writebuf(stage,batch->snapshots.decoded,batch->snapshots.decoded_used*4u);
+    for(unsigned i=0;i<batch->snapshots.count;i++){
+        textures[i]=image(batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
+        VkDescriptorImageInfo ti[2]={{sampler,textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {sampler,tex.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+        VkWriteDescriptorSet wr[2]={S(WRITE_DESCRIPTOR_SET),S(WRITE_DESCRIPTOR_SET)};
+        for(unsigned k=0;k<2;k++){
+            wr[k].dstSet=sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
+            wr[k].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[k].pImageInfo=&ti[k];
+        }
+        vkUpdateDescriptorSets(dev,2,wr,0,0);
+    }
+    Buffer vertices=buffer(batch->count*3u*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    writebuf(vertices,batch->vertices,batch->count*3u*sizeof(Vertex));
+    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;
+    OK(vkCreateFramebuffer(dev,&fi,0,&fb));
+    VkCommandBuffer cmd=begin();
+    for(unsigned i=0;i<batch->snapshots.count;i++){
+        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy br={0};br.bufferOffset=batch->snapshots.entries[i].decoded_offset*4u;
+        br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,1};
+        vkCmdCopyBufferToImage(cmd,stage.b,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
+        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
+    }
+    Buffer initial={0};
+    if(before){
+        initial=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        writebuf(initial,before,(size_t)w*h*2);
+        transition(cmd,out.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){w,h,1};
+        vkCmdCopyBufferToImage(cmd,initial.b,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        transition(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    }
+    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
+    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=before?rp_load:rp;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};if(!before){bi.clearValueCount=1;bi.pClearValues=&clear;}
+    vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
+    vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);
+    VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&vertices.b,&off);
+    for(unsigned i=0;i<batch->count;i++){
+        const MsiGpuDraw *draw=&batch->draws[i];
+        Push push={{640,400},{(float)w,(float)h},draw->flags,0};
+        vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&sets[draw->texture_id],0,0);
+        vkCmdDraw(cmd,3,1,i*3u,0);
+    }
+    vkCmdEndRenderPass(cmd);
+    transition(cmd,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
+    vkCmdCopyImageToBuffer(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&br);
+    VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+    bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(cmd);
+    void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
+
+    uint16_t *result=malloc((size_t)w*h*2);NEED(result);
+    memcpy(result,p,(size_t)w*h*2);vkUnmapMemory(dev,read.m);
+    vkDestroyFramebuffer(dev,fb,0);vkDestroyDescriptorPool(dev,pool,0);
+    for(unsigned i=0;i<batch->snapshots.count;i++)freeimage(textures[i]);
+    freeimage(out);freebuf(stage);freebuf(vertices);freebuf(read);if(before)freebuf(initial);
+    return result;
+}
+
 static int test_indexed_batch(unsigned w,unsigned h){
     MsiGpuTexture state={2,2,8,1,0,0xffff,1,0,0};
     uint8_t source[4]={1,0,1,1},palette[512]={0};
@@ -598,66 +680,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(verts,0,sizeof(verts));
     /* Destroy the caller's current contents before any GPU access. */
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
-    Image textures[MULTI_N]={0};
-    VkDescriptorSet sets[MULTI_N]={0};VkDescriptorSetLayout layouts[MULTI_N];
-    VkDescriptorPool pool;VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*multi_cache.count};
-    VkDescriptorPoolCreateInfo pi=S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=multi_cache.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
-    OK(vkCreateDescriptorPool(dev,&pi,0,&pool));
-    for(unsigned i=0;i<multi_cache.count;i++)layouts[i]=dsl;
-    VkDescriptorSetAllocateInfo da=S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=pool;da.descriptorSetCount=multi_cache.count;da.pSetLayouts=layouts;
-    OK(vkAllocateDescriptorSets(dev,&da,sets));
-    Buffer stage=buffer(multi_cache.decoded_used*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    writebuf(stage,multi_cache.decoded,multi_cache.decoded_used*4u);
-    for(unsigned i=0;i<multi_cache.count;i++){
-        textures[i]=image(2,2,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
-        VkDescriptorImageInfo ti[2]={{sampler,textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {sampler,tex.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-        VkWriteDescriptorSet wr[2]={S(WRITE_DESCRIPTOR_SET),S(WRITE_DESCRIPTOR_SET)};
-        for(unsigned k=0;k<2;k++){
-            wr[k].dstSet=sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
-            wr[k].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[k].pImageInfo=&ti[k];
-        }
-        vkUpdateDescriptorSets(dev,2,wr,0,0);
-    }
-    Buffer vertices=buffer(multi_batch.count*3u*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    writebuf(vertices,multi_batch.vertices,multi_batch.count*3u*sizeof(Vertex));
-    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;
-    OK(vkCreateFramebuffer(dev,&fi,0,&fb));
-    VkCommandBuffer cmd=begin();
-    for(unsigned i=0;i<multi_cache.count;i++){
-        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy br={0};br.bufferOffset=multi_cache.entries[i].decoded_offset*4u;
-        br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){2,2,1};
-        vkCmdCopyBufferToImage(cmd,stage.b,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
-        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
-    }
-    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
-    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=rp;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};bi.clearValueCount=1;bi.pClearValues=&clear;
-    vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
-    vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
-    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);
-    VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&vertices.b,&off);
-    for(unsigned i=0;i<multi_batch.count;i++){
-        const MsiGpuDraw *draw=&multi_batch.draws[i];
-        Push push={{640,400},{(float)w,(float)h},draw->flags,0};
-        vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&sets[draw->texture_id],0,0);
-        vkCmdDraw(cmd,3,1,i*3u,0);
-    }
-    vkCmdEndRenderPass(cmd);
-    transition(cmd,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
-    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
-    vkCmdCopyImageToBuffer(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&br);
-    VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
-    bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(cmd);
-    void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
+    uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;
@@ -676,24 +699,109 @@ static int test_indexed_batch(unsigned w,unsigned h){
     }
     printf("VULKAN_3D_INDEXED_BATCH %ux%u draws=%u unique=%u hits=%u submissions=1 checked=%u keyed=%u visible=%u errors=%u\n",
         w,h,MULTI_N,misses,hits,checked,keyed,visible,errors);
-    vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);vkDestroyDescriptorPool(dev,pool,0);
-    for(unsigned i=0;i<multi_cache.count;i++)freeimage(textures[i]);
-    freeimage(out);freebuf(stage);freebuf(vertices);freebuf(read);msi_gpu_draw_batch_reset(&multi_batch);
+    free(p);msi_gpu_draw_batch_reset(&multi_batch);
     return checked>10000&&keyed>1000&&visible>1000&&errors==0;
 }
 
-int main(void){
+
+/* Local capture reader. Exact file size and all bounds checked before GPU
+ * allocation; captured content is never uploaded to any network service. */
+#define CAPTURE_PIXELS (640u*400u)
+static MsiGpuDrawBatch replay_batch;
+static uint16_t replay_before[CAPTURE_PIXELS],replay_after[CAPTURE_PIXELS];
+static unsigned replay_frame;
+static int read_capture(const char *path){
+    FILE *f=fopen(path,"rb");if(!f){fprintf(stderr,"capture open failed\n");return 0;}
+    uint8_t magic[8];uint32_t hdr[6],rec[3];unsigned ok=0;
+    MsiGpuDrawBatch *b=&replay_batch;
+    if(fread(magic,1,8,f)!=8||memcmp(magic,"M95GPU01",8)||fread(hdr,4,6,f)!=6)goto done;
+    const unsigned n=hdr[2],nt=hdr[3],words=hdr[4];
+    if(hdr[0]!=640||hdr[1]!=400||n<8||n>32||!nt||nt>n||!words||words>2u*1024u*1024u)goto done;
+    if(fseek(f,0,SEEK_END)!=0)goto done;
+    long size=ftell(f);
+    size_t expected=32u+12u*nt+120u*n+4u*words+4u*CAPTURE_PIXELS;
+    if(size<0||(size_t)size!=expected||fseek(f,32,SEEK_SET)!=0)goto done;
+    unsigned offset=0;
+    for(unsigned i=0;i<nt;i++){
+        if(fread(rec,4,3,f)!=3||!rec[0]||!rec[1]||rec[0]>2048u||rec[1]>2048u||rec[2]!=offset)goto done;
+        unsigned count=rec[0]*rec[1];
+        if(count>1024u*1024u||count>words-offset)goto done;
+        b->snapshots.entries[i].state.width=rec[0];b->snapshots.entries[i].state.height=rec[1];
+        b->snapshots.entries[i].decoded_offset=offset;b->snapshots.entries[i].decoded_count=count;
+        offset+=count;
+    }
+    if(offset!=words||fread(b->draws,sizeof(MsiGpuDraw),n,f)!=n||fread(b->vertices,sizeof(Vertex),3u*n,f)!=3u*n)goto done;
+    for(unsigned i=0;i<n;i++){
+        const MsiGpuDraw *d=&b->draws[i];const MsiGpuRect q=d->bounds;
+        if(d->texture_id>=nt||(d->flags&~127u)||q.x0>=q.x1||q.y0>=q.y1||q.x1>640||q.y1>400)goto done;
+        for(unsigned j=0;j<3;j++){
+            const Vertex *v=&b->vertices[i*3u+j];
+            if(!msi_gpu_vertex_valid(v,d->flags)||(!(d->flags&1u)&&v->iw!=1.f))goto done;
+            if(!(d->flags&16u)&&(v->m[0]!=255.f||v->m[1]!=255.f||v->m[2]!=255.f))goto done;
+        }
+    }
+    b->snapshots.decoded=malloc((size_t)words*4);if(!b->snapshots.decoded)goto done;
+    if(fread(b->snapshots.decoded,4,words,f)!=words||
+       fread(replay_before,2,CAPTURE_PIXELS,f)!=CAPTURE_PIXELS||
+       fread(replay_after,2,CAPTURE_PIXELS,f)!=CAPTURE_PIXELS)goto done;
+    for(unsigned i=0;i<words;i++)if(b->snapshots.decoded[i]&~0x3ffffu)goto done;
+    b->snapshots.count=nt;b->snapshots.decoded_used=words;b->count=n;replay_frame=hdr[5];ok=1;
+done:
+    fclose(f);
+    if(!ok){free(b->snapshots.decoded);b->snapshots.decoded=NULL;fprintf(stderr,"invalid M95GPU01 capture\n");}
+    return ok;
+}
+static int replay_capture(void){
+    MsiGpuDrawBatch *b=&replay_batch;
+    uint16_t *p=render_recorded(b,640,400,replay_before);
+    unsigned exact=0,one=0,edge=0,bad=0,outside=0,cpu_changed=0,gpu_changed=0;
+    for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
+        unsigned pos=y*640u+x;uint16_t want=replay_after[pos],got=p[pos];
+        cpu_changed+=want!=replay_before[pos];gpu_changed+=got!=replay_before[pos];
+        if(want==got){exact++;continue;}
+        int in_bounds=0,near_edge=0;
+        for(unsigned j=0;j<b->count;j++){
+            const MsiGpuRect q=b->draws[j].bounds;
+            if(x<q.x0||x>=q.x1||y<q.y0||y>=q.y1)continue;
+            in_bounds=1;
+            const Vertex *v=&b->vertices[3*j];
+            for(unsigned k=0;k<3;k++){
+                unsigned next=(k+1)%3;
+                double dx=(double)v[next].xy[0]-v[k].xy[0],dy=(double)v[next].xy[1]-v[k].xy[1];
+                double len=sqrt(dx*dx+dy*dy);
+                if(len>0&&fabs(cross(dx,dy,x+.5-v[k].xy[0],y+.5-v[k].xy[1]))<=.05*len)near_edge=1;
+            }
+        }
+        if(!in_bounds){outside++;continue;}
+        if(near_edge){edge++;continue;}
+        if(channel_error(got,want)==1){one++;continue;}
+        if(bad<12)fprintf(stderr,"replay mismatch %u,%u expected=%04x got=%04x\n",x,y,want,got);
+        bad++;
+    }
+    printf("VULKAN_3D_REPLAY frame=%u draws=%u textures=%u exact=%u one_lsb=%u edge=%u unexplained=%u outside_bounds=%u cpu_changed=%u gpu_changed=%u\n",
+        replay_frame,b->count,b->snapshots.count,exact,one,edge,bad,outside,cpu_changed,gpu_changed);
+    free(p);free(b->snapshots.decoded);b->snapshots.decoded=NULL;
+    /* A diagnostic, not a bit-exact certification. Report all categories.
+       No arbitrary acceptance of large errors away from geometric edges. */
+    return bad==0&&outside==0&&cpu_changed>0&&gpu_changed>0;
+}
+
+int main(int argc,char **argv){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v10 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v11 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
+    if(argc>2){fprintf(stderr,"usage: MatroxVulkan3DProbe [capture.bin]\n");return 2;}
+    if(argc==2&&!read_capture(argv[1]))return 2;
     oracle_selftest();
     setup();
-    const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     unsigned failures=0;
+    if(argc==2)failures=!replay_capture();
+    else {
+    const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
     /* Real source encodings: decoded upload versus independently specified
        oracle values. 4bpp is intentionally nearest only, as in the CPU path. */
@@ -718,9 +826,11 @@ int main(void){
     for(unsigned mode=1;mode<=2;mode++){failures+=!test_case(640,400,127,50,mode);failures+=!test_case(1440,1080,127,50,mode);}
     failures+=!test_batch(640,400);failures+=!test_batch(1440,1080);
     failures+=!test_indexed_batch(640,400);failures+=!test_indexed_batch(1440,1080);
+    }
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
-    if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
+    if(argc==2)puts(failures?"VULKAN_3D_REPLAY_DIFFERENCES":"VULKAN_3D_REPLAY_PASS");
+    else if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
     else puts("VULKAN_3D_OFFSCREEN_PASS cases=56");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
