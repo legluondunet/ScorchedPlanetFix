@@ -26,6 +26,7 @@ on:
       - 'tools/matrox/msi_gpu_coverage_test.c'
       - 'tools/matrox/msi_gpu_bypass.h'
       - 'tools/matrox/msi_gpu_bypass_test.c'
+      - 'tools/matrox/msi_gpu_cpu_replay.h'
       - 'tools/matrox/msi_gpu_shadow_sampler.h'
       - 'tools/matrox/msi_gpu_shadow_sampler_test.c'
       - 'tools/matrox/msi_gpu_draw_batch_test.c'
@@ -101,6 +102,7 @@ jobs:
           VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/replay.log 2>&1 || { cat /tmp/matrox-spv/replay.log; exit 1; }
           cat /tmp/matrox-spv/replay.log
           grep -q 'VULKAN_3D_REPLAY_PASS' /tmp/matrox-spv/replay.log
+          grep -q 'MSI_GPU_CPU_REPLAY PASS exact=256000' /tmp/matrox-spv/replay.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/replay.log; then exit 1; fi
           if /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bad; then echo "accepted truncated capture"; exit 1; fi
           # Multiple valid inputs in a single Vulkan device session.

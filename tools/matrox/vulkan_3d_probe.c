@@ -22,6 +22,7 @@
 #include "msi_gpu_draw_batch.h"
 #include "msi_gpu_compare.h"
 #include "msi_gpu_bypass.h"
+#include "msi_gpu_cpu_replay.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -847,6 +848,11 @@ done:
 }
 static int replay_capture(void){
     MsiGpuDrawBatch *b=&replay_batch;
+    uint16_t *cpu=malloc(CAPTURE_PIXELS*2u);uint8_t *mask=malloc(CAPTURE_PIXELS);
+    unsigned exact=0,written=0;int replay_ok=cpu&&mask&&msi_gpu_cpu_replay(b,640,400,replay_before,cpu,mask);
+    if(replay_ok)for(unsigned j=0;j<CAPTURE_PIXELS;j++){exact+=cpu[j]==replay_after[j];written+=mask[j]!=0;}
+    printf("MSI_GPU_CPU_REPLAY %s exact=%u written=%u\n",replay_ok&&exact==CAPTURE_PIXELS?"PASS":"DIFFERENCES",exact,written);
+    free(cpu);free(mask);
     uint16_t *p=render_recorded(b,640,400,replay_before);
     MsiGpuCompare r;
     msi_gpu_compare(&r,b,640,400,replay_before,replay_after,p);
