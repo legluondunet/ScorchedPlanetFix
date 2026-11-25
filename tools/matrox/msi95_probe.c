@@ -10,6 +10,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_gpu_draw_batch.h"
 #include "msi_gpu_shadow_sampler.h"
 #include "msi_gpu_publish.h"
+#include "msi_gpu_coverage.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -462,7 +463,7 @@ static MsiGpuWave g_gpu_profile_wave;
 #define GPU_CAPTURE_DECODED_COUNT (2u*1024u*1024u)
 typedef struct {
     MsiGpuDrawBatch batch;
-    BYTE *before,*after;
+    BYTE *before,*after,*written;
 } MsiGpuCaptureSlot;
 static MsiGpuCaptureSlot g_gpu_capture_slots[2];
 static MsiGpuCaptureSlot *g_gpu_capture_current=&g_gpu_capture_slots[0];
@@ -933,9 +934,10 @@ static void gpu_capture_release(void){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
         if(slot->before)VirtualFree(slot->before,0,MEM_RELEASE);
         if(slot->after)VirtualFree(slot->after,0,MEM_RELEASE);
+        if(slot->written)VirtualFree(slot->written,0,MEM_RELEASE);
         if(slot->batch.snapshots.raw)VirtualFree(slot->batch.snapshots.raw,0,MEM_RELEASE);
         if(slot->batch.snapshots.decoded)VirtualFree(slot->batch.snapshots.decoded,0,MEM_RELEASE);
-        slot->before=slot->after=NULL;
+        slot->before=slot->after=slot->written=NULL;
         slot->batch.snapshots.raw=NULL;slot->batch.snapshots.decoded=NULL;
         msi_gpu_draw_batch_reset(&slot->batch);
     }
@@ -954,9 +956,10 @@ static void gpu_capture_begin(void){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
         slot->before=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
         slot->after=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        slot->written=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
         slot->batch.snapshots.raw=(BYTE*)alloc(GPU_CAPTURE_RAW_BYTES);
         slot->batch.snapshots.decoded=(uint32_t*)alloc(GPU_CAPTURE_DECODED_COUNT*4u);
-        if(!slot->before||!slot->after||!slot->batch.snapshots.raw||
+        if(!slot->before||!slot->after||!slot->written||!slot->batch.snapshots.raw||
            !slot->batch.snapshots.decoded){
             if(sample)msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_ERROR);
             gpu_capture_release();logtext("GPU_CAPTURE allocation failed");
@@ -1026,7 +1029,10 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
         rc=msi_gpu_draw_batch_push(&g_gpu_capture_batch,vertices,rect,flags,&state,texture,tw*th,lut,512u);
         if(rc!=MSI_GPU_DRAW_ACCEPT)return;
     }
-    if(g_gpu_capture_batch.count==1u)gpu_capture_copy(g_gpu_capture_before,(const BYTE*)g_color);
+    if(g_gpu_capture_batch.count==1u){
+        gpu_capture_copy(g_gpu_capture_before,(const BYTE*)g_color);
+        zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
+    }
     g_gpu_capture_draw=1;
 }
 static int gpu_capture_publish_wave(void);
@@ -1579,6 +1585,45 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
         putstr(msg,&n," cpu=");puthex(msg,&n,e->expected);
         putstr(msg,&n," gpu=");puthex(msg,&n,e->actual);msg[n]=0;logtext(msg);
     }
+    if(pass){
+        /* A second replay on inverted initial colors detects actual writes,
+         * even when a written pixel had the same color as its background. */
+        WORD *alternate=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        WORD *inverted=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        if(!alternate||!inverted){
+            if(alternate)VirtualFree(alternate,0,MEM_RELEASE);
+            if(inverted)VirtualFree(inverted,0,MEM_RELEASE);
+            VirtualFree(scratch,0,MEM_RELEASE);
+            logtext("GPU_COVERAGE ERROR allocation");return MSI_SHADOW_ERROR;
+        }
+        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)
+            inverted[j]=(WORD)(((const WORD*)best->before)[j]^65535u);
+        MsiGpuCompare ignored;
+        int coverage_rc=matrox_vk_shadow_compare(&best->batch,inverted,
+            (const WORD*)best->after,alternate,&ignored);
+        if(coverage_rc){
+            VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+            VirtualFree(scratch,0,MEM_RELEASE);
+            lognum("GPU_COVERAGE ERROR code=",(unsigned)coverage_rc,NULL,0);return MSI_SHADOW_ERROR;
+        }
+        MsiGpuCoverage coverage;
+        msi_gpu_coverage(&coverage,&best->batch,640u,400u,best->written,
+            (const WORD*)best->before,(const WORD*)best->after,scratch,alternate);
+        VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+        pass=msi_gpu_coverage_pass(&coverage);
+        n=0;putstr(msg,&n,pass?"GPU_COVERAGE PASS frame=":"GPU_COVERAGE DIFFERENCES frame=");
+        putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," cpu_written=");putunsigned(msg,&n,coverage.cpu_written);
+        putstr(msg,&n," gpu_written=");putunsigned(msg,&n,coverage.gpu_written);
+        putstr(msg,&n," same_color=");putunsigned(msg,&n,coverage.same_color);
+        putstr(msg,&n," cpu_only=");putunsigned(msg,&n,coverage.cpu_only);
+        putstr(msg,&n," gpu_only=");putunsigned(msg,&n,coverage.gpu_only);
+        putstr(msg,&n," edge=");putunsigned(msg,&n,coverage.edge);
+        putstr(msg,&n," unexplained=");putunsigned(msg,&n,coverage.bad);
+        putstr(msg,&n," outside=");putunsigned(msg,&n,coverage.outside);
+        putstr(msg,&n," invalid=");putunsigned(msg,&n,coverage.invalid);
+        msg[n]=0;logtext(msg);
+    }
     if(publish){
         MsiGpuPublish result;
         if(pass&&msi_gpu_publish_verified(&result,(WORD*)g_color,(const WORD*)best->before,
@@ -1598,7 +1643,7 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
     VirtualFree(scratch,0,MEM_RELEASE);
     return pass?1:2;
 }
-/* Only after a completed CPU triangle, at the first full 32-draw wave of
+/* Only after a completed CPU triangle, at the first sufficiently large full 32-draw wave of
  * an admitted sparse diagnostic frame. No nested guest callbacks, no F12
  * provenance, no asynchronous guest write, and never before rasterization. */
 static int gpu_capture_publish_wave(void){
@@ -1608,7 +1653,8 @@ static int gpu_capture_publish_wave(void){
     const WORD *before=(const WORD*)g_gpu_capture_before,*after=(const WORD*)g_gpu_capture_after;
     unsigned changed=0;
     for(unsigned i=0;i<GPU_CAPTURE_NATIVE_BYTES/2u;i++)changed+=before[i]!=after[i];
-    if(!changed)return 0;
+    /* Avoid using all 24 samples on tiny first waves. */
+    if(changed<16384u)return 0;
     int outcome=gpu_capture_shadow_compare(g_gpu_capture_current,changed,1);
     msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,outcome);
     gpu_capture_release();
@@ -3951,6 +3997,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 }
             }
             dst[y*width+x]=(WORD)color;
+            if(g_gpu_capture_draw)g_gpu_capture_current->written[j]=1u;
             if(g_capture_ownership && g_final_light_inputs){
                 BYTE *out=g_final_light_inputs+5u*j;
                 if(!g_zplane_draw_context && textured && g_final_source_audit){
