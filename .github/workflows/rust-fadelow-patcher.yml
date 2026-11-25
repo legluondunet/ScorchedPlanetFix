@@ -187,6 +187,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Matrox MSI95 x86 nine-export ABI audit failed' }
           Write-Host "Built Matrox MSI95 SHA256=$((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant())"
 
+      - name: Validate private x86 framebuffer access guard proof
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Join-Path $env:RUNNER_TEMP 'msi95-private-page-guard.exe'
+          rustc --edition=2021 --target i686-pc-windows-msvc tools/matrox/smoke_private_page_guard.rs -o $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Private access guard compilation failed' }
+          & $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Private access guard proof failed' }
+
       - name: Build and validate standalone MSI95 synthetic lighting probe
         shell: pwsh
         run: |

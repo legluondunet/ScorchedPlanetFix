@@ -13,6 +13,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_gpu_coverage.h"
 #include "msi_gpu_cpu_replay.h"
 #include "msi_gpu_defer_audit.h"
+#include "msi_gpu_deferred_finish.h"
 #include "msi_gpu_bypass.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -1586,6 +1587,63 @@ static void put32le(BYTE *p,unsigned v){put16le(p,v);put16le(p+2,v>>16);}
 static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
     DWORD written=0;return WriteFile(h,p,bytes,&written,NULL)&&written==bytes;
 }
+/* Exercise the exact retirement helper on a PRIVATE copy of the wave.
+ * No guest access contract assumed here; never publish to live memory.
+ * The simulated failure does not invalidate the real Vulkan device. */
+static int gpu_capture_retirement_check(const MsiGpuCaptureSlot *best,
+    const uint32_t *tagged,const MsiGpuTaggedCheck *check,WORD *private_color,WORD *cpu){
+    const unsigned pixels=GPU_CAPTURE_NATIVE_BYTES/2u;
+    BYTE *under=(BYTE*)alloc(pixels),*mask=(BYTE*)alloc(pixels);
+    if(!under||!mask){
+        if(under)VirtualFree(under,0,MEM_RELEASE);
+        if(mask)VirtualFree(mask,0,MEM_RELEASE);
+        return MSI_SHADOW_ERROR;
+    }
+    const WORD *before=(const WORD*)best->before,*after=(const WORD*)best->after;
+    unsigned eligible=check->homogeneous;
+    for(unsigned k=0;k<best->batch.count;k++)
+        eligible&=(best->batch.draws[k].flags&9u)==9u;
+    unsigned errors=0,gpu_writes=0,cpu_writes=0;
+    DWORD started=GetTickCount();
+    MsiGpuBypass result;
+    if(eligible){
+        for(unsigned j=0;j<pixels;j++){private_color[j]=before[j];under[j]=3u;}
+        int outcome=msi_gpu_deferred_finish(&result,&best->batch,640u,400u,
+            private_color,under,before,1,tagged,cpu,mask);
+        errors+=outcome!=MSI_DEFER_FINISH_GPU;
+        gpu_writes=result.written;
+        errors+=gpu_writes!=check->written;
+        unsigned key=(best->batch.draws[0].flags&64u)?2u:1u;
+        for(unsigned j=0;j<pixels;j++){
+            unsigned write=tagged[j]!=65536u;
+            errors+=private_color[j]!=(write?(WORD)tagged[j]:before[j])||
+                    under[j]!=(write?key:3u);
+        }
+    }
+    for(unsigned j=0;j<pixels;j++){private_color[j]=before[j];under[j]=3u;}
+    int outcome=msi_gpu_deferred_finish(&result,&best->batch,640u,400u,
+        private_color,under,before,0,NULL,cpu,mask);
+    errors+=outcome!=MSI_DEFER_FINISH_CPU;
+    cpu_writes=result.written;
+    unsigned expected_writes=0;
+    for(unsigned j=0;j<pixels;j++){
+        expected_writes+=best->written[j]!=0u;
+        errors+=private_color[j]!=after[j]||
+                under[j]!=(best->written[j]?best->written[j]:3u);
+    }
+    errors+=cpu_writes!=expected_writes;
+    VirtualFree(mask,0,MEM_RELEASE);VirtualFree(under,0,MEM_RELEASE);
+    char msg[300];DWORD n=0;
+    putstr(msg,&n,errors?"GPU_RETIREMENT DIFFERENCES frame=":"GPU_RETIREMENT PASS frame=");
+    putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+    putstr(msg,&n," gpu_tested=");putunsigned(msg,&n,eligible);
+    putstr(msg,&n," gpu_written=");putunsigned(msg,&n,gpu_writes);
+    putstr(msg,&n," cpu_written=");putunsigned(msg,&n,cpu_writes);
+    putstr(msg,&n," errors=");putunsigned(msg,&n,errors);
+    putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+    msg[n]=0;logtext(msg);
+    return errors?MSI_SHADOW_DIFFERENCES:MSI_SHADOW_PASS;
+}
 /* 1 pass, 2 differences, -1 error, 0 skipped. */
 static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned expected_changed,int publish){
     if(!g_vk_active){logtext("GPU_SHADOW SKIP presentation unavailable");return 0;}
@@ -1700,7 +1758,6 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
             MsiGpuTaggedCheck check;
             msi_gpu_tagged_check(&check,&best->batch,GPU_CAPTURE_NATIVE_BYTES/2u,
                 best->written,scratch,alternate,tagged);
-            VirtualFree(tagged,0,MEM_RELEASE);
             pass=msi_gpu_tagged_pass(&check,GPU_CAPTURE_NATIVE_BYTES/2u);
             n=0;putstr(msg,&n,pass?"GPU_TAGGED_BATCH PASS frame=":"GPU_TAGGED_BATCH DIFFERENCES frame=");
             putunsigned(msg,&n,g_frames);
@@ -1715,6 +1772,16 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
             putstr(msg,&n," provenance_diff=");putunsigned(msg,&n,check.provenance_diff);
             putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-tag_start);
             msg[n]=0;logtext(msg);
+            if(pass){
+                int retirement=gpu_capture_retirement_check(best,tagged,&check,inverted,alternate);
+                if(retirement==MSI_SHADOW_ERROR){
+                    VirtualFree(tagged,0,MEM_RELEASE);
+                    VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+                    VirtualFree(scratch,0,MEM_RELEASE);return MSI_SHADOW_ERROR;
+                }
+                pass=retirement==MSI_SHADOW_PASS;
+            }
+            VirtualFree(tagged,0,MEM_RELEASE);
         }
         VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
         n=0;putstr(msg,&n,msi_gpu_coverage_pass(&coverage)?"GPU_COVERAGE PASS frame=":"GPU_COVERAGE DIFFERENCES frame=");
