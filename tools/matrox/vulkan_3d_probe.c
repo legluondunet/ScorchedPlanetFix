@@ -755,10 +755,19 @@ static int replay_capture(void){
     MsiGpuDrawBatch *b=&replay_batch;
     uint16_t *p=render_recorded(b,640,400,replay_before);
     unsigned exact=0,one=0,edge=0,bad=0,outside=0,cpu_changed=0,gpu_changed=0;
+    unsigned active=0,active_exact=0,cpu_only=0,gpu_only=0,both_changed=0;
+    unsigned perspective=0,bilinear=0,affine_nearest=0,modulated=0,dithered=0,keyed=0;
+    for(unsigned j=0;j<b->count;j++){
+        unsigned f=b->draws[j].flags;
+        perspective+=!!(f&1u);bilinear+=!!(f&8u);affine_nearest+=!(f&9u);
+        modulated+=!!(f&16u);dithered+=!!(f&32u);keyed+=!!(f&64u);
+    }
     for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
         unsigned pos=y*640u+x;uint16_t want=replay_after[pos],got=p[pos];
-        cpu_changed+=want!=replay_before[pos];gpu_changed+=got!=replay_before[pos];
-        if(want==got){exact++;continue;}
+        unsigned cc=want!=replay_before[pos],gc=got!=replay_before[pos];
+        cpu_changed+=cc;gpu_changed+=gc;
+        active+=cc||gc;cpu_only+=cc&&!gc;gpu_only+=gc&&!cc;both_changed+=cc&&gc;
+        if(want==got){exact++;active_exact+=cc||gc;continue;}
         int in_bounds=0,near_edge=0;
         for(unsigned j=0;j<b->count;j++){
             const MsiGpuRect q=b->draws[j].bounds;
@@ -780,10 +789,18 @@ static int replay_capture(void){
     }
     printf("VULKAN_3D_REPLAY frame=%u draws=%u textures=%u exact=%u one_lsb=%u edge=%u unexplained=%u outside_bounds=%u cpu_changed=%u gpu_changed=%u\n",
         replay_frame,b->count,b->snapshots.count,exact,one,edge,bad,outside,cpu_changed,gpu_changed);
+    printf("VULKAN_3D_REPLAY_ACTIVE union=%u exact=%u one_lsb=%u edge=%u unexplained=%u outside_bounds=%u cpu_only=%u gpu_only=%u both_changed=%u\n",
+        active,active_exact,one,edge,bad,outside,cpu_only,gpu_only,both_changed);
+    printf("VULKAN_3D_REPLAY_FLAGS perspective=%u bilinear=%u affine_nearest=%u modulated=%u dithered=%u keyed=%u\n",
+        perspective,bilinear,affine_nearest,modulated,dithered,keyed);
+    int counts_ok=active==cpu_only+gpu_only+both_changed&&cpu_changed==cpu_only+both_changed&&
+        gpu_changed==gpu_only+both_changed&&active==active_exact+one+edge+bad+outside&&
+        exact==CAPTURE_PIXELS-active+active_exact;
+    if(!counts_ok)fprintf(stderr,"inconsistent replay pixel accounting\n");
     free(p);free(b->snapshots.decoded);b->snapshots.decoded=NULL;
     /* A diagnostic, not a bit-exact certification. Report all categories.
        No arbitrary acceptance of large errors away from geometric edges. */
-    return bad==0&&outside==0&&cpu_changed>0&&gpu_changed>0;
+    return counts_ok&&bad==0&&outside==0&&cpu_changed>0&&gpu_changed>0;
 }
 
 int main(int argc,char **argv){
@@ -791,7 +808,7 @@ int main(int argc,char **argv){
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v11 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v12 / active-pixel replay diagnostics");
     if(!load_world_vk())return 1;
 #endif
     if(argc>2){fprintf(stderr,"usage: MatroxVulkan3DProbe [capture.bin]\n");return 2;}
