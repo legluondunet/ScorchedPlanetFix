@@ -9,6 +9,10 @@
 #include <vulkan/vulkan.h>
 #include <string.h>
 #include "vulkan_present.h"
+#ifdef MATROX_VK_SHADOW
+#include "msi_vk_shadow_bridge.h"
+#include "world_spv_embedded.h"
+#endif
 /* The MSI95 object is linked without CRT. Keep large scratch buffers in
  * static storage (one owning thread) and supply compiler-generated memory
  * intrinsics locally, not a new redistributable dependency. */
@@ -81,6 +85,10 @@ static PFN_vkGetDeviceProcAddr gdpa;
 static PFN_vkDestroyDevice destroy_device;
 static PFN_vkDeviceWaitIdle wait_idle;
 static MatroxVkReport reporter;
+#ifdef MATROX_VK_SHADOW
+static VkPhysicalDevice shadow_physical;
+static unsigned shadow_family,shadow_attempted,shadow_ready;
+#endif
 static void report(const char *msg,int code){if(reporter)reporter(msg,code);}
 static PFN_vkGetDeviceQueue vkGetDeviceQueue;
 static PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR;
@@ -113,7 +121,20 @@ static PFN_vkQueuePresentKHR vkQueuePresentKHR;
 
 void matrox_vk_close(void){
     if(device&&gdpa){
-        if(wait_idle)wait_idle(device);
+        if(wait_idle){
+            VkResult wr=wait_idle(device);
+            if(wr!=VK_SUCCESS&&wr!=VK_ERROR_DEVICE_LOST){
+                ready=0;report("Vulkan shutdown deferred; device idle uncertain",(int)wr);return;
+            }
+        }
+#ifdef MATROX_VK_SHADOW
+        VkResult sr=msi_vk_bridge_close();
+        shadow_ready=0;
+        if(sr!=VK_SUCCESS&&sr!=VK_ERROR_DEVICE_LOST){
+            ready=0;report("Vulkan shadow shutdown deferred",(int)sr);return;
+        }
+        shadow_physical=VK_NULL_HANDLE;shadow_family=shadow_attempted=0;
+#endif
         #define DESTROY(fn,obj) do{if(obj){PFN_##fn f=(PFN_##fn)gdpa(device,#fn);if(f)f(device,obj,NULL);}}while(0)
         if(mapped&&unmap_memory)unmap_memory(device,bm);
         DESTROY(vkDestroyFence,fence);for(uint32_t i=0;i<finish_count;i++){DESTROY(vkDestroySemaphore,finished[i]);}DESTROY(vkDestroySemaphore,acquired);
@@ -134,6 +155,7 @@ void matrox_vk_close(void){
 }
 int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
     matrox_vk_close();
+    if(device){if(logger)logger("Vulkan prior device still pending",1);return 1;}
     reporter=logger;hwnd=(HWND)window;linear_filter=linear!=0;
     int rc=1;
     if(!hwnd||!IsWindow(hwnd))goto done;
@@ -300,10 +322,38 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
 
     report(upload_bytes==2?"VULKAN_UPLOAD RGB565 native":"VULKAN_UPLOAD RGBA8 converted",(int)bc.size);
     report(linear_filter?"VULKAN_FILTER linear":"VULKAN_FILTER nearest",0);
+#ifdef MATROX_VK_SHADOW
+    shadow_physical=physical;shadow_family=family;
+#endif
     ready=1;report("VULKAN_PRESENTER_READY",0);return 0;
 done:
     matrox_vk_close();return rc;
 }
+#ifdef MATROX_VK_SHADOW
+int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before,
+    const uint16_t *cpu,uint16_t *scratch,MsiGpuCompare *stats){
+    if(!ready||!shadow_physical)return VK_NOT_READY;
+    if(!shadow_attempted){
+        shadow_attempted=1;
+        VkResult r=msi_vk_bridge_open(instance,shadow_physical,device,queue,shadow_family,gipa,
+            world_vert,sizeof(world_vert),world_frag,sizeof(world_frag));
+        if(r!=VK_SUCCESS){
+            report("VULKAN_SHADOW unavailable",(int)r);
+            if(r==VK_ERROR_DEVICE_LOST)ready=0;
+            return r;
+        }
+        shadow_ready=1;report("VULKAN_SHADOW ready",0);
+    }
+    if(!shadow_ready)return VK_ERROR_FEATURE_NOT_PRESENT;
+    VkResult r=msi_vk_bridge_compare(batch,before,cpu,scratch,stats);
+    if(r!=VK_SUCCESS){
+        shadow_ready=0;report("VULKAN_SHADOW disabled",(int)r);
+        VkResult close_result=msi_vk_bridge_close();
+        if(r==VK_ERROR_DEVICE_LOST||close_result!=VK_SUCCESS)ready=0;
+    }
+    return r;
+}
+#endif
 int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
     if(!ready||!native_pixels||pitch<W*2u||pitch%2u)return 1;
     RECT client;

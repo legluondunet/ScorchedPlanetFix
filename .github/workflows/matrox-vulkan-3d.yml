@@ -9,6 +9,7 @@ on:
       - 'tools/matrox/msi_vk_shadow_session.h'
       - 'tools/matrox/msi_vk_shadow_bridge.c'
       - 'tools/matrox/msi_vk_shadow_bridge.h'
+      - 'tools/matrox/world_spv_embedded.h'
       - 'tools/matrox/msi_gpu_texel.h'
       - 'tools/matrox/msi_gpu_texel_test.c'
       - 'tools/matrox/msi_gpu_batch.h'
@@ -52,10 +53,7 @@ jobs:
         run: |
           set -eu
           python3 tools/matrox/embed_world_spv.py /tmp/matrox-spv/world.vert.spv /tmp/matrox-spv/world.frag.spv /tmp/matrox-spv/world_spv.h
-          # One-time handoff of our generated shader words for a hash-pinned
-          # freestanding Windows build, without an additional artifact ZIP.
-          sha256sum /tmp/matrox-spv/world_spv.h
-          base64 -w 76 /tmp/matrox-spv/world_spv.h | sed 's/^/WORLD_SPV_HANDOFF /'
+          cmp /tmp/matrox-spv/world_spv.h tools/matrox/world_spv_embedded.h
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_texel_test.c -o /tmp/matrox-spv/texture-test
           /tmp/matrox-spv/texture-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_batch_test.c -o /tmp/matrox-spv/batch-test

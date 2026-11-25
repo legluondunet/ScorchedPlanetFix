@@ -1034,7 +1034,7 @@ static void vk_report(const char *message,int code){
     buf[n]=0;logtext(buf);
 }
 static void vk_stop(void){
-    if(g_vk_active){matrox_vk_close();g_vk_active=0;}
+    matrox_vk_close();g_vk_active=0;
 }
 static void preview_blit(HDC dc){
     if(!g_initialized || !g_color || !dc || !g_info.msiColor.pMem)return;
@@ -1526,12 +1526,39 @@ static void put32le(BYTE *p,unsigned v){put16le(p,v);put16le(p+2,v>>16);}
 static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
     DWORD written=0;return WriteFile(h,p,bytes,&written,NULL)&&written==bytes;
 }
+static void gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best){
+    if(!g_vk_active){logtext("GPU_SHADOW SKIP presentation unavailable");return;}
+    if(g_endframe_depth!=1u||g_guest_callback_depth){logtext("GPU_SHADOW SKIP nested frame");return;}
+    WORD *scratch=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+    if(!scratch){logtext("GPU_SHADOW SKIP scratch allocation failed");return;}
+    MsiGpuCompare stats;DWORD started=GetTickCount();
+    int rc=matrox_vk_shadow_compare(&best->batch,(const WORD*)best->before,(const WORD*)best->after,scratch,&stats);
+    VirtualFree(scratch,0,MEM_RELEASE);
+    char msg[400];DWORD n=0;
+    if(rc){
+        putstr(msg,&n,"GPU_SHADOW ERROR code=");puthex(msg,&n,(unsigned)rc);msg[n]=0;logtext(msg);return;
+    }
+    int pass=msi_gpu_compare_pass(&stats,GPU_CAPTURE_NATIVE_BYTES/2u)&&stats.cpu_changed==g_gpu_capture_best_changed;
+    putstr(msg,&n,pass?"GPU_SHADOW PASS frame=":"GPU_SHADOW DIFFERENCES frame=");
+    putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+    putstr(msg,&n," active=");putunsigned(msg,&n,stats.active);
+    putstr(msg,&n," exact=");putunsigned(msg,&n,stats.active_exact);
+    putstr(msg,&n," one_lsb=");putunsigned(msg,&n,stats.one);
+    putstr(msg,&n," edge=");putunsigned(msg,&n,stats.edge);
+    putstr(msg,&n," unexplained=");putunsigned(msg,&n,stats.bad);
+    putstr(msg,&n," outside_bounds=");putunsigned(msg,&n,stats.outside);
+    putstr(msg,&n," cpu_only=");putunsigned(msg,&n,stats.cpu_only);
+    putstr(msg,&n," gpu_only=");putunsigned(msg,&n,stats.gpu_only);
+    putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+    msg[n]=0;logtext(msg);
+}
 static void gpu_capture_save(void){
     if(!g_gpu_capture_active)return;
     gpu_capture_barrier();
     if(!g_gpu_capture_best_changed){logtext("GPU_CAPTURE no changed contiguous perspective/bilinear indexed8 wave of at least 8 draws");return;}
     const MsiGpuCaptureSlot *best=g_gpu_capture_best;
     const MsiGpuDrawBatch *batch=&best->batch;
+    gpu_capture_shadow_compare(best);
     char name[100],path[1024];
     capture_name(name,g_manual_capture_sequence,"_gpu.bin");
     DWORD n=GetModuleFileNameA(g_module,path,1023);

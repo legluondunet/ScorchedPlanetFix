@@ -25,7 +25,7 @@ static VkResult msi_vk_shadow_close(MsiVkShadowSession *s){
         msi_vk_batch_pipeline_destroy(&s->ctx);
         if(s->ctx.cp)vkDestroyCommandPool(s->ctx.dev,s->ctx.cp,0);
     }
-    *s=(MsiVkShadowSession){0};
+    for(size_t i=0;i<sizeof(*s);i++)((volatile uint8_t*)s)[i]=0;
     return r;
 }
 static VkResult msi_vk_shadow_open(MsiVkShadowSession *s,VkPhysicalDevice physical,

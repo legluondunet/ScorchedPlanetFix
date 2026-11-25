@@ -25,6 +25,7 @@ typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
     MsiVkBuffer stage,vertices,read,initial;
     VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
+    VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
     unsigned pending;
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
@@ -143,7 +144,8 @@ static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)mvk_freeimage(c->dev,k->textures[i]);
     mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);
     mvk_freebuffer(c->dev,k->read);mvk_freebuffer(c->dev,k->initial);
-    *k=(MsiVkBatchWork){0};return 1;
+    for(size_t i=0;i<sizeof(*k);i++)((volatile uint8_t*)k)[i]=0;
+    return 1;
 }
 static void mvk_transition(VkCommandBuffer cmd,VkImage i,VkImageLayout old,VkImageLayout next,VkPipelineStageFlags a,VkPipelineStageFlags b,VkAccessFlags ra,VkAccessFlags rb){
     VkImageMemoryBarrier m=MVK_S(IMAGE_MEMORY_BARRIER);m.image=i;m.oldLayout=old;m.newLayout=next;
@@ -186,13 +188,12 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MVK_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
-    VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX]={0};VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
     VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*batch->snapshots.count};
     VkDescriptorPoolCreateInfo pi=MVK_S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=batch->snapshots.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
     MVK_TRY(vkCreateDescriptorPool(c->dev,&pi,0,&k->pool));MVK_FAULT(1);
-    for(unsigned i=0;i<batch->snapshots.count;i++)layouts[i]=c->dsl;
-    VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=k->pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=layouts;
-    MVK_TRY(vkAllocateDescriptorSets(c->dev,&da,sets));
+    for(unsigned i=0;i<batch->snapshots.count;i++)k->layouts[i]=c->dsl;
+    VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=k->pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=k->layouts;
+    MVK_TRY(vkAllocateDescriptorSets(c->dev,&da,k->sets));
     MVK_TRY(mvk_buffer(c,&k->stage,batch->snapshots.decoded_used*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
     MVK_TRY(mvk_write(c,k->stage,batch->snapshots.decoded,batch->snapshots.decoded_used*4u));MVK_FAULT(2);
     for(unsigned i=0;i<batch->snapshots.count;i++){
@@ -201,7 +202,7 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
             {c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
         VkWriteDescriptorSet wr[2]={MVK_S(WRITE_DESCRIPTOR_SET),MVK_S(WRITE_DESCRIPTOR_SET)};
         for(unsigned k=0;k<2;k++){
-            wr[k].dstSet=sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
+            wr[k].dstSet=k->sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
             wr[k].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[k].pImageInfo=&ti[k];
         }
         vkUpdateDescriptorSets(c->dev,2,wr,0,0);
@@ -248,7 +249,7 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
         const MsiGpuDraw *draw=&batch->draws[i];
         MsiVkPush push={{640,400},{(float)w,(float)h},draw->flags,0};
         vkCmdPushConstants(cmd,c->pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,c->pl,0,1,&sets[draw->texture_id],0,0);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,c->pl,0,1,&k->sets[draw->texture_id],0,0);
         vkCmdDraw(cmd,3,1,i*3u,0);
     }
     vkCmdEndRenderPass(cmd);
