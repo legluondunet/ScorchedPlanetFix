@@ -87,6 +87,7 @@ jobs:
           cat /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=56' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_BATCH_RECOVERY_PASS injected=6' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_OUTPUT_PASS' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1' /tmp/matrox-spv/probe.log

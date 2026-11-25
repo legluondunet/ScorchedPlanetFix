@@ -583,6 +583,33 @@ static void test_batch_recovery(const MsiGpuDrawBatch *batch){
     puts("VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2");
 }
 
+/* Compare the new tagged R32 attachment against the already validated
+ * two-background R16 replay, including keyed discards and same-color writes. */
+static void test_tagged_output(const MsiGpuDrawBatch *batch){
+    MsiVkBatchContext tagged={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.tagged_output=1};
+    MsiVkBatchWork work={0};const size_t n=640u*400u;
+    uint16_t *before=malloc(n*2u),*a=malloc(n*2u),*b=malloc(n*2u);
+    uint32_t *result=malloc(n*4u);NEED(before&&a&&b&&result);
+    for(size_t i=0;i<n;i++)before[i]=0xdead;
+    OK(msi_vk_batch_render(&batch_context,&work,batch,640,400,before,a,0));
+    for(size_t i=0;i<n;i++)before[i]=(uint16_t)(0xdeadu^65535u);
+    OK(msi_vk_batch_render(&batch_context,&work,batch,640,400,before,b,0));
+    OK(msi_vk_batch_pipeline_create(&tagged,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    for(size_t i=0;i<n;i++)result[i]=0xabcdef01u;
+    NEED(msi_vk_batch_render(&tagged,&work,batch,640,400,before,result,0)==VK_ERROR_INITIALIZATION_FAILED);
+    NEED(msi_vk_batch_render(&tagged,&work,batch,640,400,NULL,result,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    for(size_t i=0;i<n;i++)NEED(result[i]==0xabcdef01u);
+    OK(msi_vk_batch_render(&tagged,&work,batch,640,400,NULL,result,0));
+    unsigned written=0,untouched=0;
+    for(size_t i=0;i<n;i++){
+        if(a[i]==b[i]){NEED(result[i]==a[i]);written++;}
+        else {NEED(a[i]==0xdead&&b[i]==before[i]&&result[i]==65536u);untouched++;}
+    }
+    NEED(written&&untouched);
+    msi_vk_batch_pipeline_destroy(&tagged);
+    free(before);free(a);free(b);free(result);
+    printf("VULKAN_3D_TAGGED_OUTPUT_PASS written=%u untouched=%u\n",written,untouched);
+}
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){
     MsiVkShadowSession session={0};
     const size_t n=640u*400u;
@@ -684,7 +711,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
-    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);}
+    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);}
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;

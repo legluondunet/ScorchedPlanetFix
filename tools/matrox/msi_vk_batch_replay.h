@@ -18,6 +18,7 @@ typedef struct {
     VkDescriptorSetLayout dsl;VkPipelineLayout pl;VkRenderPass rp,rp_load;
     VkPipeline pipe;VkSampler sampler;VkImageView dummy;
     unsigned unusable; /* never reset except by a fresh device context */
+    unsigned tagged_output; /* fixed before pipeline creation: R32_UINT, clear=65536 */
 } MsiVkBatchContext;
 typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} MsiVkBuffer;
 typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
@@ -59,7 +60,7 @@ static VkResult msi_vk_batch_pipeline_create(MsiVkBatchContext *c,
     VkPushConstantRange range={VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(MsiVkPush)};
     VkPipelineLayoutCreateInfo li=MVK_S(PIPELINE_LAYOUT_CREATE_INFO);li.setLayoutCount=1;li.pSetLayouts=&c->dsl;li.pushConstantRangeCount=1;li.pPushConstantRanges=&range;
     MP_TRY(vkCreatePipelineLayout(c->dev,&li,0,&c->pl));MP_FAULT(3);
-    VkAttachmentDescription ad={0};ad.format=VK_FORMAT_R16_UINT;ad.samples=VK_SAMPLE_COUNT_1_BIT;ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+    VkAttachmentDescription ad={0};ad.format=c->tagged_output?VK_FORMAT_R32_UINT:VK_FORMAT_R16_UINT;ad.samples=VK_SAMPLE_COUNT_1_BIT;ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
     ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;ad.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;ad.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     VkAttachmentReference ar={0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub={0};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&ar;
@@ -168,9 +169,9 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
  * acquisition failures. 7/8 simulate wait errors ONLY after real idle. */
 static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
-    const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,uint16_t *result,unsigned fault){
+    const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault){
     if(!c||!k||c->unusable||k->pending||k->pool||!batch||!result||result==before||
-       !w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
+       (c->tagged_output&&before)||!w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
        !batch->snapshots.count||batch->snapshots.count>MSI_GPU_SNAPSHOT_MAX||
        !batch->snapshots.decoded||!batch->snapshots.decoded_used||batch->snapshots.decoded_used>2097152u)
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -184,7 +185,8 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
         offset+=a->decoded_count;
     }
     if(offset!=batch->snapshots.decoded_used)return VK_ERROR_INITIALIZATION_FAILED;
-    for(unsigned i=0;i<batch->count;i++)if(batch->draws[i].texture_id>=batch->snapshots.count)return VK_ERROR_INITIALIZATION_FAILED;
+    for(unsigned i=0;i<batch->count;i++)if(batch->draws[i].texture_id>=batch->snapshots.count||
+        (c->tagged_output&&(batch->draws[i].flags&~127u)))return VK_ERROR_INITIALIZATION_FAILED;
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MVK_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
@@ -210,8 +212,11 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     MVK_FAULT(3);
     MVK_TRY(mvk_buffer(c,&k->vertices,batch->count*3u*sizeof(MsiGpuVertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
     MVK_TRY(mvk_write(c,k->vertices,batch->vertices,batch->count*3u*sizeof(MsiGpuVertex)));
-    MVK_TRY(mvk_image(c,&k->out,w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-    MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+    /* Tagged opaque rendering needs no initial-color upload. All actual
+     * shader outputs are <=65535, so 65536 uniquely denotes no write. */
+    MVK_TRY(mvk_image(c,&k->out,w,h,c->tagged_output?VK_FORMAT_R32_UINT:VK_FORMAT_R16_UINT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT));
+    MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)w*h*(c->tagged_output?4u:2u),VK_BUFFER_USAGE_TRANSFER_DST_BIT));
     VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&k->out.v;fi.width=w;fi.height=h;fi.layers=1;
     MVK_TRY(vkCreateFramebuffer(c->dev,&fi,0,&k->fb));MVK_FAULT(4);
     VkCommandBufferAllocateInfo ca=MVK_S(COMMAND_BUFFER_ALLOCATE_INFO);ca.commandPool=c->cp;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -238,7 +243,7 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
             VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     }
-    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
+    VkClearValue clear={.color.uint32={c->tagged_output?65536u:0xdeadu,0,0,0}};
     VkRenderPassBeginInfo bi=MVK_S(RENDER_PASS_BEGIN_INFO);bi.renderPass=before?c->rp_load:c->rp;bi.framebuffer=k->fb;bi.renderArea.extent=(VkExtent2D){w,h};if(!before){bi.clearValueCount=1;bi.pClearValues=&clear;}
     vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
     VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
@@ -269,7 +274,11 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(rc!=VK_SUCCESS){c->unusable=1;goto done;}
     k->pending=0;MVK_FAULT(6);
     void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,k->read.size,0,&mapped));
-    for(size_t i=0;i<(size_t)w*h;i++)result[i]=((const uint16_t*)mapped)[i];
+    if(c->tagged_output){
+        for(size_t i=0;i<(size_t)w*h;i++)((uint32_t*)result)[i]=((const uint32_t*)mapped)[i];
+    }else{
+        for(size_t i=0;i<(size_t)w*h;i++)((uint16_t*)result)[i]=((const uint16_t*)mapped)[i];
+    }
     vkUnmapMemory(c->dev,k->read.m);
 
 done:
