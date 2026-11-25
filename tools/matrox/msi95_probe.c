@@ -453,8 +453,8 @@ static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0,g_vk_recreates=0,g_vk_ret
  * One native frame in 60, only with Vulkan requested and logging enabled.
  * Logical bounds are conservatively mapped to the synthetic 1440x1080 target. */
 static MsiGpuWave g_gpu_profile_wave;
-/* F12-only capture of one contiguous indexed8 opaque wave. All source
- * data stays local to the user's installation. Never used for presentation. */
+/* One contiguous indexed8 opaque wave, manually or sampled in RAM.
+ * Only explicit F12 writes files. Never used for presentation. */
 #define GPU_CAPTURE_NATIVE_BYTES 512000u
 #define GPU_CAPTURE_RAW_BYTES (2u*1024u*1024u)
 #define GPU_CAPTURE_DECODED_COUNT (2u*1024u*1024u)
@@ -469,6 +469,10 @@ static MsiGpuCaptureSlot *g_gpu_capture_best=&g_gpu_capture_slots[1];
 #define g_gpu_capture_before (g_gpu_capture_current->before)
 #define g_gpu_capture_after (g_gpu_capture_current->after)
 static unsigned g_gpu_capture_active,g_gpu_capture_draw,g_gpu_capture_best_changed,g_gpu_capture_waves;
+#define GPU_SHADOW_SAMPLE_INTERVAL 120u
+#define GPU_SHADOW_SAMPLE_LIMIT 24u
+static unsigned g_gpu_capture_sample;
+static struct {unsigned sampled,empty,passed,differences,errors,skipped,disabled;} g_gpu_shadow_auto;
 _Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
 _Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
 static unsigned g_gpu_profile_enabled,g_gpu_profile_active;
@@ -934,13 +938,19 @@ static void gpu_capture_release(void){
         msi_gpu_draw_batch_reset(&slot->batch);
     }
     g_gpu_capture_current=&g_gpu_capture_slots[0];g_gpu_capture_best=&g_gpu_capture_slots[1];
-    g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=0;
+    g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=g_gpu_capture_sample=0;
 }
 static void gpu_capture_begin(void){
     gpu_capture_release();
-    if(!g_manual_capture_active||!g_vk_requested||!g_log||!g_color||
+    if(!g_vk_requested||!g_log||!g_color||
        g_info.msiColor.Pitch!=1280||g_info.msiColor.MemSize!=GPU_CAPTURE_NATIVE_BYTES||
        g_info.msiColor.BytesPerPixel!=2)return;
+    unsigned sample=!g_manual_capture_active&&g_vk_active&&
+        !g_endframe_depth&&!g_guest_callback_depth&&!g_gpu_shadow_auto.disabled&&
+        g_gpu_shadow_auto.passed<GPU_SHADOW_SAMPLE_LIMIT&&
+        g_frames!=0u&&g_frames%GPU_SHADOW_SAMPLE_INTERVAL==0u;
+    if(!g_manual_capture_active&&!sample)return;
+    if(sample)g_gpu_shadow_auto.sampled++;
     for(unsigned i=0;i<2u;i++){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
         slot->before=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
@@ -948,11 +958,15 @@ static void gpu_capture_begin(void){
         slot->batch.snapshots.raw=(BYTE*)alloc(GPU_CAPTURE_RAW_BYTES);
         slot->batch.snapshots.decoded=(uint32_t*)alloc(GPU_CAPTURE_DECODED_COUNT*4u);
         if(!slot->before||!slot->after||!slot->batch.snapshots.raw||
-           !slot->batch.snapshots.decoded){gpu_capture_release();logtext("GPU_CAPTURE allocation failed");return;}
+           !slot->batch.snapshots.decoded){
+            gpu_capture_release();logtext("GPU_CAPTURE allocation failed");
+            if(sample){g_gpu_shadow_auto.errors++;g_gpu_shadow_auto.disabled=1;}
+            return;
+        }
         slot->batch.snapshots.raw_capacity=GPU_CAPTURE_RAW_BYTES;
         slot->batch.snapshots.decoded_capacity=GPU_CAPTURE_DECODED_COUNT;
     }
-    g_gpu_capture_active=1;
+    g_gpu_capture_active=1;g_gpu_capture_sample=sample;
 }
 static void gpu_capture_copy(BYTE *out,const BYTE *src){
     for(unsigned i=0;i<GPU_CAPTURE_NATIVE_BYTES;i++)out[i]=src[i];
@@ -1526,17 +1540,19 @@ static void put32le(BYTE *p,unsigned v){put16le(p,v);put16le(p+2,v>>16);}
 static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
     DWORD written=0;return WriteFile(h,p,bytes,&written,NULL)&&written==bytes;
 }
-static void gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best){
-    if(!g_vk_active){logtext("GPU_SHADOW SKIP presentation unavailable");return;}
-    if(g_endframe_depth!=1u||g_guest_callback_depth){logtext("GPU_SHADOW SKIP nested frame");return;}
+/* 1 pass, 2 differences, -1 error, 0 skipped. */
+static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best){
+    if(!g_vk_active){logtext("GPU_SHADOW SKIP presentation unavailable");return 0;}
+    if(g_endframe_depth!=1u||g_guest_callback_depth){logtext("GPU_SHADOW SKIP nested frame");return 0;}
     WORD *scratch=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
-    if(!scratch){logtext("GPU_SHADOW SKIP scratch allocation failed");return;}
+    if(!scratch){logtext("GPU_SHADOW SKIP scratch allocation failed");return -1;}
     MsiGpuCompare stats;DWORD started=GetTickCount();
     int rc=matrox_vk_shadow_compare(&best->batch,(const WORD*)best->before,(const WORD*)best->after,scratch,&stats);
     VirtualFree(scratch,0,MEM_RELEASE);
     char msg[400];DWORD n=0;
     if(rc){
-        putstr(msg,&n,"GPU_SHADOW ERROR code=");puthex(msg,&n,(unsigned)rc);msg[n]=0;logtext(msg);return;
+        putstr(msg,&n,"GPU_SHADOW ERROR code=");puthex(msg,&n,(unsigned)rc);
+        putstr(msg,&n,g_gpu_capture_sample?" scope=auto":" scope=F12");msg[n]=0;logtext(msg);return -1;
     }
     int pass=msi_gpu_compare_pass(&stats,GPU_CAPTURE_NATIVE_BYTES/2u)&&stats.cpu_changed==g_gpu_capture_best_changed;
     putstr(msg,&n,pass?"GPU_SHADOW PASS frame=":"GPU_SHADOW DIFFERENCES frame=");
@@ -1550,7 +1566,30 @@ static void gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best){
     putstr(msg,&n," cpu_only=");putunsigned(msg,&n,stats.cpu_only);
     putstr(msg,&n," gpu_only=");putunsigned(msg,&n,stats.gpu_only);
     putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+    putstr(msg,&n,g_gpu_capture_sample?" scope=auto":" scope=F12");
+    putstr(msg,&n," textures=");putunsigned(msg,&n,best->batch.snapshots.count);
     msg[n]=0;logtext(msg);
+    for(unsigned j=0;j<stats.bad&&j<MSI_GPU_COMPARE_EXAMPLES;j++){
+        const MsiGpuCompareExample *e=&stats.examples[j];n=0;
+        putstr(msg,&n,"GPU_SHADOW MISMATCH x=");putunsigned(msg,&n,e->x);
+        putstr(msg,&n," y=");putunsigned(msg,&n,e->y);
+        putstr(msg,&n," cpu=");puthex(msg,&n,e->expected);
+        putstr(msg,&n," gpu=");puthex(msg,&n,e->actual);msg[n]=0;logtext(msg);
+    }
+    return pass?1:2;
+}
+static void gpu_capture_auto_finish(void){
+    if(!g_gpu_capture_sample)return;
+    gpu_capture_barrier();
+    if(!g_gpu_capture_best_changed)g_gpu_shadow_auto.empty++;
+    else{
+        int rc=gpu_capture_shadow_compare(g_gpu_capture_best);
+        if(rc==1)g_gpu_shadow_auto.passed++;
+        else if(rc==2){g_gpu_shadow_auto.differences++;g_gpu_shadow_auto.disabled=1;}
+        else if(rc<0){g_gpu_shadow_auto.errors++;g_gpu_shadow_auto.disabled=1;}
+        else g_gpu_shadow_auto.skipped++;
+    }
+    gpu_capture_release();
 }
 static void gpu_capture_save(void){
     if(!g_gpu_capture_active)return;
@@ -2383,6 +2422,8 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     }
     zero(&g_gpu_profile,sizeof(g_gpu_profile));msi_gpu_wave_reset(&g_gpu_profile_wave);
     g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
+    zero(&g_gpu_shadow_auto,sizeof(g_gpu_shadow_auto));
+    if(g_gpu_profile_enabled)logtext("GPU_SHADOW_AUTO enabled sample=1/120 max_passes=24 file_output=0 CPU_display=1");
     if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1 scope=perspective_or_bilinear_indexed8_opaque");
     logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");
     logtext(g_vk_requested?(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=GPU linear (GDI HALFTONE fallback)":"PREVIEW_SCALER requested=GPU nearest (GDI legacy fallback)"):
@@ -2498,6 +2539,12 @@ BOOL __cdecl msiExit(void){
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     log_opacity_histogram("exit");
     gpu_profile_report();
+    if(g_gpu_profile_enabled){
+        lognum("GPU_SHADOW_AUTO sampled=",g_gpu_shadow_auto.sampled,"empty=",g_gpu_shadow_auto.empty);
+        lognum("GPU_SHADOW_AUTO passed=",g_gpu_shadow_auto.passed,"differences=",g_gpu_shadow_auto.differences);
+        lognum("GPU_SHADOW_AUTO errors=",g_gpu_shadow_auto.errors,"skipped=",g_gpu_shadow_auto.skipped);
+        lognum("GPU_SHADOW_AUTO disabled=",g_gpu_shadow_auto.disabled,NULL,0);
+    }
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,"recreates=",g_vk_recreates);}
@@ -2704,7 +2751,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
         }
         g_manual_capture_active=0;
         gpu_capture_release();
-    }
+    }else gpu_capture_auto_finish();
     g_capture_ownership=0;
     sample_game_global_50dcd0("pre_frame_present");
     preview_present();
