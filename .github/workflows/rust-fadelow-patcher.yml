@@ -254,13 +254,14 @@ jobs:
           $env:MATROX_MSI_BORDERLESS = '0'
           $env:MATROX_MSI_WORLD_BILINEAR = '0'
           $env:MATROX_MSI_GPU_CAPTURE_SMOKE = '1'
+          $env:MATROX_MSI_PERSPECTIVE = '1'
           Push-Location $folder
           try {
             & '.\MatroxLightingProbe.exe'
             if ($LASTEXITCODE -ne 0) { throw "RGB888 lighting probe failed: $LASTEXITCODE" }
           } finally {
             Pop-Location
-            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG','RENDERER','GPU_CAPTURE_SMOKE')) {
+            foreach ($key in @('MODULATE','DITHER','RGB888_LIGHTING','FPS_LIMIT','BORDERLESS','WORLD_BILINEAR','PRESENTATION_SMOOTH','LOG','RENDERER','GPU_CAPTURE_SMOKE','PERSPECTIVE')) {
               Remove-Item "Env:MATROX_MSI_$key" -ErrorAction SilentlyContinue
             }
           }

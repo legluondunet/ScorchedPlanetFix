@@ -16,23 +16,28 @@ tex_offset = vertex_offset + 96 * n
 for i in range(n):
     tid, flags, x0, y0, x1, y1 = struct.unpack_from("<6I", data, draw_offset + 24 * i)
     x = 8 + 38 * (i // 2)
-    assert tid == 0 and flags == 70, (i, tid, flags)
+    assert tid == 0 and flags == 71, (i, tid, flags)
     assert (x0, y0, x1, y1) == (x, 20, x + 17, 37)
     for j in range(3):
         xyuv = struct.unpack_from("<8f", data, vertex_offset + 96 * i + 32 * j)
-        assert xyuv[2:] == (.0625, .5, 1., 255., 255., 255.), xyuv
+        iw = (1., 2., 2.)[j] if i % 2 == 0 else (1., 2., 1.)[j]
+        assert xyuv[2:] == (.0625, .5, iw, 255., 255., 255.), xyuv
 texels = struct.unpack_from("<%dI" % words, data, tex_offset)
 assert texels[4] == 0xffff and texels[12] == 0x8410
 before_offset = tex_offset + 4 * words
 before = struct.unpack_from("<%dH" % (w*h), data, before_offset)
 after = struct.unpack_from("<%dH" % (w*h), data, before_offset + 2*w*h)
-assert not any(before), "expected native clear"
+assert sum(p != 0 for p in before) == 4096, "expected affine strip before captured wave"
 changed = 0
 for yy in range(h):
     for xx in range(w):
-        inside = 20 <= yy < 36 and any(8 + 38*j <= xx < 24 + 38*j for j in range(16))
-        expected = 0xffff if inside else 0
+        column = any(8 + 38*j <= xx < 24 + 38*j for j in range(16))
+        affine = column and 60 <= yy < 76
+        inside = column and 20 <= yy < 36
+        expected_before = 0xffff if affine else 0
+        expected = 0xffff if affine or inside else 0
+        assert before[yy*w+xx] == expected_before, (xx, yy, before[yy*w+xx], expected_before)
         assert after[yy*w+xx] == expected, (xx, yy, after[yy*w+xx], expected)
-        changed += bool(expected)
+        changed += before[yy*w+xx] != after[yy*w+xx]
 assert changed == 4096
 print(f"MSI_GPU_CAPTURE_SMOKE_PASS frame={frame} draws={n} textures={nt} changed={changed}")

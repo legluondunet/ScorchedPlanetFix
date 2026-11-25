@@ -265,8 +265,18 @@ void __cdecl probe_main(void){
             p.texture.modulate=0;p.texture.transparency=1;p.texture.key=0;p.texture.mask=0xffff;
             p.color.dither=0;
             if(!set(&p))goto done;
+            /* Draw enough affine primitives that the old selector would
+             * freeze the wrong wave. This white strip must instead be
+             * retained in the before image, not in the captured commands. */
             for(unsigned j=0;j<16;j++)
-                if(!rect((float)(8+38*j),20.f,16.f,16.f,.0625f,255.f,255.f))goto done;
+                if(!rect((float)(8+38*j),60.f,16.f,16.f,.0625f,255.f,255.f))goto done;
+            for(unsigned j=0;j<16;j++){
+                float x=(float)(8+38*j);
+                vertex(v+0,x,20.f,.0625f,255.f);vertex(v+1,x+16.f,20.f,.0625f,255.f);
+                vertex(v+2,x+16.f,36.f,.0625f,255.f);vertex(v+3,x,36.f,.0625f,255.f);
+                v[1].invw=2.f;v[2].invw=2.f;
+                if(!draw(v+0,v+1,v+2,100)||!draw(v+0,v+2,v+3,100))goto done;
+            }
             if(!end(0,0,1))goto done;
             trace_text("GPU_CAPTURE_SMOKE_OK\r\n");
         }

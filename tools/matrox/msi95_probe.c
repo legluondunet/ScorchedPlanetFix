@@ -464,7 +464,7 @@ _Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
 _Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
 static unsigned g_gpu_profile_enabled,g_gpu_profile_active;
 static struct {
-    unsigned sampled,eligible,opaque,alpha,keyed,flat,rgb888,other;
+    unsigned sampled,eligible,opaque,alpha,keyed,flat,rgb888,other,affine;
     unsigned waves,opaque_waves,alpha_waves,singletons,max_wave,split;
     unsigned zplanes,remaps,sentinels,state_calls,heap_calls;
     unsigned tex4,tex8,tex16,drawn_frames,empty_frames;
@@ -813,12 +813,13 @@ static void gpu_profile_finish(void){
     g_gpu_profile_active=0;
 }
 static void gpu_profile_candidate(int left,int top,int right,int bottom,
-    int width,int height,int textured,int modulate,unsigned planes,unsigned opacity){
+    int width,int height,int textured,int modulate,int perspective,int bilinear,unsigned planes,unsigned opacity){
     if(!g_gpu_profile_active||g_zplane_draw_context)return;
     if(width!=640||height!=400||opacity>100u){g_gpu_profile.other++;gpu_profile_flush();return;}
     if(!textured){g_gpu_profile.flat++;gpu_profile_flush();return;}
     if(modulate&&g_rgb888_lighting_enabled){g_gpu_profile.rgb888++;gpu_profile_flush();return;}
-    if(planes!=4u&&planes!=8u&&planes!=16u){g_gpu_profile.other++;gpu_profile_flush();return;}
+    if(!perspective&&!bilinear){g_gpu_profile.affine++;gpu_profile_flush();return;}
+    if(planes!=8u||opacity!=100u){g_gpu_profile.other++;gpu_profile_flush();return;}
     MsiGpuRect rect={(unsigned)left*1440u/640u,(unsigned)top*1080u/400u,
         ((unsigned)right*1440u+639u)/640u,((unsigned)bottom*1080u+399u)/400u};
     unsigned prior=opacity<100u;
@@ -842,7 +843,7 @@ static void gpu_profile_report(void){
     lognum("GPU_PROFILE keyed=",g_gpu_profile.keyed,"flat_excluded=",g_gpu_profile.flat);
     lognum("GPU_PROFILE rgb888_excluded=",g_gpu_profile.rgb888,"other_excluded=",g_gpu_profile.other);
     lognum("GPU_PROFILE tex4=",g_gpu_profile.tex4,"tex8=",g_gpu_profile.tex8);
-    lognum("GPU_PROFILE tex16=",g_gpu_profile.tex16,NULL,0);
+    lognum("GPU_PROFILE tex16=",g_gpu_profile.tex16,"affine_excluded=",g_gpu_profile.affine);
     lognum("GPU_PROFILE waves=",g_gpu_profile.waves,"singletons=",g_gpu_profile.singletons);
     lognum("GPU_PROFILE opaque_waves=",g_gpu_profile.opaque_waves,"alpha_waves=",g_gpu_profile.alpha_waves);
     lognum("GPU_PROFILE max_wave=",g_gpu_profile.max_wave,"planner_splits=",g_gpu_profile.split);
@@ -955,7 +956,7 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     unsigned tw,unsigned th,unsigned texoff,const BYTE *texture,const BYTE *lut){
     if(!g_gpu_capture_active||g_gpu_capture_frozen)return;
     if(g_zplane_draw_context||width!=640||height!=400||!textured||planes!=8u||opacity!=100u||
-       !texture||!lut||(modulate&&g_rgb888_lighting_enabled)){
+       !texture||!lut||(!perspective&&!bilinear)||(modulate&&g_rgb888_lighting_enabled)){
         gpu_capture_barrier();return;
     }
     /* Even a guest write without an observed lock/remap cannot silently
@@ -1498,7 +1499,7 @@ static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
 static void gpu_capture_save(void){
     if(!g_gpu_capture_active)return;
     gpu_capture_barrier();
-    if(!g_gpu_capture_frozen){logtext("GPU_CAPTURE no changed contiguous indexed8 wave of at least 8 draws");return;}
+    if(!g_gpu_capture_frozen){logtext("GPU_CAPTURE no changed contiguous perspective/bilinear indexed8 wave of at least 8 draws");return;}
     char name[100],path[1024];
     capture_name(name,g_manual_capture_sequence,"_gpu.bin");
     DWORD n=GetModuleFileNameA(g_module,path,1023);
@@ -2321,7 +2322,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     }
     zero(&g_gpu_profile,sizeof(g_gpu_profile));msi_gpu_wave_reset(&g_gpu_profile_wave);
     g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
-    if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1");
+    if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1 scope=perspective_or_bilinear_indexed8_opaque");
     logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");
     logtext(g_vk_requested?(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=GPU linear (GDI HALFTONE fallback)":"PREVIEW_SCALER requested=GPU nearest (GDI legacy fallback)"):
         (g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy"));
@@ -3362,7 +3363,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
         bilinear_palette_ready=1;
         g_world_bilinear_palette_triangles++;
     }
-    gpu_profile_candidate(left,top,right,bottom,width,height,textured,modulate,planes,opacity);
+    gpu_profile_candidate(left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity);
     gpu_capture_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity,texW,texH,texOffset,texture,lut);
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
