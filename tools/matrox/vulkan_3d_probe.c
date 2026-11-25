@@ -23,6 +23,7 @@
 #include "msi_gpu_compare.h"
 #include "msi_gpu_bypass.h"
 #include "msi_gpu_cpu_replay.h"
+#include "msi_gpu_deferred_finish.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -655,6 +656,34 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(result.written>0&&result.changed>0);
     for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);
     printf("VULKAN_3D_TAGGED_BATCH_COMMIT_PASS draws=4 written=%u overwritten=%u\n",result.written,overwritten);
+    /* GPU success, actual injected readback failure, corrupted tagged
+     * output and stale guest baseline through the same retirement helper.
+     * Independent CPU replay provides the exact recovery reference. */
+    uint16_t *cpu=malloc(n*2u),*cpu_ref=malloc(n*2u);
+    uint8_t *mask=malloc(n),*mask_ref=malloc(n);
+    NEED(cpu&&cpu_ref&&mask&&mask_ref);
+    NEED(msi_gpu_cpu_replay(ordered,640,400,before,cpu_ref,mask_ref));
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
+    NEED(msi_gpu_deferred_finish(&result,ordered,640,400,live,under,before,1,out,cpu,mask)==MSI_DEFER_FINISH_GPU);
+    for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);
+    for(unsigned mode=0;mode<2;mode++){
+        for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;out[j]=0xabcdef01u;}
+        if(mode==0)NEED(msi_vk_batch_render(&tagged,&work,ordered,640,400,NULL,out,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        else {OK(msi_vk_batch_render(&tagged,&work,ordered,640,400,NULL,out,0));out[n-1]=65537u;}
+        NEED(msi_gpu_deferred_finish(&result,ordered,640,400,live,under,before,mode==1,out,cpu,mask)==MSI_DEFER_FINISH_CPU);
+        for(size_t j=0;j<n;j++)NEED(live[j]==cpu_ref[j]&&under[j]==(mask_ref[j]?mask_ref[j]:3));
+        NEED(result.written&&result.changed);
+    }
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
+    live[n-1]=1;
+    NEED(msi_gpu_deferred_finish(&result,ordered,640,400,live,under,before,0,out,cpu,mask)==MSI_DEFER_FINISH_BLOCKED);
+    for(size_t j=0;j<n;j++)NEED(live[j]==(j==n-1?1:before[j])&&under[j]==3);
+    live[n-1]=before[n-1];
+    ordered->draws[0].texture_id=ordered->snapshots.count;
+    NEED(msi_gpu_deferred_finish(&result,ordered,640,400,live,under,before,0,out,cpu,mask)==MSI_DEFER_FINISH_BLOCKED);
+    for(size_t j=0;j<n;j++)NEED(live[j]==before[j]&&under[j]==3);
+    free(cpu);free(cpu_ref);free(mask);free(mask_ref);
+    puts("VULKAN_3D_DEFERRED_FINISH_PASS gpu=1 cpu=2 blocked=2");
     msi_vk_batch_pipeline_destroy(&tagged);
     free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
 }

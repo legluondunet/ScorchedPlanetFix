@@ -29,6 +29,7 @@ on:
       - 'tools/matrox/msi_gpu_cpu_replay.h'
       - 'tools/matrox/msi_gpu_defer_audit.h'
       - 'tools/matrox/msi_gpu_defer_audit_test.c'
+      - 'tools/matrox/msi_gpu_deferred_finish.h'
       - 'tools/matrox/msi_gpu_shadow_sampler.h'
       - 'tools/matrox/msi_gpu_shadow_sampler_test.c'
       - 'tools/matrox/msi_gpu_draw_batch_test.c'
@@ -95,6 +96,7 @@ jobs:
           grep -q 'VULKAN_3D_TAGGED_OUTPUT_PASS' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_TAGGED_BRIDGE_PASS reopen=2' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_TAGGED_BATCH_COMMIT_PASS draws=4' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_DEFERRED_FINISH_PASS gpu=1 cpu=2 blocked=2' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1' /tmp/matrox-spv/probe.log
