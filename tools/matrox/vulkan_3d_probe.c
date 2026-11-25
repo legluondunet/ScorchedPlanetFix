@@ -25,6 +25,7 @@
 #include "world_vk_dispatch.h"
 #endif
 #include "msi_vk_batch_replay.h"
+#include "msi_vk_shadow_session.h"
 static MsiVkBatchContext batch_context;
 #define OK(x) do { VkResult r_=(x); if(r_!=VK_SUCCESS){fprintf(stderr,"%s: %d\n",#x,r_);exit(1);} }while(0)
 #define NEED(x) do {if(!(x)){fprintf(stderr,"check failed: %s\n",#x);exit(1);}}while(0)
@@ -581,6 +582,35 @@ static void test_batch_recovery(const MsiGpuDrawBatch *batch){
     puts("VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2");
 }
 
+static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){
+    MsiVkShadowSession session={0};
+    const size_t n=640u*400u;
+    uint16_t *before=malloc(n*2u),*scratch=malloc(n*2u);NEED(before&&scratch);
+    for(size_t i=0;i<n;i++)before[i]=0xdead;
+    MsiGpuCompare stats={0};
+    for(unsigned fault=1;fault<=9;fault++){
+        NEED(msi_vk_shadow_open(&session,phys,dev,queue,qfamily,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!session.ready&&!session.ctx.dev&&!session.ctx.cp&&!session.work.pending);
+    }
+    OK(msi_vk_shadow_open(&session,phys,dev,queue,qfamily,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    NEED(session.ready&&session.ctx.cp!=cp);
+    NEED(msi_vk_shadow_open(&session,phys,dev,queue,qfamily,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0)==VK_ERROR_INITIALIZATION_FAILED);
+    OK(msi_vk_shadow_compare(&session,batch,before,expected,scratch,&stats,0));
+    NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
+    /* Repeated submissions and a failure must leave CPU inputs untouched. */
+    for(size_t i=0;i<n;i++)scratch[i]=0xbeef;
+    stats.exact=123u;
+    NEED(msi_vk_shadow_compare(&session,batch,before,expected,scratch,&stats,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(!session.ready&&session.work.pending&&stats.exact==123u);
+    for(size_t i=0;i<n;i++)NEED(before[i]==0xdead&&scratch[i]==0xbeef);
+    OK(msi_vk_shadow_close(&session));OK(msi_vk_shadow_close(&session));
+    NEED(!session.ctx.dev&&!session.work.pending);
+    OK(msi_vk_shadow_open(&session,phys,dev,queue,qfamily,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    OK(msi_vk_shadow_compare(&session,batch,before,expected,scratch,&stats,0));
+    NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
+    OK(msi_vk_shadow_close(&session));free(before);free(scratch);
+    puts("VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1");
+}
 static int test_indexed_batch(unsigned w,unsigned h){
     MsiGpuTexture state={2,2,8,1,0,0xffff,1,0,0};
     uint8_t source[4]={1,0,1,1},palette[512]={0};
@@ -616,6 +646,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
+    if(w==640u&&h==400u)test_shadow_session(&multi_batch,p);
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;

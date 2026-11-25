@@ -6,6 +6,7 @@ on:
       - 'tools/matrox/shaders/**'
       - 'tools/matrox/vulkan_3d_probe.c'
       - 'tools/matrox/msi_vk_batch_replay.h'
+      - 'tools/matrox/msi_vk_shadow_session.h'
       - 'tools/matrox/msi_gpu_texel.h'
       - 'tools/matrox/msi_gpu_texel_test.c'
       - 'tools/matrox/msi_gpu_batch.h'
@@ -68,6 +69,7 @@ jobs:
           grep -q 'VULKAN_3D_BATCH_RECOVERY_PASS injected=6' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1' /tmp/matrox-spv/probe.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
           python3 tools/matrox/make_gpu_replay_fixture.py /tmp/matrox-spv/replay.bin
           python3 tools/matrox/diagnose_gpu_capture.py /tmp/matrox-spv/replay.bin --require-exact > /tmp/matrox-spv/cpu-replay.log
@@ -92,7 +94,7 @@ jobs:
       - name: Cross-compile standalone Win32 x86 GPU verification executable
         run: |
           set -eu
-          python3 tools/matrox/gen_world_vk_dispatch.py tools/matrox/vulkan_3d_probe.c /tmp/matrox-spv/world_vk_dispatch.h tools/matrox/msi_vk_batch_replay.h
+          python3 tools/matrox/gen_world_vk_dispatch.py tools/matrox/vulkan_3d_probe.c /tmp/matrox-spv/world_vk_dispatch.h tools/matrox/msi_vk_batch_replay.h tools/matrox/msi_vk_shadow_session.h
           mkdir -p /tmp/matrox-vkinclude
           cp -r /usr/include/vulkan /tmp/matrox-vkinclude/
           if test -d /usr/include/vk_video; then cp -r /usr/include/vk_video /tmp/matrox-vkinclude/; fi
