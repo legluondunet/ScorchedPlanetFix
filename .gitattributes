@@ -15,3 +15,4 @@ tools/matrox/world_spv_embedded.h text eol=lf
 tools/matrox/shaders/*.vert text eol=lf
 tools/matrox/shaders/*.frag text eol=lf
 tools/matrox/msi_gpu_shadow_sampler.h text eol=lf
+tools/matrox/msi_gpu_publish.h text eol=lf

@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "61ab893a377ee87adc513d0a735ca72e3085eb798c4d8af0f803dcbf648383e6"
+$expectedSourceHash = "7e20c3736bf54902cf0bd9920fb384037627a7ad006c9289b7387ac23119e42e"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -43,6 +43,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "world_spv_embedded.h") -Algorithm SHA2
 if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.vert") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "279dd28f45eeab662b6f5ef663b90668b9518085e1dfff711552839a719339c5") { throw "Shadow source checksum mismatch: shaders/opaque_world.vert" }
 if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.frag") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "eca7a42521fcf7ab765a7ecd99a627b18c64a30f6b64412120f695d8a875230e") { throw "Shadow source checksum mismatch: shaders/opaque_world.frag" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_shadow_sampler.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "27b4c493b33f3283466ada32e516f1f5ee5fc808c763fb5666f6cbecc76e4dd9") { throw "Shadow source checksum mismatch: msi_gpu_shadow_sampler.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_publish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b0046243701d3a62e661bf785ad619efed429f20457fe340de903ee3ff176fd0") { throw "Shadow source checksum mismatch: msi_gpu_publish.h" }
 $vkRoot = Join-Path $projectRoot "third_party/vulkan-headers"
 if (!(Test-Path (Join-Path $vkRoot "include/vulkan/vulkan.h"))) { throw "Pinned Vulkan-Headers checkout required" }
 $vkCommit = (& git -C $vkRoot rev-parse HEAD).Trim()
