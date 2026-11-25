@@ -44,7 +44,7 @@ static VkDescriptorPool dp;
 static VkDescriptorSet ds;
 static VkSampler sampler;
 static Image tex;
-static Buffer vb,upload;
+static Buffer vb,backdrop_vb,upload;
 static uint32_t qfamily;
 /* Green is discarded; white is visible but forbids filtering (index exception). */
 static uint32_t pixels[4]={0xf800,0x107e0,0x001f,0x2ffff};
@@ -54,6 +54,12 @@ static const Vertex tri[3]={
     {{37,29},{-.37f,.13f},.73f,{241,89,151}},
     {{601,71},{1.61f,-.29f},1.19f,{93,235,174}},
     {{111,363},{.23f,1.47f},1.63f,{167,137,253}}
+};
+/* Different triangle: overlap and non-overlap with the textured draw. */
+static const Vertex backdrop_tri[3]={
+    {{8,58},{0,0},1,{0,0,0}},
+    {{485,16},{0,0},1,{0,0,0}},
+    {{418,385},{0,0},1,{0,0,0}}
 };
 static uint32_t mt(uint32_t bits,VkMemoryPropertyFlags f){
     for(uint32_t i=0;i<mem.memoryTypeCount;i++)
@@ -139,6 +145,7 @@ static void setup(void){
     tex=image(2,2,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     upload=buffer(sizeof(pixels),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);writebuf(upload,pixels,sizeof(pixels));
     vb=buffer(sizeof(tri),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(vb,tri,sizeof(tri));
+    backdrop_vb=buffer(sizeof(backdrop_tri),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(backdrop_vb,backdrop_tri,sizeof(backdrop_tri));
     VkCommandBuffer c=begin();
     transition(c,tex.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
     VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){2,2,1};
@@ -202,10 +209,12 @@ static void replace_fixture(const MsiGpuTexture *s,const uint8_t *src,size_t src
     printf("VULKAN_3D_FIXTURE decoded_planes=%u\n",s->planes);
 }
 static double cross(double a,double b,double c,double d){return a*d-b*c;}
-static void weights(double x,double y,double *w){
-    double ax=tri[0].xy[0],ay=tri[0].xy[1],bx=tri[1].xy[0]-ax,by=tri[1].xy[1]-ay,cx=tri[2].xy[0]-ax,cy=tri[2].xy[1]-ay;
+static void weights_for(const Vertex *v,double x,double y,double *w){
+    double ax=v[0].xy[0],ay=v[0].xy[1],bx=v[1].xy[0]-ax,by=v[1].xy[1]-ay,cx=v[2].xy[0]-ax,cy=v[2].xy[1]-ay;
     double den=cross(bx,by,cx,cy);w[1]=cross(x-ax,y-ay,cx,cy)/den;w[2]=cross(bx,by,x-ax,y-ay)/den;w[0]=1-w[1]-w[2];
 }
+static void weights(double x,double y,double *w){weights_for(tri,x,y,w);}
+static double coverage_min(const double *w){return fmin(w[0],fmin(w[1],w[2]));}
 static int addr(int i,int clamp){return clamp?(i<0?0:i>1?1:i):((i%2)+2)%2;}
 static unsigned tap(int x,int y,unsigned f){return pixels[addr(y,f&4)*2+addr(x,f&2)];}
 static double coord(double u,int clamp){return clamp?(u<0?0:u>1?1:u):u-floor(u);}
@@ -285,22 +294,22 @@ static int channel_error(uint16_t a,uint16_t b){
 #define BACKDROP 0x39e7u
 /* The CPU oracle applies the existing MSI565 integer source-over rule.
  * Discard must preserve previous color exactly, not produce alpha halos. */
-static uint16_t compose_reference(uint16_t src,unsigned opacity){
-    if(src==0xdead||!opacity)return BACKDROP;
+static uint16_t compose_reference(uint16_t src,unsigned opacity,uint16_t old){
+    if(src==0xdead||!opacity)return old;
     unsigned inv=100u-opacity;
-    unsigned r=(((src>>11)*opacity+(BACKDROP>>11)*inv)+50u)/100u;
-    unsigned g=((((src>>5)&63u)*opacity+((BACKDROP>>5)&63u)*inv)+50u)/100u;
-    unsigned b=(((src&31u)*opacity+(BACKDROP&31u)*inv)+50u)/100u;
+    unsigned r=(((src>>11)*opacity+(old>>11)*inv)+50u)/100u;
+    unsigned g=((((src>>5)&63u)*opacity+((old>>5)&63u)*inv)+50u)/100u;
+    unsigned b=(((src&31u)*opacity+(old&31u)*inv)+50u)/100u;
     return (uint16_t)((r<<11)|(g<<5)|b);
 }
-static int composite_boundary_match(double *w,unsigned x,unsigned y,unsigned flags,unsigned opacity,uint16_t actual){
+static int composite_boundary_match(double *w,unsigned x,unsigned y,unsigned flags,unsigned opacity,uint16_t old,uint16_t actual){
     const double eps=0.000002;
     uint16_t base=refpixel(w,x,y,flags);
     for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++){
         if(!i&&!j)continue;
         uint16_t alt=refpixel_offset(w,x,y,flags,i*eps,j*eps);
         if((flags&8)&&base!=0xdead&&alt!=0xdead)continue;
-        if(alt!=base&&compose_reference(alt,opacity)==actual)return 1;
+        if(alt!=base&&compose_reference(alt,opacity,old)==actual)return 1;
     }
     return 0;
 }
@@ -310,7 +319,7 @@ static void bind_previous(Image a){
     wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr.pImageInfo=&ti;
     vkUpdateDescriptorSets(dev,1,&wr,0,0);
 }
-static void draw_pass(VkCommandBuffer c,VkFramebuffer fb,VkRenderPass pass,uint32_t w,uint32_t h,unsigned flags,unsigned reserved){
+static void draw_pass(VkCommandBuffer c,VkFramebuffer fb,VkRenderPass pass,uint32_t w,uint32_t h,unsigned flags,unsigned reserved,Buffer vertices){
     VkClearValue clear={.color.uint32={0xdead,0,0,0}};
     VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=pass;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};
     if(pass==rp){bi.clearValueCount=1;bi.pClearValues=&clear;}
@@ -318,24 +327,52 @@ static void draw_pass(VkCommandBuffer c,VkFramebuffer fb,VkRenderPass pass,uint3
     VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
     vkCmdSetViewport(c,0,1,&vp);vkCmdSetScissor(c,0,1,&sc);
     vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);vkCmdBindDescriptorSets(c,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&ds,0,0);
-    VkDeviceSize offset=0;vkCmdBindVertexBuffers(c,0,1,&vb.b,&offset);
+    VkDeviceSize offset=0;vkCmdBindVertexBuffers(c,0,1,&vertices.b,&offset);
     Push push={{640,400},{(float)w,(float)h},flags,reserved};
     vkCmdPushConstants(c,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
     vkCmdDraw(c,3,1,0,0);vkCmdEndRenderPass(c);
 }
-static int test_case(uint32_t w,uint32_t h,unsigned flags,int opacity){
+#define CPU_PATCH_COLOR 0x9b26u
+static int in_cpu_patch(unsigned x,unsigned y){return x>=24&&x<210&&y>=100&&y<200;}
+static int test_case(uint32_t w,uint32_t h,unsigned flags,int opacity,unsigned sync_mode){
     NEED(w>0&&h>0&&w<=16384&&h<=16384);
-    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    unsigned cpu_checked=0,cpu_bad=0,cpu_written=0;
     VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
     Image prior={0};
     if(opacity>=0){
         prior=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
         /* First draw opaque background into the actual target. Binding 1
          * still points to dummy tex, never the active attachment. */
-        VkCommandBuffer first=begin();draw_pass(first,fb,rp,w,h,128,BACKDROP);
+        VkCommandBuffer first=begin();draw_pass(first,fb,rp,w,h,128,BACKDROP,sync_mode?backdrop_vb:vb);
         transition(first,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+        if(sync_mode==2){
+            VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
+            vkCmdCopyImageToBuffer(first,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&br);
+            VkBufferMemoryBarrier b=S(BUFFER_MEMORY_BARRIER);b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_HOST_READ_BIT|VK_ACCESS_HOST_WRITE_BIT;
+            b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.buffer=read.b;b.size=VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(first,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&b,0,0);end(first);
+            /* Simulate the guest reading native color then editing it directly.
+             * Preserve untouched pixels, including both sides of the first
+             * triangle. This is a synthetic barrier proof, not the live ABI. */
+            void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));
+            uint16_t *cpu=mapped;
+            for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
+                double bw[3];weights_for(backdrop_tri,(x+.5)*640/w,(y+.5)*400/h,bw);
+                double mn=coverage_min(bw);size_t i=(size_t)y*w+x;
+                if(mn>.002||mn<-.002){cpu_checked++;if(cpu[i]!=(mn>.002?BACKDROP:0xdead))cpu_bad++;}
+                if(in_cpu_patch(logical_pixel(x,640,w),logical_pixel(y,400,h))){cpu[i]=CPU_PATCH_COLOR;cpu_written++;}
+            }
+            vkUnmapMemory(dev,read.m);
+            first=begin();
+            transition(first,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+            vkCmdCopyBufferToImage(first,read.b,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
+            transition(first,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+        }
         transition(first,prior.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
         VkImageCopy region={0};region.srcSubresource=region.dstSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};region.extent=(VkExtent3D){w,h,1};
@@ -347,49 +384,65 @@ static int test_case(uint32_t w,uint32_t h,unsigned flags,int opacity){
         end(first);bind_previous(prior);
     }
     VkCommandBuffer c=begin();
-    draw_pass(c,fb,opacity<0?rp:rp_load,w,h,flags|(opacity<0?0u:256u),opacity<0?0u:(unsigned)opacity);
+    draw_pass(c,fb,opacity<0?rp:rp_load,w,h,flags|(opacity<0?0u:256u),opacity<0?0u:(unsigned)opacity,vb);
     transition(c,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
     VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){w,h,1};vkCmdCopyImageToBuffer(c,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&copy);
     VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(c,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(c);
     void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
-    unsigned interior=0,exact=0,one=0,boundary=0,bad=0,outside=0,coverage=0,edges=0,discarded=0;
+    unsigned interior=0,exact=0,one=0,boundary=0,bad=0,outside=0,coverage=0,edges=0,discarded=0,overlap=0,nonoverlap=0,patched_outside=0;
     for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h,b[3];weights(lx,ly,b);
         double mn=fmin(b[0],fmin(b[1],b[2]));uint16_t actual=p[(size_t)y*w+x];
         unsigned dx=logical_pixel(x,640,w),dy=logical_pixel(y,400,h);
+        uint16_t old=opacity>=0?BACKDROP:0xdead;
+        uint16_t outside_ref=0xdead;
+        if(sync_mode){
+            double bw[3];weights_for(backdrop_tri,lx,ly,bw);
+            double bm=coverage_min(bw);
+            int patch=sync_mode==2&&in_cpu_patch(dx,dy);
+            if(!patch&&bm>=-.002&&bm<=.002){edges++;continue;}
+            old=patch?CPU_PATCH_COLOR:bm>.002?BACKDROP:0xdead;
+            outside_ref=old;
+            if(mn>.002){if(bm>.002)overlap++;else if(bm<-.002)nonoverlap++;}
+            if(patch&&mn<-.002)patched_outside++;
+        }
         /* exclude a thin geometric edge band from strict interior checks */
         if(mn>.002){
             interior++;
             uint16_t raw=refpixel(b,dx,dy,flags);
             int keyed_discard=(flags&64)&&raw==0xdead;
             if(keyed_discard)discarded++;
-            uint16_t ref=opacity<0?raw:compose_reference(raw,(unsigned)opacity);
+            uint16_t ref=opacity<0?raw:compose_reference(raw,(unsigned)opacity,old);
             int e=channel_error(actual,ref);
             if(!e)exact++;
             else if(e==1&&!keyed_discard&&(opacity<0?actual!=0xdead:opacity>0))one++;
             else if(opacity<0?nearest_boundary_match(b,dx,dy,flags,actual):
-                composite_boundary_match(b,dx,dy,flags,(unsigned)opacity,actual)){
+                composite_boundary_match(b,dx,dy,flags,(unsigned)opacity,old,actual)){
                 boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);
             }else{if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}
         }
-        else if(mn<-.002){outside++;if(actual!=0xdead)coverage++;}
+        else if(mn<-.002){outside++;if(actual!=outside_ref)coverage++;}
         else edges++;
     }
     printf("VULKAN_3D_CASE %ux%u flags=%u opacity=%d interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u discarded=%u\n",w,h,flags,opacity,interior,exact,one,boundary,bad,outside,coverage,edges,discarded);
+    if(sync_mode)printf("VULKAN_3D_ORDER mode=%u overlap=%u nonoverlap=%u cpu_checked=%u cpu_bad=%u cpu_written=%u patched_outside=%u\n",
+        sync_mode,overlap,nonoverlap,cpu_checked,cpu_bad,cpu_written,patched_outside);
     vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);freeimage(out);freebuf(read);
     if(opacity>=0){bind_previous(tex);freeimage(prior);}
     /* Keep strict error checks, but collect all cases before returning. */
     return interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u&&boundary*10000u<=interior&&
-        (!(flags&64)||(discarded>1000&&interior-discarded>1000));
+        (!(flags&64)||(discarded>1000&&interior-discarded>1000))&&
+        (!sync_mode||(overlap>1000&&nonoverlap>1000))&&
+        (sync_mode!=2||(cpu_bad==0&&cpu_checked>10000&&cpu_written>1000&&patched_outside>1000));
 }
-static int test(uint32_t w,uint32_t h,unsigned flags){return test_case(w,h,flags,-1);}
+static int test(uint32_t w,uint32_t h,unsigned flags){return test_case(w,h,flags,-1,0);}
 int main(void){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v6 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v7 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
@@ -416,11 +469,12 @@ int main(void){
     replace_fixture(&fixture,direct16,sizeof(direct16),NULL,0,expected);
     for(unsigned i=0;i<4;i++){failures+=!test(640,400,decoded_modes[i]);failures+=!test(1440,1080,decoded_modes[i]);}
     const unsigned opacities[]={0,25,50,100};
-    for(unsigned i=0;i<4;i++){failures+=!test_case(640,400,127,(int)opacities[i]);failures+=!test_case(1440,1080,127,(int)opacities[i]);}
+    for(unsigned i=0;i<4;i++){failures+=!test_case(640,400,127,(int)opacities[i],0);failures+=!test_case(1440,1080,127,(int)opacities[i],0);}
+    for(unsigned mode=1;mode<=2;mode++){failures+=!test_case(640,400,127,50,mode);failures+=!test_case(1440,1080,127,50,mode);}
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
-    vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
+    vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(backdrop_vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=48");
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=52");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
