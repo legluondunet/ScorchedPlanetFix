@@ -85,6 +85,10 @@ VkResult msi_vk_bridge_compare(const MsiGpuDrawBatch *batch,const uint16_t *befo
     const uint16_t *cpu,uint16_t *scratch,MsiGpuCompare *stats){
     return msi_vk_shadow_compare(&shadow,batch,before,cpu,scratch,stats,0);
 }
+VkResult msi_vk_bridge_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch,
+    const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes){
+    return msi_vk_shadow_tagged(&shadow,batch,scratch,vs,vs_bytes,fs,fs_bytes,0);
+}
 VkResult msi_vk_bridge_close(void){return msi_vk_shadow_close(&shadow);}
 #undef INSTANCE_COMMANDS
 #undef DEVICE_COMMANDS

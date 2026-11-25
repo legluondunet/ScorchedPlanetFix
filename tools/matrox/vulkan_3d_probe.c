@@ -671,9 +671,23 @@ static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expe
         NEED(msi_vk_bridge_open(inst,phys,dev,queue,qfamily,bridge_test_gipa,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag))==VK_ERROR_INITIALIZATION_FAILED);
         OK(msi_vk_bridge_compare(batch,before,expected,scratch,&stats));
         NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
+        uint32_t *tagged=malloc(n*4u);NEED(tagged);
+        OK(msi_vk_bridge_tagged(batch,tagged,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)));
+        unsigned written=0;
+        for(size_t i=0;i<n;i++){
+            NEED(tagged[i]<=65536u);
+            NEED((tagged[i]==65536u?before[i]:tagged[i])==expected[i]);
+            written+=tagged[i]!=65536u;
+        }
+        NEED(written);
+        free(tagged);
+        /* R16 and R32 share a queue/pool, not pipeline objects. */
+        OK(msi_vk_bridge_compare(batch,before,expected,scratch,&stats));
+        NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
         OK(msi_vk_bridge_close());OK(msi_vk_bridge_close());
     }
     free(before);free(scratch);
+    puts("VULKAN_3D_TAGGED_BRIDGE_PASS reopen=2");
     puts("VULKAN_3D_SHADOW_BRIDGE_PASS missing_dispatch=1 reopen=1");
 }
 static int test_indexed_batch(unsigned w,unsigned h){

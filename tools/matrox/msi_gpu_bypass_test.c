@@ -24,5 +24,19 @@ int main(void){
     assert(msi_gpu_bypass_commit(&r,4,4,&b,live,under,before,gpu,alt)&&under[0]==1);
     b.count=2;
     assert(!msi_gpu_bypass_commit(&r,4,4,&b,live,under,before,gpu,alt));
+    b.count=1;b.draws[0].flags=73;
+    uint32_t tagged[16];
+    for(unsigned i=0;i<16;i++){live[i]=before[i];under[i]=3;tagged[i]=65536u;}
+    tagged[0]=0x1234;tagged[1]=0;tagged[2]=65535u;
+    live[15]=7;
+    assert(!msi_gpu_bypass_tagged_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    live[15]=before[15];tagged[15]=0;
+    assert(!msi_gpu_bypass_tagged_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    tagged[15]=65536u;tagged[3]=65537u;
+    assert(!msi_gpu_bypass_tagged_commit(&r,4,4,&b,live,under,before,tagged)&&under[0]==3);
+    tagged[3]=65536u;
+    assert(msi_gpu_bypass_tagged_commit(&r,4,4,&b,live,under,before,tagged));
+    assert(r.written==3&&r.changed==2&&live[1]==0&&live[2]==65535u&&under[0]==2&&under[3]==3);
+    puts("MSI_GPU_BYPASS_TAGGED_PASS");
     puts("MSI_GPU_BYPASS_PASS");return 0;
 }

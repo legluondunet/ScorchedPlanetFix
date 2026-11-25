@@ -10,7 +10,7 @@
 #include "msi_vk_batch_replay.h"
 #include "msi_gpu_compare.h"
 typedef struct {
-    MsiVkBatchContext ctx;
+    MsiVkBatchContext ctx,tagged; /* same borrowed device, queue and pool */
     MsiVkBatchWork work;
     unsigned ready;
 } MsiVkShadowSession;
@@ -22,6 +22,7 @@ static VkResult msi_vk_shadow_close(MsiVkShadowSession *s){
         if(s->work.pending)return r; /* ownership must survive uncertain wait */
     }
     if(s->ctx.dev){
+        if(s->tagged.dev)msi_vk_batch_pipeline_destroy(&s->tagged);
         msi_vk_batch_pipeline_destroy(&s->ctx);
         if(s->ctx.cp)vkDestroyCommandPool(s->ctx.dev,s->ctx.cp,0);
     }
@@ -62,5 +63,30 @@ static VkResult msi_vk_shadow_compare(MsiVkShadowSession *s,const MsiGpuDrawBatc
     if(r!=VK_SUCCESS){if(s->ctx.unusable)s->ready=0;return r;}
     msi_gpu_compare(stats,b,640u,400u,before,cpu,scratch);
     return VK_SUCCESS;
+}
+/* Lazy optional R32 output: keep R16 diagnostic initialization independent.
+ * Shared work is safe because both paths are synchronous and share a pool.
+ * An ambiguous wait poisons the entire session; close retires on that pool. */
+static VkResult msi_vk_shadow_tagged(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
+    uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault){
+    if(!s||!s->ready||s->ctx.unusable||s->tagged.unusable||s->work.pending||!b||!scratch)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if(!s->tagged.pipe){
+        VkImageFormatProperties p;
+        VkResult r=vkGetPhysicalDeviceImageFormatProperties(s->ctx.phys,VK_FORMAT_R32_UINT,
+            VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&p);
+        if(r!=VK_SUCCESS){if(r==VK_ERROR_DEVICE_LOST)s->ready=0;return r;}
+        if(p.maxExtent.width<640u||p.maxExtent.height<400u)return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        s->tagged.phys=s->ctx.phys;s->tagged.dev=s->ctx.dev;
+        s->tagged.queue=s->ctx.queue;s->tagged.cp=s->ctx.cp;
+        vkGetPhysicalDeviceMemoryProperties(s->ctx.phys,&s->tagged.mem);
+        s->tagged.tagged_output=1;
+        r=msi_vk_batch_pipeline_create(&s->tagged,vs,vs_bytes,fs,fs_bytes,0);
+        if(r!=VK_SUCCESS){if(s->tagged.unusable)s->ready=0;return r;}
+    }
+    VkResult r=msi_vk_batch_render(&s->tagged,&s->work,b,640u,400u,NULL,scratch,fault);
+    if(s->tagged.unusable)s->ready=0;
+    return r;
 }
 #endif

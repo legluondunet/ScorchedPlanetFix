@@ -37,4 +37,32 @@ static inline int msi_gpu_bypass_commit(MsiGpuBypass *r,unsigned w,unsigned h,
     }
     r->written=written;r->changed=changed;return 1;
 }
+/* R32_UINT sentinel=65536; all valid RGB565 colors, including zero
+ * and 65535, are distinct from no-write. No initial image upload. */
+static inline int msi_gpu_bypass_tagged_commit(MsiGpuBypass *r,unsigned w,unsigned h,
+    const MsiGpuDrawBatch *b,uint16_t *live,uint8_t *underlay,
+    const uint16_t *before,const uint32_t *gpu){
+    *r=(MsiGpuBypass){0};
+    if(!b||b->count!=1u||!w||!h||w>4096u||h>4096u||
+       !live||!before||!gpu||live==before||(const void*)live==(const void*)gpu||
+       (const void*)before==(const void*)gpu)return 0;
+    const MsiGpuDraw *d=&b->draws[0];MsiGpuRect q=d->bounds;
+    if((d->flags&~127u)||!(d->flags&1u)||!(d->flags&8u)||
+       q.x0>=q.x1||q.y0>=q.y1||q.x1>w||q.y1>h)return 0;
+    unsigned written=0,changed=0;
+    for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
+        size_t j=(size_t)y*w+x;
+        if(live[j]!=before[j])return 0;
+        if(gpu[j]==65536u)continue;
+        if(gpu[j]>65535u||x<q.x0||x>=q.x1||y<q.y0||y>=q.y1)return 0;
+        written++;changed+=gpu[j]!=before[j];
+    }
+    if(!written)return 0;
+    for(unsigned y=q.y0;y<q.y1;y++)for(unsigned x=q.x0;x<q.x1;x++){
+        size_t j=(size_t)y*w+x;
+        if(gpu[j]==65536u)continue;
+        live[j]=(uint16_t)gpu[j];if(underlay)underlay[j]=(d->flags&64u)?2u:1u;
+    }
+    r->written=written;r->changed=changed;return 1;
+}
 #endif

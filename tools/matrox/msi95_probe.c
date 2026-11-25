@@ -1683,16 +1683,14 @@ static int gpu_bypass_try(void){
        !g_vk_active||g_endframe_depth||g_guest_callback_depth||g_capture_ownership||
        g_manual_capture_active||g_zplane_draw_context)return 0;
     const WORD *before=(const WORD*)g_gpu_capture_before;
-    WORD *gpu=(WORD*)g_gpu_capture_after,*inverted=(WORD*)g_gpu_capture_best->before;
-    WORD *alt=(WORD*)g_gpu_capture_best->after;
-    for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)inverted[j]=(WORD)(before[j]^65535u);
-    MsiGpuCompare ignored;MsiGpuBypass result;
+    uint32_t *gpu=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
+    MsiGpuBypass result;
     DWORD started=GetTickCount();
     g_gpu_bypass.attempted++;
-    int rc=matrox_vk_shadow_compare(&g_gpu_capture_batch,before,before,gpu,&ignored);
-    if(!rc)rc=matrox_vk_shadow_compare(&g_gpu_capture_batch,inverted,inverted,alt,&ignored);
-    int ok=!rc&&msi_gpu_bypass_commit(&result,640u,400u,&g_gpu_capture_batch,
-        (WORD*)g_color,g_shadow_underlay,before,gpu,alt);
+    int rc=gpu?matrox_vk_shadow_tagged(&g_gpu_capture_batch,gpu):-1;
+    int ok=!rc&&msi_gpu_bypass_tagged_commit(&result,640u,400u,&g_gpu_capture_batch,
+        (WORD*)g_color,g_shadow_underlay,before,gpu);
+    if(gpu)VirtualFree(gpu,0,MEM_RELEASE);
     if(ok){
         g_gpu_bypass.passed++;g_gpu_bypass.written+=result.written;
         g_gpu_bypass.changed+=result.changed;
@@ -2553,7 +2551,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     zero(&g_gpu_publish,sizeof(g_gpu_publish));zero(&g_gpu_bypass,sizeof(g_gpu_bypass));
     if(g_gpu_profile_enabled){
         logtext("GPU_SHADOW_AUTO enabled sample=1/120 max_passes=24 file_output=0 CPU_reference=1 guarded_publish=1");
-        logtext("GPU_BYPASS pilot after=24_passes max_triangles=12 sample=1/120 native_only=1");
+        logtext("GPU_BYPASS pilot after=24_passes max_triangles=12 sample=1/120 native_only=1 tagged_passes=1");
     }
     if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1 scope=perspective_or_bilinear_indexed8_opaque");
     logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");

@@ -14,7 +14,8 @@ typedef void (*MatroxVkReport)(const char *message,int code);
 int matrox_vk_open(void *window,int linear,MatroxVkReport logger);
 int matrox_vk_present(const uint16_t *pixels,uint32_t pitch);
 void matrox_vk_close(void);
-/* Experimental F12-only diagnostic. CPU buffers stay read-only. */
+/* Experimental native diagnostic and tagged output. Guest buffers stay read-only. */
 int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before,
     const uint16_t *cpu,uint16_t *scratch,MsiGpuCompare *stats);
+int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch);
 #endif
