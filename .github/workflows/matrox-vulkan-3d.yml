@@ -20,6 +20,8 @@ on:
       - 'tools/matrox/msi_gpu_draw_batch.h'
       - 'tools/matrox/msi_gpu_compare.h'
       - 'tools/matrox/msi_gpu_compare_test.c'
+      - 'tools/matrox/msi_gpu_shadow_sampler.h'
+      - 'tools/matrox/msi_gpu_shadow_sampler_test.c'
       - 'tools/matrox/msi_gpu_draw_batch_test.c'
       - 'tools/matrox/make_gpu_replay_fixture.py'
       - 'tools/matrox/diagnose_gpu_capture.py'
@@ -62,6 +64,8 @@ jobs:
           /tmp/matrox-spv/snapshot-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_compare_test.c -o /tmp/matrox-spv/compare-test
           /tmp/matrox-spv/compare-test
+          cc -std=c11 -O2 -Wall -Wextra -Werror tools/matrox/msi_gpu_shadow_sampler_test.c -o /tmp/matrox-spv/shadow-sampler-test
+          /tmp/matrox-spv/shadow-sampler-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_draw_batch_test.c -o /tmp/matrox-spv/draw-batch-test
           /tmp/matrox-spv/draw-batch-test
           cc -std=c11 -O2 -Wall -Wextra -I/tmp/matrox-spv tools/matrox/vulkan_3d_probe.c tools/matrox/msi_vk_shadow_bridge.c -o /tmp/matrox-spv/world-probe -lvulkan -lm
