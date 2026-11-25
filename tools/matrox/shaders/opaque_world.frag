@@ -1,10 +1,12 @@
 #version 450
 // SPDX-License-Identifier: GPL-3.0-or-later
-// No blending, depth or HUD here. Host must reject those draws.
+// Explicit integer source-over using a separate prior-color snapshot.
+// No fixed-function blending, depth testing, or shadow ownership here.
 // Input R32_UINT: RGB565 low 16, bit 16 center discard, bit 17 filter veto.
 // Host resolves CLUT, residency and original index/color key exceptions.
 // Output is packed RGB565 in an R16_UINT color attachment for readback.
 layout(set=0,binding=0) uniform usampler2D sourceTex;
+layout(set=0,binding=1) uniform usampler2D previousColor;
 layout(location=0) noperspective in vec2 uvWeighted;
 layout(location=1) noperspective in float invW;
 layout(location=2) noperspective in vec3 modifier;
@@ -13,7 +15,7 @@ layout(push_constant) uniform Draw {
     vec2 logicalExtent;
     vec2 targetExtent;
     uint flags; // perspective=1, clamp U=2, clamp V=4, bilinear=8, modulate=16, dither=32, key metadata=64
-    uint reserved;
+    uint reserved; // packed solid RGB565 (flag 128), or opacity 0..100 (flag 256)
 } draw;
 const uint bayer[16]=uint[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
 uvec3 unpack565(uint c){return uvec3(c>>11u,(c>>5u)&63u,c&31u);}
@@ -53,7 +55,7 @@ uint sample565(vec2 uv){
 }
 void main(){
     // Host validates finite, positive invW for perspective draws.
-    uint c=sample565(uvWeighted/invW);
+    uint c=(draw.flags&128u)!=0u?(draw.reserved&65535u):sample565(uvWeighted/invW);
     if((draw.flags&16u)!=0u){
         // Modifiers are affine 0..255, not normalized or perspective corrected.
         uvec3 m=uvec3(clamp(modifier,0.0,255.0)+0.5);
@@ -70,6 +72,12 @@ void main(){
             uvec3 r=n%255u;
             c=pack565(min(q+uvec3(greaterThan(r,uvec3(threshold))),uvec3(31,63,31)));
         }else c=pack565((n+uvec3(127u))/255u);
+    }
+    if((draw.flags&256u)!=0u){
+        uint opacity=min(draw.reserved,100u);
+        if(opacity==0u)discard;
+        uvec3 old=unpack565(texelFetch(previousColor,ivec2(gl_FragCoord.xy),0).r);
+        c=pack565((unpack565(c)*opacity+old*(100u-opacity)+uvec3(50u))/100u);
     }
     packedColor=c;
 }

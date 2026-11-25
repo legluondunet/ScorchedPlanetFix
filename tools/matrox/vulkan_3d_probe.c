@@ -38,7 +38,7 @@ static VkCommandPool cp;
 static VkPhysicalDeviceMemoryProperties mem;
 static VkDescriptorSetLayout dsl;
 static VkPipelineLayout pl;
-static VkRenderPass rp;
+static VkRenderPass rp,rp_load;
 static VkPipeline pipe;
 static VkDescriptorPool dp;
 static VkDescriptorSet ds;
@@ -121,7 +121,7 @@ static void setup(void){
 #endif
         VkFormatProperties f;
         vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R16_UINT,&f);
-        if(!(f.optimalTilingFeatures&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))continue;
+        if((f.optimalTilingFeatures&(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))!=(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))continue;
         vkGetPhysicalDeviceFormatProperties(p[i],VK_FORMAT_R32_UINT,&f);
         if(!(f.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))continue;
         uint32_t q=0;vkGetPhysicalDeviceQueueFamilyProperties(p[i],&q,0);
@@ -147,21 +147,26 @@ static void setup(void){
     VkSamplerCreateInfo si=S(SAMPLER_CREATE_INFO);si.magFilter=si.minFilter=VK_FILTER_NEAREST;si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=0;
     OK(vkCreateSampler(dev,&si,0,&sampler));
-    VkDescriptorSetLayoutBinding binding={0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0};
-    VkDescriptorSetLayoutCreateInfo dl=S(DESCRIPTOR_SET_LAYOUT_CREATE_INFO);dl.bindingCount=1;dl.pBindings=&binding;OK(vkCreateDescriptorSetLayout(dev,&dl,0,&dsl));
+    VkDescriptorSetLayoutBinding bindings[2]={
+        {0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0},
+        {1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,0}};
+    VkDescriptorSetLayoutCreateInfo dl=S(DESCRIPTOR_SET_LAYOUT_CREATE_INFO);dl.bindingCount=2;dl.pBindings=bindings;OK(vkCreateDescriptorSetLayout(dev,&dl,0,&dsl));
     VkPushConstantRange range={VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(Push)};
     VkPipelineLayoutCreateInfo li=S(PIPELINE_LAYOUT_CREATE_INFO);li.setLayoutCount=1;li.pSetLayouts=&dsl;li.pushConstantRangeCount=1;li.pPushConstantRanges=&range;
     OK(vkCreatePipelineLayout(dev,&li,0,&pl));
-    VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1};
+    VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2};
     VkDescriptorPoolCreateInfo pd=S(DESCRIPTOR_POOL_CREATE_INFO);pd.maxSets=1;pd.poolSizeCount=1;pd.pPoolSizes=&ps;OK(vkCreateDescriptorPool(dev,&pd,0,&dp));
     VkDescriptorSetAllocateInfo da=S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=dp;da.descriptorSetCount=1;da.pSetLayouts=&dsl;OK(vkAllocateDescriptorSets(dev,&da,&ds));
     VkDescriptorImageInfo ti={sampler,tex.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet wr=S(WRITE_DESCRIPTOR_SET);wr.dstSet=ds;wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr.pImageInfo=&ti;vkUpdateDescriptorSets(dev,1,&wr,0,0);
+    wr.dstBinding=1;vkUpdateDescriptorSets(dev,1,&wr,0,0);
     VkAttachmentDescription ad={0};ad.format=VK_FORMAT_R16_UINT;ad.samples=VK_SAMPLE_COUNT_1_BIT;ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
     ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;ad.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;ad.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     VkAttachmentReference ar={0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub={0};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&ar;
     VkRenderPassCreateInfo ri=S(RENDER_PASS_CREATE_INFO);ri.attachmentCount=1;ri.pAttachments=&ad;ri.subpassCount=1;ri.pSubpasses=&sub;OK(vkCreateRenderPass(dev,&ri,0,&rp));
+    ad.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;ad.initialLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    OK(vkCreateRenderPass(dev,&ri,0,&rp_load));
     VkShaderModule vs=shader(world_vert,sizeof(world_vert)),fs=shader(world_frag,sizeof(world_frag));
     VkPipelineShaderStageCreateInfo stages[2]={S(PIPELINE_SHADER_STAGE_CREATE_INFO),S(PIPELINE_SHADER_STAGE_CREATE_INFO)};
     stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fs;stages[1].pName="main";
@@ -277,20 +282,72 @@ static int channel_error(uint16_t a,uint16_t b){
     int r=absdiff(a>>11,b>>11),g=absdiff((a>>5)&63,(b>>5)&63),bl=absdiff(a&31,b&31);
     return r>g?(r>bl?r:bl):(g>bl?g:bl);
 }
-static int test(uint32_t w,uint32_t h,unsigned flags){
-    NEED(w>0&&h>0&&w<=16384&&h<=16384);
-    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
-    VkCommandBuffer c=begin();VkClearValue clear={.color.uint32={0xdead,0,0,0}};
-    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=rp;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};bi.clearValueCount=1;bi.pClearValues=&clear;
+#define BACKDROP 0x39e7u
+/* The CPU oracle applies the existing MSI565 integer source-over rule.
+ * Discard must preserve previous color exactly, not produce alpha halos. */
+static uint16_t compose_reference(uint16_t src,unsigned opacity){
+    if(src==0xdead||!opacity)return BACKDROP;
+    unsigned inv=100u-opacity;
+    unsigned r=(((src>>11)*opacity+(BACKDROP>>11)*inv)+50u)/100u;
+    unsigned g=((((src>>5)&63u)*opacity+((BACKDROP>>5)&63u)*inv)+50u)/100u;
+    unsigned b=(((src&31u)*opacity+(BACKDROP&31u)*inv)+50u)/100u;
+    return (uint16_t)((r<<11)|(g<<5)|b);
+}
+static int composite_boundary_match(double *w,unsigned x,unsigned y,unsigned flags,unsigned opacity,uint16_t actual){
+    const double eps=0.000002;
+    uint16_t base=refpixel(w,x,y,flags);
+    for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++){
+        if(!i&&!j)continue;
+        uint16_t alt=refpixel_offset(w,x,y,flags,i*eps,j*eps);
+        if((flags&8)&&base!=0xdead&&alt!=0xdead)continue;
+        if(alt!=base&&compose_reference(alt,opacity)==actual)return 1;
+    }
+    return 0;
+}
+static void bind_previous(Image a){
+    VkDescriptorImageInfo ti={sampler,a.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr=S(WRITE_DESCRIPTOR_SET);wr.dstSet=ds;wr.dstBinding=1;
+    wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr.pImageInfo=&ti;
+    vkUpdateDescriptorSets(dev,1,&wr,0,0);
+}
+static void draw_pass(VkCommandBuffer c,VkFramebuffer fb,VkRenderPass pass,uint32_t w,uint32_t h,unsigned flags,unsigned reserved){
+    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
+    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=pass;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};
+    if(pass==rp){bi.clearValueCount=1;bi.pClearValues=&clear;}
     vkCmdBeginRenderPass(c,&bi,VK_SUBPASS_CONTENTS_INLINE);
     VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
     vkCmdSetViewport(c,0,1,&vp);vkCmdSetScissor(c,0,1,&sc);
     vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);vkCmdBindDescriptorSets(c,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&ds,0,0);
     VkDeviceSize offset=0;vkCmdBindVertexBuffers(c,0,1,&vb.b,&offset);
-    Push push={{640,400},{(float)w,(float)h},flags,0};vkCmdPushConstants(c,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
+    Push push={{640,400},{(float)w,(float)h},flags,reserved};
+    vkCmdPushConstants(c,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
     vkCmdDraw(c,3,1,0,0);vkCmdEndRenderPass(c);
+}
+static int test_case(uint32_t w,uint32_t h,unsigned flags,int opacity){
+    NEED(w>0&&h>0&&w<=16384&&h<=16384);
+    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;OK(vkCreateFramebuffer(dev,&fi,0,&fb));
+    Image prior={0};
+    if(opacity>=0){
+        prior=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
+        /* First draw opaque background into the actual target. Binding 1
+         * still points to dummy tex, never the active attachment. */
+        VkCommandBuffer first=begin();draw_pass(first,fb,rp,w,h,128,BACKDROP);
+        transition(first,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+        transition(first,prior.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkImageCopy region={0};region.srcSubresource=region.dstSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};region.extent=(VkExtent3D){w,h,1};
+        vkCmdCopyImage(first,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region);
+        transition(first,prior.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
+        transition(first,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        end(first);bind_previous(prior);
+    }
+    VkCommandBuffer c=begin();
+    draw_pass(c,fb,opacity<0?rp:rp_load,w,h,flags|(opacity<0?0u:256u),opacity<0?0u:(unsigned)opacity);
     transition(c,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
     VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){w,h,1};vkCmdCopyImageToBuffer(c,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&copy);
     VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
@@ -302,22 +359,37 @@ static int test(uint32_t w,uint32_t h,unsigned flags){
         double mn=fmin(b[0],fmin(b[1],b[2]));uint16_t actual=p[(size_t)y*w+x];
         unsigned dx=logical_pixel(x,640,w),dy=logical_pixel(y,400,h);
         /* exclude a thin geometric edge band from strict interior checks */
-        if(mn>.002){interior++;uint16_t ref=refpixel(b,dx,dy,flags);int e=channel_error(actual,ref);if((flags&64)&&ref==0xdead)discarded++;if(!e)exact++;else if(e==1&&(!(flags&64)||(ref!=0xdead&&actual!=0xdead)))one++;else if(nearest_boundary_match(b,dx,dy,flags,actual)){boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);}else {if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}}
+        if(mn>.002){
+            interior++;
+            uint16_t raw=refpixel(b,dx,dy,flags);
+            int keyed_discard=(flags&64)&&raw==0xdead;
+            if(keyed_discard)discarded++;
+            uint16_t ref=opacity<0?raw:compose_reference(raw,(unsigned)opacity);
+            int e=channel_error(actual,ref);
+            if(!e)exact++;
+            else if(e==1&&!keyed_discard&&(opacity<0?actual!=0xdead:opacity>0))one++;
+            else if(opacity<0?nearest_boundary_match(b,dx,dy,flags,actual):
+                composite_boundary_match(b,dx,dy,flags,(unsigned)opacity,actual)){
+                boundary++;if(boundary<=3)printf("nearest boundary %u,%u expected=%04x got=%04x\n",x,y,ref,actual);
+            }else{if(bad<3)fprintf(stderr,"pixel %u,%u expected=%04x got=%04x\n",x,y,ref,actual);bad++;}
+        }
         else if(mn<-.002){outside++;if(actual!=0xdead)coverage++;}
         else edges++;
     }
-    printf("VULKAN_3D_CASE %ux%u flags=%u interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u discarded=%u\n",w,h,flags,interior,exact,one,boundary,bad,outside,coverage,edges,discarded);
+    printf("VULKAN_3D_CASE %ux%u flags=%u opacity=%d interior=%u exact=%u one_lsb=%u nearest_boundary=%u bad=%u outside=%u coverage_errors=%u edge_band=%u discarded=%u\n",w,h,flags,opacity,interior,exact,one,boundary,bad,outside,coverage,edges,discarded);
     vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);freeimage(out);freebuf(read);
+    if(opacity>=0){bind_previous(tex);freeimage(prior);}
     /* Keep strict error checks, but collect all cases before returning. */
     return interior>10000&&outside>10000&&coverage==0&&bad==0&&exact*100u>=interior*99u&&boundary*10000u<=interior&&
         (!(flags&64)||(discarded>1000&&interior-discarded>1000));
 }
+static int test(uint32_t w,uint32_t h,unsigned flags){return test_case(w,h,flags,-1);}
 int main(void){
 #ifdef _WIN32
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v5 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v6 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
@@ -343,10 +415,12 @@ int main(void){
     fixture.planes=16;
     replace_fixture(&fixture,direct16,sizeof(direct16),NULL,0,expected);
     for(unsigned i=0;i<4;i++){failures+=!test(640,400,decoded_modes[i]);failures+=!test(1440,1080,decoded_modes[i]);}
-    vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
+    const unsigned opacities[]={0,25,50,100};
+    for(unsigned i=0;i<4;i++){failures+=!test_case(640,400,127,(int)opacities[i]);failures+=!test_case(1440,1080,127,(int)opacities[i]);}
+    vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp_load,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=40");
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=48");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
