@@ -53,7 +53,7 @@ jobs:
           test -n "$icd"
           VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe > /tmp/matrox-spv/probe.log 2>&1 || { cat /tmp/matrox-spv/probe.log; exit 1; }
           cat /tmp/matrox-spv/probe.log
-          grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=54' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=56' /tmp/matrox-spv/probe.log
           if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
       - name: Cross-compile standalone Win32 x86 GPU verification executable
         run: |
