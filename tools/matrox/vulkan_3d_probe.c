@@ -566,86 +566,26 @@ static MsiGpuDrawBatch multi_batch;
 static void set_palette_color(uint8_t *p,unsigned idx,unsigned color){
     p[2u*idx]=(uint8_t)color;p[2u*idx+1u]=(uint8_t)(color>>8);
 }
+#include "msi_vk_batch_replay.h"
 static uint16_t *render_recorded(const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before){
-    Image textures[MSI_GPU_SNAPSHOT_MAX]={0};
-    VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX]={0};VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
-    VkDescriptorPool pool;VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*batch->snapshots.count};
-    VkDescriptorPoolCreateInfo pi=S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=batch->snapshots.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
-    OK(vkCreateDescriptorPool(dev,&pi,0,&pool));
-    for(unsigned i=0;i<batch->snapshots.count;i++)layouts[i]=dsl;
-    VkDescriptorSetAllocateInfo da=S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=layouts;
-    OK(vkAllocateDescriptorSets(dev,&da,sets));
-    Buffer stage=buffer(batch->snapshots.decoded_used*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    writebuf(stage,batch->snapshots.decoded,batch->snapshots.decoded_used*4u);
-    for(unsigned i=0;i<batch->snapshots.count;i++){
-        textures[i]=image(batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
-        VkDescriptorImageInfo ti[2]={{sampler,textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {sampler,tex.v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-        VkWriteDescriptorSet wr[2]={S(WRITE_DESCRIPTOR_SET),S(WRITE_DESCRIPTOR_SET)};
-        for(unsigned k=0;k<2;k++){
-            wr[k].dstSet=sets[i];wr[k].dstBinding=k;wr[k].descriptorCount=1;
-            wr[k].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[k].pImageInfo=&ti[k];
-        }
-        vkUpdateDescriptorSets(dev,2,wr,0,0);
-    }
-    Buffer vertices=buffer(batch->count*3u*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    writebuf(vertices,batch->vertices,batch->count*3u*sizeof(Vertex));
-    Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;
-    OK(vkCreateFramebuffer(dev,&fi,0,&fb));
-    VkCommandBuffer cmd=begin();
-    for(unsigned i=0;i<batch->snapshots.count;i++){
-        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy br={0};br.bufferOffset=batch->snapshots.entries[i].decoded_offset*4u;
-        br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,1};
-        vkCmdCopyBufferToImage(cmd,stage.b,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
-        transition(cmd,textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
-    }
-    Buffer initial={0};
-    if(before){
-        initial=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        writebuf(initial,before,(size_t)w*h*2);
-        transition(cmd,out.i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){w,h,1};
-        vkCmdCopyBufferToImage(cmd,initial.b,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
-        transition(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    }
-    VkClearValue clear={.color.uint32={0xdead,0,0,0}};
-    VkRenderPassBeginInfo bi=S(RENDER_PASS_BEGIN_INFO);bi.renderPass=before?rp_load:rp;bi.framebuffer=fb;bi.renderArea.extent=(VkExtent2D){w,h};if(!before){bi.clearValueCount=1;bi.pClearValues=&clear;}
-    vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
-    vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
-    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);
-    VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&vertices.b,&off);
-    for(unsigned i=0;i<batch->count;i++){
-        const MsiGpuDraw *draw=&batch->draws[i];
-        Push push={{640,400},{(float)w,(float)h},draw->flags,0};
-        vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&sets[draw->texture_id],0,0);
-        vkCmdDraw(cmd,3,1,i*3u,0);
-    }
-    vkCmdEndRenderPass(cmd);
-    transition(cmd,out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
-    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
-    vkCmdCopyImageToBuffer(cmd,out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,read.b,1,&br);
-    VkBufferMemoryBarrier bar=S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
-    bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=read.b;bar.size=VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);end(cmd);
-    void *mapped;OK(vkMapMemory(dev,read.m,0,read.size,0,&mapped));const uint16_t *p=mapped;
-
+    MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
+    MsiVkBatchWork work={0};
     uint16_t *result=malloc((size_t)w*h*2);NEED(result);
-    memcpy(result,p,(size_t)w*h*2);vkUnmapMemory(dev,read.m);
-    vkDestroyFramebuffer(dev,fb,0);vkDestroyDescriptorPool(dev,pool,0);
-    for(unsigned i=0;i<batch->snapshots.count;i++)freeimage(textures[i]);
-    freeimage(out);freebuf(stage);freebuf(vertices);freebuf(read);if(before)freebuf(initial);
+    OK(msi_vk_batch_render(&c,&work,batch,w,h,before,result,0));
     return result;
+}
+static void test_batch_recovery(const MsiGpuDrawBatch *batch){
+    MsiVkBatchContext c={phys,dev,queue,cp,mem,dsl,pl,rp,rp_load,pipe,sampler,tex.v};
+    MsiVkBatchWork work={0};uint16_t result[64];
+    for(unsigned fault=1;fault<=6;fault++){
+        for(unsigned i=0;i<64;i++)result[i]=0xbeef;
+        NEED(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!work.pending&&!work.pool&&!work.cmd&&!work.fb&&!work.out.i&&!work.stage.b);
+        for(unsigned i=0;i<64;i++)NEED(result[i]==0xbeef);
+    }
+    OK(msi_vk_batch_render(&c,&work,batch,8,8,NULL,result,0));
+    NEED(!work.pending&&!work.pool&&!work.cmd);
+    puts("VULKAN_3D_BATCH_RECOVERY_PASS injected=6");
 }
 
 static int test_indexed_batch(unsigned w,unsigned h){
@@ -681,6 +621,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(verts,0,sizeof(verts));
     /* Destroy the caller's current contents before any GPU access. */
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
+    if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){

@@ -4,6 +4,8 @@ import pathlib
 import re
 import sys
 src=pathlib.Path(sys.argv[1]).read_text(encoding="utf8")
+for extra in sys.argv[3:]:
+    src += "\n" + pathlib.Path(extra).read_text(encoding="utf8")
 names=sorted(set(re.findall(r"\b(vk[A-Z][A-Za-z0-9_]*)\s*\(",src)))
 if not names or "vkCreateInstance" not in names:
     raise ValueError("missing Vulkan commands")
