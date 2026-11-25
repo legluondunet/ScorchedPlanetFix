@@ -553,6 +553,7 @@ jobs:
 
       # Artifacts already use ZIP internally. Upload 7 flat files, not ZIP-in-ZIP.
       - name: Upload verified Windows GameFrame files
+        if: github.base_ref != 'feature/matrox-vulkan-presentation' || contains(github.event.pull_request.labels.*.name, 'launcher-test')
         uses: actions/upload-artifact@v6
         with:
           name: ScorchedPlanetFix-v2.0.2-Windows-x64

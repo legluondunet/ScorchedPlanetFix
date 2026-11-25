@@ -12,6 +12,8 @@ on:
       - 'tools/matrox/msi_gpu_batch_test.c'
       - 'tools/matrox/msi_gpu_snapshot.h'
       - 'tools/matrox/msi_gpu_snapshot_test.c'
+      - 'tools/matrox/msi_gpu_draw_batch.h'
+      - 'tools/matrox/msi_gpu_draw_batch_test.c'
       - 'tools/matrox/embed_world_spv.py'
       - 'tools/matrox/gen_world_vk_dispatch.py'
       - '.github/workflows/matrox-vulkan-3d.yml'
@@ -48,6 +50,8 @@ jobs:
           /tmp/matrox-spv/batch-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_snapshot_test.c -o /tmp/matrox-spv/snapshot-test
           /tmp/matrox-spv/snapshot-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_draw_batch_test.c -o /tmp/matrox-spv/draw-batch-test
+          /tmp/matrox-spv/draw-batch-test
           cc -std=c11 -O2 -Wall -Wextra -I/tmp/matrox-spv tools/matrox/vulkan_3d_probe.c -o /tmp/matrox-spv/world-probe -lvulkan -lm
           icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
           test -n "$icd"

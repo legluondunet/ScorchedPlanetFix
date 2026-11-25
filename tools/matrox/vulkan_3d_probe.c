@@ -19,14 +19,14 @@
 #include "msi_world_bilinear.h"
 #include "msi_gpu_texel.h"
 #include "msi_gpu_batch.h"
-#include "msi_gpu_snapshot.h"
+#include "msi_gpu_draw_batch.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
 #define OK(x) do { VkResult r_=(x); if(r_!=VK_SUCCESS){fprintf(stderr,"%s: %d\n",#x,r_);exit(1);} }while(0)
 #define NEED(x) do {if(!(x)){fprintf(stderr,"check failed: %s\n",#x);exit(1);}}while(0)
 #define S(t) {.sType=VK_STRUCTURE_TYPE_##t}
-typedef struct {float xy[2],uv[2],iw,m[3];} Vertex;
+typedef MsiGpuVertex Vertex;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} Push;
 typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} Buffer;
 typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} Image;
@@ -560,7 +560,8 @@ static int test_batch(unsigned w,unsigned h){
 #define MULTI_N 16u
 static uint8_t multi_raw[MULTI_N*516u];
 static uint32_t multi_decoded[MULTI_N*4u];
-static MsiGpuSnapshots multi_cache;
+static MsiGpuDrawBatch multi_batch;
+#define multi_cache (multi_batch.snapshots)
 static void set_palette_color(uint8_t *p,unsigned idx,unsigned color){
     p[2u*idx]=(uint8_t)color;p[2u*idx+1u]=(uint8_t)(color>>8);
 }
@@ -569,21 +570,18 @@ static int test_indexed_batch(unsigned w,unsigned h){
     uint8_t source[4]={1,0,1,1},palette[512]={0};
     multi_cache.raw=multi_raw;multi_cache.raw_capacity=sizeof(multi_raw);
     multi_cache.decoded=multi_decoded;multi_cache.decoded_capacity=sizeof(multi_decoded)/sizeof(multi_decoded[0]);
-    msi_gpu_snapshot_reset(&multi_cache);
+    msi_gpu_draw_batch_reset(&multi_batch);
     /* Keyed green is never drawn. Blue remains available for direct writes. */
     set_palette_color(palette,0,0x07e0);
     set_palette_color(palette,2,0x001f);
     Vertex verts[MULTI_N*3u]={0};
-    unsigned ids[MULTI_N],expected[MULTI_N],hits=0,misses=0;
+    unsigned expected[MULTI_N];
     for(unsigned i=0;i<MULTI_N;i++){
         unsigned pattern=i%4u;
         unsigned color=(pattern&1u)?0xf800:0xffff;
         set_palette_color(palette,1,color);
         source[0]=(uint8_t)(pattern>=2u?2u:1u);
-        unsigned id=9999;int rc=msi_gpu_snapshot_indexed8(&multi_cache,&state,source,4,palette,512,&id);
-        NEED(rc==MSI_GPU_SNAPSHOT_HIT||rc==MSI_GPU_SNAPSHOT_NEW);
-        if(rc==MSI_GPU_SNAPSHOT_NEW)misses++;else hits++;
-        ids[i]=id;expected[i]=pattern>=2u?0x001f:color;
+        expected[i]=pattern>=2u?0x001f:color;
         float x=(float)((i%8u)*80u+8u),y=(float)((i/8u)*80u+8u);
         verts[3*i].xy[0]=x;verts[3*i].xy[1]=y;
         verts[3*i+1].xy[0]=x+64;verts[3*i+1].xy[1]=y;
@@ -591,8 +589,13 @@ static int test_indexed_batch(unsigned w,unsigned h){
         verts[3*i].uv[0]=0;verts[3*i].uv[1]=0;
         verts[3*i+1].uv[0]=1;verts[3*i+1].uv[1]=0;
         verts[3*i+2].uv[0]=0;verts[3*i+2].uv[1]=1;
+        MsiGpuRect bounds={(unsigned)x*w/640u,(unsigned)y*h/400u,
+            ((unsigned)(x+64)*w+639u)/640u,((unsigned)(y+64)*h+399u)/400u};
+        NEED(msi_gpu_draw_batch_push(&multi_batch,&verts[3*i],bounds,70u,&state,source,4,palette,512)==MSI_GPU_DRAW_ACCEPT);
     }
-    NEED(multi_cache.count==4&&hits==12&&misses==4);
+    unsigned hits=multi_batch.hits,misses=multi_batch.misses;
+    NEED(multi_batch.count==MULTI_N&&multi_cache.count==4&&hits==12&&misses==4);
+    memset(verts,0,sizeof(verts));
     /* Destroy the caller's current contents before any GPU access. */
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     Image textures[MULTI_N]={0};
@@ -616,7 +619,8 @@ static int test_indexed_batch(unsigned w,unsigned h){
         }
         vkUpdateDescriptorSets(dev,2,wr,0,0);
     }
-    Buffer vertices=buffer(sizeof(verts),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(vertices,verts,sizeof(verts));
+    Buffer vertices=buffer(multi_batch.count*3u*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    writebuf(vertices,multi_batch.vertices,multi_batch.count*3u*sizeof(Vertex));
     Image out=image(w,h,VK_FORMAT_R16_UINT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Buffer read=buffer((VkDeviceSize)w*h*2,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VkFramebuffer fb;VkFramebufferCreateInfo fi=S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=rp;fi.attachmentCount=1;fi.pAttachments=&out.v;fi.width=w;fi.height=h;fi.layers=1;
@@ -638,10 +642,11 @@ static int test_indexed_batch(unsigned w,unsigned h){
     vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
     vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipe);
     VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&vertices.b,&off);
-    Push push={{640,400},{(float)w,(float)h},70u,0};
-    vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
-    for(unsigned i=0;i<MULTI_N;i++){
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&sets[ids[i]],0,0);
+    for(unsigned i=0;i<multi_batch.count;i++){
+        const MsiGpuDraw *draw=&multi_batch.draws[i];
+        Push push={{640,400},{(float)w,(float)h},draw->flags,0};
+        vkCmdPushConstants(cmd,pl,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pl,0,1,&sets[draw->texture_id],0,0);
         vkCmdDraw(cmd,3,1,i*3u,0);
     }
     vkCmdEndRenderPass(cmd);
@@ -673,7 +678,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
         w,h,MULTI_N,misses,hits,checked,keyed,visible,errors);
     vkUnmapMemory(dev,read.m);vkDestroyFramebuffer(dev,fb,0);vkDestroyDescriptorPool(dev,pool,0);
     for(unsigned i=0;i<multi_cache.count;i++)freeimage(textures[i]);
-    freeimage(out);freebuf(stage);freebuf(vertices);freebuf(read);msi_gpu_snapshot_reset(&multi_cache);
+    freeimage(out);freebuf(stage);freebuf(vertices);freebuf(read);msi_gpu_draw_batch_reset(&multi_batch);
     return checked>10000&&keyed>1000&&visible>1000&&errors==0;
 }
 
@@ -682,7 +687,7 @@ int main(void){
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v9 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v10 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
