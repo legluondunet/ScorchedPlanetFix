@@ -17,6 +17,7 @@
 #include <string.h>
 #include "world_spv.h"
 #include "msi_world_bilinear.h"
+#include "msi_gpu_texel.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -46,7 +47,7 @@ static Image tex;
 static Buffer vb,upload;
 static uint32_t qfamily;
 /* Green is discarded; white is visible but forbids filtering (index exception). */
-static const uint32_t pixels[4]={0xf800,0x107e0,0x001f,0x2ffff};
+static uint32_t pixels[4]={0xf800,0x107e0,0x001f,0x2ffff};
 /* Asymmetric triangle, deliberate negative and >1 UVs, varying invW
  * and lighting. Test far from edges; separately count coverage errors. */
 static const Vertex tri[3]={
@@ -178,6 +179,23 @@ static void setup(void){
     VkGraphicsPipelineCreateInfo gi=S(GRAPHICS_PIPELINE_CREATE_INFO);gi.stageCount=2;gi.pStages=stages;gi.pVertexInputState=&vi;gi.pInputAssemblyState=&ia;gi.pViewportState=&vp;gi.pRasterizationState=&rs;gi.pMultisampleState=&ms;gi.pColorBlendState=&bs;gi.pDynamicState=&dy;gi.layout=pl;gi.renderPass=rp;
     OK(vkCreateGraphicsPipelines(dev,VK_NULL_HANDLE,1,&gi,0,&pipe));vkDestroyShaderModule(dev,vs,0);vkDestroyShaderModule(dev,fs,0);
 }
+/* Replace the sampled image contents only after prior draws have completed.
+ * The independent expected packed array drives the CPU oracle; the GPU
+ * receives bytes decoded from original-style source and palette fixtures. */
+static void replace_fixture(const MsiGpuTexture *s,const uint8_t *src,size_t src_size,
+    const uint8_t *lut,size_t lut_size,const uint32_t expected[4]){
+    uint32_t decoded[4];NEED(msi_gpu_decode_world(s,src,src_size,lut,lut_size,decoded,4));
+    NEED(memcmp(decoded,expected,sizeof(decoded))==0);
+    memcpy(pixels,expected,sizeof(pixels));writebuf(upload,decoded,sizeof(decoded));
+    VkCommandBuffer c=begin();
+    transition(c,tex.i,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy copy={0};copy.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent=(VkExtent3D){2,2,1};
+    vkCmdCopyBufferToImage(c,upload.b,tex.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+    transition(c,tex.i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);end(c);
+    printf("VULKAN_3D_FIXTURE decoded_planes=%u\n",s->planes);
+}
 static double cross(double a,double b,double c,double d){return a*d-b*c;}
 static void weights(double x,double y,double *w){
     double ax=tri[0].xy[0],ay=tri[0].xy[1],bx=tri[1].xy[0]-ax,by=tri[1].xy[1]-ay,cx=tri[2].xy[0]-ax,cy=tri[2].xy[1]-ay;
@@ -299,7 +317,7 @@ int main(void){
     if(!freopen("Vulkan3DProbe.log","w",stdout))return 1;
     if(_dup2(_fileno(stdout),_fileno(stderr))!=0)return 1;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    puts("MatroxVulkan3DProbe x86 v4 / embedded world shaders with key metadata");
+    puts("MatroxVulkan3DProbe x86 v5 / embedded world shaders with key metadata");
     if(!load_world_vk())return 1;
 #endif
     oracle_selftest();
@@ -307,10 +325,28 @@ int main(void){
     const unsigned modes[]={0,1,7,9,15,25,63,64,73,79,127};
     unsigned failures=0;
     for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);i++){failures+=!test(640,400,modes[i]);failures+=!test(1440,1080,modes[i]);}
+    /* Real source encodings: decoded upload versus independently specified
+       oracle values. 4bpp is intentionally nearest only, as in the CPU path. */
+    uint8_t lut[512]={0};
+    lut[6]=0;lut[7]=0xf8;lut[0]=0xe0;lut[1]=7;lut[8]=0x1f;lut[10]=0xff;lut[11]=0xff;
+    const uint8_t indexed8[]={3,0,4,5};
+    const uint8_t indexed4[]={0x03,0x54};
+    const uint8_t direct16[]={0,0xf8,0xe0,7,0x1f,0,0xff,0xff};
+    const uint32_t expected[]={0xf800,0x307e0,0x001f,0xffff};
+    MsiGpuTexture fixture={2,2,8,1,0,0xffff,1,0,0};
+    replace_fixture(&fixture,indexed8,sizeof(indexed8),lut,sizeof(lut),expected);
+    const unsigned decoded_modes[]={64,73,79,127};
+    for(unsigned i=0;i<4;i++){failures+=!test(640,400,decoded_modes[i]);failures+=!test(1440,1080,decoded_modes[i]);}
+    fixture.planes=4;fixture.key=0x07e0;
+    replace_fixture(&fixture,indexed4,sizeof(indexed4),lut,32,expected);
+    failures+=!test(640,400,64);failures+=!test(1440,1080,64);
+    fixture.planes=16;
+    replace_fixture(&fixture,direct16,sizeof(direct16),NULL,0,expected);
+    for(unsigned i=0;i<4;i++){failures+=!test(640,400,decoded_modes[i]);failures+=!test(1440,1080,decoded_modes[i]);}
     vkDestroyPipeline(dev,pipe,0);vkDestroyRenderPass(dev,rp,0);vkDestroyDescriptorPool(dev,dp,0);vkDestroyPipelineLayout(dev,pl,0);vkDestroyDescriptorSetLayout(dev,dsl,0);
     vkDestroySampler(dev,sampler,0);freeimage(tex);freebuf(vb);freebuf(upload);vkDestroyCommandPool(dev,cp,0);vkDestroyDevice(dev,0);vkDestroyInstance(inst,0);
     if(failures)printf("VULKAN_3D_OFFSCREEN_FAIL cases_failed=%u\n",failures);
-    else puts("VULKAN_3D_OFFSCREEN_PASS cases=22");
+    else puts("VULKAN_3D_OFFSCREEN_PASS cases=40");
 #ifdef _WIN32
     FreeLibrary(world_vk_loader);
 #endif
