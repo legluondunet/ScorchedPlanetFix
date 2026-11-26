@@ -81,18 +81,23 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
 
     def test_gpu_roi_gate(self):
         line = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
-        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", line + "GPU_RETIREMENT PASS")
+        single = "GPU_BYPASS_ROI PASS frame=240 draws=1 exact=256000 bytes=80000 full_bytes=1024000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", line + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + "GPU_BYPASS OK")
         r = self.parse(body)["gpu_diagnostics"]["roi"]
         self.assertEqual(r["status"], "validated", r)
         self.assertEqual(r["passes"], 1)
         self.assertEqual(r["bytes"], 23760)
         self.assertEqual(r["reduction_percent"], 97.68)
+        self.assertEqual(r["single_triangle_passes"], 1)
+        self.assertEqual(r["single_triangle_bytes"], 80000)
         for before, after, expected in (
             ("exact=256000 bytes=", "exact=255999 bytes=", "failed"),
             ("bytes=23760", "bytes=23761", "failed"),
             ("GPU_TAGGED_ROI PASS", "GPU_TAGGED_ROI ERROR", "failed"),
             ("GPU_TAGGED_ROI PASS frame=120", "GPU_TAGGED_ROI PASS frame=121", "incomplete"),
             (line, "", "incomplete"),
+            (single, "", "incomplete"),
+            ("GPU_BYPASS_ROI PASS frame=240", "GPU_BYPASS_ROI PASS frame=241", "incomplete"),
         ):
             with self.subTest(before=before):
                 r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]

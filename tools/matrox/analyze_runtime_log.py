@@ -141,6 +141,7 @@ class GpuAudit:
         self.records = {name: [] for name in self.STAGES}
         self.bypass = []
         self.roi = []
+        self.bypass_roi = []
         self.roi_errors = []
         self.errors = []
 
@@ -155,13 +156,13 @@ class GpuAudit:
             self.limits["passes"] = fields(line).get("max_passes")
         elif line.startswith("GPU_BYPASS pilot "):
             self.limits["bypass"] = fields(line).get("max_triangles")
-        elif line.startswith("GPU_TAGGED_ROI "):
+        elif line.startswith(("GPU_TAGGED_ROI ", "GPU_BYPASS_ROI ")):
             outcome = line.split(" ", 2)[1]
             f = fields(line)
             if outcome != "PASS" or any(k not in f for k in ("frame", "draws", "exact", "bytes", "full_bytes")):
                 self.roi_errors.append(line[:200])
             else:
-                self.roi.append(f)
+                (self.bypass_roi if line.startswith("GPU_BYPASS_ROI ") else self.roi).append(f)
         elif line.startswith("GPU_BYPASS OK "):
             self.bypass.append(fields(line))
         elif line.startswith(("GPU_BYPASS FALLBACK ", "GPU_DUAL_VIEW MISMATCH ")):
@@ -192,7 +193,7 @@ class GpuAudit:
     def roi_report(self):
         errors = list(self.roi_errors)
         missing = []
-        for r in self.roi:
+        for r in self.roi + self.bypass_roi:
             if not (r["exact"] == 256000 and r["full_bytes"] == 1024000 and
                     0 < r["bytes"] <= r["full_bytes"] and r["bytes"] % 4 == 0 and
                     1 <= r["draws"] <= 32):
@@ -203,10 +204,17 @@ class GpuAudit:
             missing.append("unmatched full-vs-cropped tagged records")
         if not pairs:
             missing.append("no ROI comparison")
+        if sorted((r["frame"], r["draws"]) for r in self.bypass_roi) != sorted((r["frame"], 1) for r in self.bypass):
+            missing.append("unmatched single-triangle ROI records")
+        if not self.bypass_roi:
+            missing.append("no single-triangle ROI comparison")
         byte_count = sum(r["bytes"] for r in self.roi)
         full_count = sum(r["full_bytes"] for r in self.roi)
         return {"status": "failed" if errors else "incomplete" if missing else "validated",
                 "passes": len(self.roi), "exact_pixels": sum(r["exact"] for r in self.roi),
+                "single_triangle_passes": len(self.bypass_roi),
+                "single_triangle_bytes": sum(r["bytes"] for r in self.bypass_roi),
+                "single_triangle_full_bytes": sum(r["full_bytes"] for r in self.bypass_roi),
                 "bytes": byte_count, "full_bytes": full_count,
                 "reduction_percent": round(100 * (1 - byte_count / full_count), 3)
                     if full_count and not errors else None,
