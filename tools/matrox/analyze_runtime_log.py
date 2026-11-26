@@ -117,6 +117,197 @@ class OpacityAudit:
         return self.latest or {"status": "unavailable", "errors": []}
 
 
+
+class GpuAudit:
+    """Check diagnostic evidence only; never infer exclusive guest ownership."""
+    STAGES = ("GPU_CPU_REPLAY", "GPU_SHADOW", "GPU_TAGGED_BATCH", "GPU_RETIREMENT", "GPU_COVERAGE")
+    SUMMARY = ("GPU_SHADOW_AUTO", "GPU_BYPASS", "GPU_DEFER_AUDIT", "GPU_DEFER_STRICT",
+               "GPU_DUAL_VIEW", "GPU_DUAL_VIEW_RELEASE", "SESSION_VULKAN")
+    REQUIRED = {
+        "GPU_CPU_REPLAY": ("frame", "draws", "exact", "mask_diff", "written"),
+        "GPU_SHADOW": ("frame", "draws", "active", "exact", "one_lsb", "edge", "unexplained", "outside_bounds"),
+        "GPU_TAGGED_BATCH": ("frame", "draws", "written", "untouched", "color_diff", "coverage_diff", "invalid",
+                             "homogeneous", "provenance_checked", "provenance_diff"),
+        "GPU_RETIREMENT": ("frame", "draws", "gpu_tested", "gpu_written", "cpu_written", "errors"),
+        "GPU_COVERAGE": ("frame", "cpu_written", "gpu_written", "unexplained", "outside", "invalid"),
+    }
+
+    def __init__(self):
+        self.init_count = 0
+        self.requested = None
+        self.active = None
+        self.limits = {}
+        self.summaries = {name: {} for name in self.SUMMARY}
+        self.records = {name: [] for name in self.STAGES}
+        self.bypass = []
+        self.errors = []
+
+    def feed(self, line):
+        if line.startswith("msiInit width="):
+            self.init_count += 1
+        elif line.startswith("PREVIEW_RENDERER requested="):
+            self.requested = line.partition("requested=")[2].split()[0]
+        elif line.startswith("PREVIEW_RENDERER active="):
+            self.active = line.partition("active=")[2].split()[0]
+        elif line.startswith("GPU_SHADOW_AUTO enabled "):
+            self.limits["passes"] = fields(line).get("max_passes")
+        elif line.startswith("GPU_BYPASS pilot "):
+            self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_BYPASS OK "):
+            self.bypass.append(fields(line))
+        elif line.startswith(("GPU_BYPASS FALLBACK ", "GPU_DUAL_VIEW MISMATCH ")):
+            self.errors.append(line[:200])
+        else:
+            prefix, _, tail = line.partition(" ")
+            if prefix in self.STAGES:
+                outcome = tail.split(" ", 1)[0]
+                if outcome != "PASS":
+                    self.errors.append(line[:200])
+                    return
+                f = fields(line)
+                if any(k not in f for k in self.REQUIRED[prefix]):
+                    self.errors.append(f"{prefix}: incomplete PASS")
+                    return
+                f["scope"] = tail.partition("scope=")[2].split(" ", 1)[0] or None
+                self.records[prefix].append(f)
+            elif prefix in self.SUMMARY and "=" in tail:
+                f = fields(line)
+                # Per-triangle timing has its own changed= record; only
+                # the cumulative written=/changed= line is a summary.
+                if prefix == "GPU_BYPASS" and "elapsed_ms" in f:
+                    return
+                if self.summaries[prefix].keys() & f.keys():
+                    self.errors.append(f"{prefix}: duplicate summary keys")
+                self.summaries[prefix].update(f)
+
+    def report(self, clean):
+        errors = list(self.errors)
+        missing = []
+        totals = {}
+        def require(name, keys):
+            f = self.summaries[name]
+            absent = [key for key in keys if key not in f]
+            if absent:
+                missing.append(f"{name}: missing {','.join(absent)}")
+                return None
+            return f
+
+        def check(ok, message):
+            if not ok:
+                errors.append(message)
+
+        for name, rows in self.records.items():
+            totals[name] = {"passes": len(rows), "draws": sum(r.get("draws", 0) for r in rows)}
+        totals["GPU_CPU_REPLAY"]["exact_pixels"] = sum(r["exact"] for r in self.records["GPU_CPU_REPLAY"])
+        totals["GPU_RETIREMENT"]["gpu_tested"] = sum(r["gpu_tested"] for r in self.records["GPU_RETIREMENT"])
+        totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
+        result = {"status": "unavailable", "requested": self.requested, "active": self.active,
+                  "limits": self.limits, "summaries": self.summaries, "totals": totals,
+                  "errors": errors, "missing": missing}
+        if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
+            return result
+        if self.init_count != 1:
+            missing.append("one complete MSI init required")
+        if not clean:
+            missing.append("clean session required")
+        if self.active != "vulkan":
+            missing.append("active Vulkan presentation required")
+
+        auto = require("GPU_SHADOW_AUTO", ("sampled", "empty", "passed", "differences", "errors",
+                                           "skipped", "disabled", "counts_ok"))
+        bypass = require("GPU_BYPASS", ("sampled_frames", "empty", "attempted", "passed",
+                                         "failed", "disabled", "written", "changed"))
+        vk = require("SESSION_VULKAN", ("frames", "skipped", "recreates"))
+        if auto:
+            check(auto["sampled"] == sum(auto[k] for k in ("empty", "passed", "differences", "errors", "skipped"))
+                  and auto["counts_ok"] == 1, "automatic sampler accounting mismatch")
+            check(not any(auto[k] for k in ("differences", "errors", "disabled")), "automatic sampler failed")
+            if not self.limits.get("passes") or auto["passed"] != self.limits["passes"]:
+                missing.append("automatic pass limit not reached")
+        if bypass:
+            check(bypass["attempted"] == bypass["passed"] + bypass["failed"] and
+                  bypass["sampled_frames"] == bypass["empty"] + bypass["attempted"],
+                  "single-triangle pilot accounting mismatch")
+            check(not bypass["failed"] and not bypass["disabled"], "single-triangle pilot failed")
+            check(bypass["changed"] <= bypass["written"] and
+                  len(self.bypass) == bypass["passed"] and
+                  sum(r.get("written", 0) for r in self.bypass) == bypass["written"],
+                  "single-triangle pilot record mismatch")
+            if not self.limits.get("bypass") or bypass["passed"] != self.limits["bypass"]:
+                missing.append("single-triangle pilot limit not reached")
+        if vk:
+            if not vk["frames"]:
+                missing.append("no Vulkan presentation")
+            # Recreates/skips are informational; no assertion that every
+            # window transition must be free of legitimate recreates.
+
+        # Require matching per-frame stage records, not just total counts.
+        # One manual F12 comparison can share neither the auto nor pilot scope.
+        shadow = self.records["GPU_SHADOW"]
+        frames = sorted(r["frame"] for r in shadow)
+        for name in self.STAGES:
+            if sorted(r["frame"] for r in self.records[name]) != frames:
+                missing.append(f"{name}: unmatched stage records")
+        if auto:
+            check(sum(r["scope"] in ("auto", "pilot") for r in shadow) == auto["passed"],
+                  "automatic sample count differs from shadow records")
+        if not shadow:
+            missing.append("no full shadow comparison")
+        for r in self.records["GPU_CPU_REPLAY"]:
+            check(r["exact"] == 256000 and r["mask_diff"] == 0 and r["written"] > 0,
+                  f"CPU replay mismatch at {r['frame']}")
+        for r in shadow:
+            check(r["active"] == r["exact"] + r["one_lsb"] + r["edge"] and
+                  not r["unexplained"] and not r["outside_bounds"],
+                  f"shadow mismatch at {r['frame']}")
+        for r in self.records["GPU_TAGGED_BATCH"]:
+            check(r["written"] + r["untouched"] == 256000 and r["written"] > 0 and
+                  not any(r[k] for k in ("color_diff", "coverage_diff", "invalid", "provenance_diff")),
+                  f"tagged batch mismatch at {r['frame']}")
+        for r in self.records["GPU_RETIREMENT"]:
+            check(r["gpu_tested"] in (0, 1) and not r["errors"] and r["cpu_written"] > 0,
+                  f"retirement mismatch at {r['frame']}")
+        for r in self.records["GPU_COVERAGE"]:
+            check(not any(r[k] for k in ("unexplained", "outside", "invalid")),
+                  f"coverage mismatch at {r['frame']}")
+        if not totals["GPU_RETIREMENT"]["gpu_tested"]:
+            missing.append("no homogeneous GPU retirement exercise")
+        # Cross-check matching draw counts and write counts for full samples.
+        if all(sorted(r["frame"] for r in self.records[n]) == frames for n in self.STAGES):
+            ordered = [sorted(self.records[n], key=lambda r: r["frame"]) for n in self.STAGES]
+            for cpu, sh, tag, ret, cov in zip(*ordered):
+                check(cpu["draws"] == sh["draws"] == tag["draws"] == ret["draws"] and
+                      cpu["written"] == ret["cpu_written"] == cov["cpu_written"] and
+                      tag["written"] == cov["gpu_written"] and
+                      (not ret["gpu_tested"] or ret["gpu_written"] == tag["written"]),
+                      f"cross-stage counts mismatch at {cpu['frame']}")
+
+        for name in ("GPU_DEFER_AUDIT", "GPU_DEFER_STRICT"):
+            audit = require(name, ("eligible", "mapped", "invalidated", "unknown", "groups",
+                                   "group_draws", "multi_groups", "multi_draws", "max_group", "counts_ok"))
+            if audit:
+                check(audit["counts_ok"] == 1 and
+                      audit["eligible"] == audit["mapped"] + audit["invalidated"] + audit["unknown"] and
+                      audit["invalidated"] == audit["group_draws"] and
+                      audit["multi_groups"] <= audit["groups"] <= audit["group_draws"] and
+                      audit["multi_draws"] <= audit["group_draws"] and audit["max_group"] <= 32,
+                      f"{name}: accounting mismatch")
+        dual = require("GPU_DUAL_VIEW", ("mapped", "guard", "checks", "mismatch", "thread_checks", "foreign"))
+        release = require("GPU_DUAL_VIEW_RELEASE", ("success",))
+        if dual:
+            check(dual["guard"] == 0 and dual["mismatch"] == 0, "shared mapping mismatch or unexpected protection")
+            if dual["mapped"] != 1 or not dual["checks"] or not dual["thread_checks"]:
+                missing.append("shared mapping not exercised")
+            # Foreign API calls invalidate a same-thread-only pilot assumption,
+            # not the correctness of the current immediate renderer.
+            if dual["foreign"]:
+                missing.append("foreign API calls observed")
+        if release:
+            check(release["success"] == 1, "shared mapping release failed")
+        result["status"] = "failed" if errors else "incomplete" if missing else "validated"
+        return result
+
+
 def parse_log(path: Path) -> dict:
     result = {
         "file": str(path), "status": "incomplete", "errors": [],
@@ -136,11 +327,13 @@ def parse_log(path: Path) -> dict:
         "game_global_nonnull_changes_observed": 0, "last_game_global": None,
     }
     opacity = OpacityAudit()
+    gpu = GpuAudit()
     try:
         with path.open("r", encoding="utf-8", errors="replace") as log:
             for raw in log:
                 line = raw.strip()
                 opacity.feed(line)
+                gpu.feed(line)
                 if line.startswith("SYS-OS: runtime="):
                     result["runtime_platform"] = line.partition("runtime=")[2]
                 elif line.startswith("SYS-WINE: version="):
@@ -209,6 +402,7 @@ def parse_log(path: Path) -> dict:
                             result["av_sites"].append(site)
     except (OSError, UnicodeError) as e:
         result["opacity_audit"] = {"status": "unavailable", "errors": []}
+        result["gpu_diagnostics"] = gpu.report(False)
         result["status"] = "unreadable"
         result["errors"].append(str(e))
         return result
@@ -223,6 +417,7 @@ def parse_log(path: Path) -> dict:
             result["status"] = "clean_exit"
         else:
             result["status"] = "exit_with_live_heaps"
+    result["gpu_diagnostics"] = gpu.report(result["status"] == "clean_exit")
     return result
 
 def main(argv=None) -> int:
@@ -230,6 +425,8 @@ def main(argv=None) -> int:
     parser.add_argument("logs", type=Path, nargs="+")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--assert-clean", action="store_true")
+    parser.add_argument("--assert-gpu-diagnostics", action="store_true",
+                        help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
     reports = [parse_log(p) for p in args.logs]
     if args.json:
@@ -245,9 +442,12 @@ def main(argv=None) -> int:
                   f"global_null_changes(observed)={r['game_global_null_changes_observed']} "
                 f"space_evaluations={r['space_char_evaluations']} "
                 f"space_suppressed={r['space_char_suppressed']} "
-                f"opacity={r['opacity_audit']['status']}")
+                f"opacity={r['opacity_audit']['status']} "
+                f"gpu_diagnostics={r['gpu_diagnostics']['status']}")
             for error in r["errors"]:
                 print(f"  ERROR: {error}", file=sys.stderr)
+    if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
+        return 1
     if args.assert_clean and any(r["status"] != "clean_exit" for r in reports):
         return 1
     return 2 if any(r["status"] == "unreadable" for r in reports) else 0

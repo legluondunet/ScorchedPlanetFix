@@ -18,6 +18,74 @@ class RuntimeLogTests(unittest.TestCase):
             path.write_text(body, encoding="utf-8")
             return analyzer.parse_log(path)
 
+    GPU_SESSION = """msiInit width=640
+PREVIEW_RENDERER requested=vulkan (experimental)
+PREVIEW_RENDERER active=vulkan (CPU raster)
+GPU_SHADOW_AUTO enabled sample=1/120 max_passes=1
+GPU_BYPASS pilot max_triangles=1
+GPU_CPU_REPLAY PASS frame=120 draws=8 exact=256000 mask_diff=0 written=100
+GPU_SHADOW PASS frame=120 draws=8 active=90 exact=88 one_lsb=1 edge=1 unexplained=0 outside_bounds=0 scope=auto
+GPU_TAGGED_BATCH PASS frame=120 draws=8 written=99 untouched=255901 color_diff=0 coverage_diff=0 invalid=0 homogeneous=1 provenance_checked=99 provenance_diff=0
+GPU_RETIREMENT PASS frame=120 draws=8 gpu_tested=1 gpu_written=99 cpu_written=100 errors=0
+GPU_COVERAGE PASS frame=120 cpu_written=100 gpu_written=99 unexplained=0 outside=0 invalid=0
+GPU_BYPASS OK frame=240 written=5
+GPU_BYPASS changed= 4 elapsed_ms= 1
+GPU_DEFER_AUDIT eligible= 10 mapped= 2
+GPU_DEFER_AUDIT invalidated= 8 unknown= 0
+GPU_DEFER_AUDIT groups= 2 group_draws= 8
+GPU_DEFER_AUDIT multi_groups= 2 multi_draws= 8
+GPU_DEFER_AUDIT max_group= 4 counts_ok= 1
+GPU_DEFER_STRICT eligible= 9 mapped= 2
+GPU_DEFER_STRICT invalidated= 7 unknown= 0
+GPU_DEFER_STRICT groups= 3 group_draws= 7
+GPU_DEFER_STRICT multi_groups= 2 multi_draws= 6
+GPU_DEFER_STRICT max_group= 3 counts_ok= 1
+GPU_DUAL_VIEW mapped=1 guard=0
+GPU_DUAL_VIEW checks= 4 mismatch= 0
+GPU_DUAL_VIEW thread_checks= 55 foreign= 0
+GPU_DUAL_VIEW_RELEASE success= 1
+GPU_SHADOW_AUTO sampled= 2 empty= 1
+GPU_SHADOW_AUTO passed= 1 differences= 0
+GPU_SHADOW_AUTO errors= 0 skipped= 0
+GPU_SHADOW_AUTO disabled= 0 counts_ok= 1
+GPU_BYPASS sampled_frames= 1 empty= 0
+GPU_BYPASS attempted= 1 passed= 1
+GPU_BYPASS failed= 0 disabled= 0
+GPU_BYPASS written= 5 changed= 4
+SESSION_VULKAN frames= 300 skipped= 0
+SESSION_VULKAN present_ms= 2 recreates= 0
+msiExit total_frames= 300 triangles= 1200
+MSI_HEAP_TRACKER exit_live= 0 peak_live= 5
+SHUTDOWN_COMPLETE elapsed_ms= 2
+"""
+    def test_gpu_full_diagnostic_gate(self):
+        r = self.parse(self.GPU_SESSION)["gpu_diagnostics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["totals"]["GPU_CPU_REPLAY"]["exact_pixels"], 256000)
+        self.assertEqual(r["totals"]["GPU_RETIREMENT"]["gpu_tested"], 1)
+
+    def test_gpu_gate_rejects_contradictory_and_missing_evidence(self):
+        for before, after, expected in (
+            ("mask_diff=0", "mask_diff=1", "failed"),
+            ("cpu_written=100 errors=0", "cpu_written=101 errors=0", "failed"),
+            ("GPU_RETIREMENT PASS", "GPU_RETIREMENT ERROR", "failed"),
+            ("GPU_DUAL_VIEW_RELEASE success= 1", "", "incomplete"),
+            ("foreign= 0", "foreign= 1", "incomplete"),
+            ("max_passes=1", "max_passes=24", "incomplete"),
+            ("GPU_DUAL_VIEW mapped=1", "GPU_DUAL_VIEW mapped=0", "incomplete"),
+            ("GROUP_NOT_PRESENT", "GROUP_NOT_PRESENT", "validated"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(self.GPU_SESSION.replace(before, after))["gpu_diagnostics"]
+                self.assertEqual(r["status"], expected, r)
+
+    def test_gpu_legacy_and_truncation(self):
+        self.assertEqual(self.parse("msiInit width=640\n")["gpu_diagnostics"]["status"], "unavailable")
+        r = self.parse(self.GPU_SESSION.split("GPU_DEFER_AUDIT")[0])["gpu_diagnostics"]
+        self.assertNotEqual(r["status"], "validated")
+        old = "\n".join(line for line in self.GPU_SESSION.splitlines() if not line.startswith(("GPU_DUAL_VIEW", "GPU_DEFER_STRICT")))
+        self.assertEqual(self.parse(old)["gpu_diagnostics"]["status"], "incomplete")
+
     def test_clean_exit_with_normal_null_global(self):
         r = self.parse("""msiInit width=640 height=400 planes=16 zbuffer=0 debug=0
 GAME_GLOBAL_50DCD0 phase=pre_callback frame=0 ptr=0x00000000 prior_ptr=0xFFFFFFFF counter_50DCC0=0x00000000 callback_depth=0
