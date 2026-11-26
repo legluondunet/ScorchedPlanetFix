@@ -482,6 +482,9 @@ static MsiGpuWave g_gpu_profile_wave;
 typedef struct {
     MsiGpuDrawBatch batch;
     BYTE *before,*after,*written;
+    /* Timed original CPU loops only for this owned reference wave. */
+    DWORD loop_ticks;
+    unsigned loop_draws,loop_untimed;
 } MsiGpuCaptureSlot;
 static MsiGpuCaptureSlot g_gpu_capture_slots[2];
 static MsiGpuCaptureSlot *g_gpu_capture_current=&g_gpu_capture_slots[0];
@@ -494,6 +497,7 @@ static unsigned g_gpu_capture_sample;
 static MsiGpuShadowSampler g_gpu_shadow_auto;
 static struct {unsigned waves,copied,changed,preserved,rejected;} g_gpu_publish;
 static unsigned g_gpu_capture_bypass;
+static DWORD g_gpu_pilot_alloc_ticks,g_gpu_pilot_snapshot_ticks;
 static struct {unsigned frames,last_frame,attempted,passed,failed,empty,written,changed,disabled;} g_gpu_bypass;
 _Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
 _Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
@@ -1048,6 +1052,19 @@ static void color_allocate(unsigned bytes,int dual){
     g_color=alloc(bytes);g_color_guest=g_color;
 }
 
+/* A reserved sentinel distinguishes an absent clock from a real zero
+ * interval. Diagnostics only, called on the existing sampled paths. */
+static MSI_INT64 gpu_cost_now(void){
+    MSI_LARGE_INTEGER q;
+    return g_cap_frequency&&QueryPerformanceCounter(&q)&&q.QuadPart>0?q.QuadPart:0;
+}
+static DWORD gpu_cost_elapsed(MSI_INT64 begin){
+    MSI_INT64 end=begin?gpu_cost_now():0;
+    return begin&&end>=begin&&end-begin<4294967295LL?(DWORD)(end-begin):UINT32_MAX;
+}
+static void gpu_capture_clear_loop(MsiGpuCaptureSlot *slot){
+    slot->loop_ticks=slot->loop_draws=slot->loop_untimed=0;
+}
 static void gpu_capture_release(void){
     msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_SKIP);
     for(unsigned i=0;i<2u;i++){
@@ -1060,7 +1077,9 @@ static void gpu_capture_release(void){
         slot->before=slot->after=slot->written=NULL;
         slot->batch.snapshots.raw=NULL;slot->batch.snapshots.decoded=NULL;
         msi_gpu_draw_batch_reset(&slot->batch);
+        gpu_capture_clear_loop(slot);
     }
+    g_gpu_pilot_alloc_ticks=g_gpu_pilot_snapshot_ticks=UINT32_MAX;
     g_gpu_capture_current=&g_gpu_capture_slots[0];g_gpu_capture_best=&g_gpu_capture_slots[1];
     g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=g_gpu_capture_sample=g_gpu_capture_bypass=0;
 }
@@ -1080,6 +1099,7 @@ static void gpu_capture_begin(void){
     unsigned slots=bypass?1u:2u;
     unsigned raw_bytes=bypass?GPU_CAPTURE_PILOT_RAW_BYTES:GPU_CAPTURE_RAW_BYTES;
     unsigned decoded_count=bypass?GPU_CAPTURE_PILOT_TEXELS:GPU_CAPTURE_DECODED_COUNT;
+    MSI_INT64 alloc_begin=bypass?gpu_cost_now():0;
     for(unsigned i=0;i<slots;i++){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
         slot->before=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
@@ -1099,6 +1119,7 @@ static void gpu_capture_begin(void){
         slot->batch.snapshots.raw_capacity=raw_bytes;
         slot->batch.snapshots.decoded_capacity=decoded_count;
     }
+    if(bypass)g_gpu_pilot_alloc_ticks=gpu_cost_elapsed(alloc_begin);
     g_gpu_capture_active=1;g_gpu_capture_sample=sample;g_gpu_capture_bypass=bypass;
 }
 static void gpu_capture_copy(BYTE *out,const BYTE *src){
@@ -1107,7 +1128,7 @@ static void gpu_capture_copy(BYTE *out,const BYTE *src){
 static void gpu_capture_barrier(void){
     if(!g_gpu_capture_active)return;
     g_gpu_capture_draw=0;
-    if(g_gpu_capture_bypass){msi_gpu_draw_batch_reset(&g_gpu_capture_batch);return;}
+    if(g_gpu_capture_bypass){msi_gpu_draw_batch_reset(&g_gpu_capture_batch);g_gpu_pilot_snapshot_ticks=UINT32_MAX;return;}
     if(g_gpu_capture_batch.count>=8u){
         const WORD *before=(const WORD*)g_gpu_capture_before,*after=(const WORD*)g_gpu_capture_after;
         unsigned changed=0;
@@ -1123,6 +1144,7 @@ static void gpu_capture_barrier(void){
         }
     }
     msi_gpu_draw_batch_reset(&g_gpu_capture_batch);
+    gpu_capture_clear_loop(g_gpu_capture_current);
 }
 static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,const T_msiVertex *c,
     int left,int top,int right,int bottom,int width,int height,
@@ -1144,6 +1166,7 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     if(g_gpu_capture_batch.count&&(g_gpu_capture_bypass||
        !msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES)))
         gpu_capture_barrier();
+    MSI_INT64 snapshot_begin=g_gpu_capture_bypass?gpu_cost_now():0;
     MsiGpuVertex vertices[3];
     const T_msiVertex *in[3]={a,b,c};
     for(unsigned i=0;i<3;i++){
@@ -1172,6 +1195,7 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
         if(!g_gpu_capture_bypass)zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
     }
     g_gpu_capture_draw=1;
+    if(g_gpu_capture_bypass)g_gpu_pilot_snapshot_ticks=gpu_cost_elapsed(snapshot_begin);
 }
 static int gpu_capture_publish_wave(void);
 static void gpu_capture_draw_complete(void){
@@ -1766,8 +1790,10 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
         VirtualFree(scratch,0,MEM_RELEASE);logtext("GPU_CPU_REPLAY ERROR allocation");
         return MSI_SHADOW_ERROR;
     }
+    MSI_INT64 replay_begin=gpu_cost_now();
     int replay_ok=msi_gpu_cpu_replay(&best->batch,640u,400u,
         (const WORD*)best->before,scratch,replayed_mask);
+    DWORD replay_ticks=gpu_cost_elapsed(replay_begin);
     unsigned exact=0,mask_diff=0,written=0,first=GPU_CAPTURE_NATIVE_BYTES/2u;
     if(replay_ok)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++){
         unsigned same=scratch[j]==((const WORD*)best->after)[j];
@@ -1785,6 +1811,20 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
     putstr(replay_msg,&rn," written=");putunsigned(replay_msg,&rn,written);
     putstr(replay_msg,&rn," elapsed_ms=");putunsigned(replay_msg,&rn,GetTickCount()-replay_started);
     replay_msg[rn]=0;logtext(replay_msg);
+    /* Match only the selected real CPU wave; loop timing excludes state
+     * preparation and capture copies, but includes diagnostic mask writes.
+     * Replay time includes private baseline copy/mask clear. */
+    if(replay_pass){
+        unsigned valid=g_cap_frequency&&best->loop_draws==best->batch.count&&
+            !best->loop_untimed&&replay_ticks!=UINT32_MAX;
+        rn=0;putstr(replay_msg,&rn,"GPU_CPU_LOOP frame=");putunsigned(replay_msg,&rn,g_frames);
+        putstr(replay_msg,&rn," draws=");putunsigned(replay_msg,&rn,best->batch.count);
+        putstr(replay_msg,&rn," timed_draws=");putunsigned(replay_msg,&rn,best->loop_draws-best->loop_untimed);
+        putstr(replay_msg,&rn," qpc_hz=");putunsigned(replay_msg,&rn,valid?g_cap_frequency:0);
+        putstr(replay_msg,&rn," loop_ticks=");putunsigned(replay_msg,&rn,valid?best->loop_ticks:0);
+        putstr(replay_msg,&rn," replay_ticks=");putunsigned(replay_msg,&rn,valid?replay_ticks:0);
+        replay_msg[rn]=0;logtext(replay_msg);
+    }
     if(!replay_pass&&first<GPU_CAPTURE_NATIVE_BYTES/2u){
         rn=0;putstr(replay_msg,&rn,"GPU_CPU_REPLAY MISMATCH x=");putunsigned(replay_msg,&rn,first%640u);
         putstr(replay_msg,&rn," y=");putunsigned(replay_msg,&rn,first/640u);
@@ -2012,11 +2052,14 @@ static int gpu_bypass_try(void){
        !g_vk_active||g_endframe_depth||g_guest_callback_depth||g_capture_ownership||
        g_manual_capture_active||g_zplane_draw_context)return 0;
     const WORD *before=(const WORD*)g_gpu_capture_before;
+    const DWORD capture_alloc_ticks=g_gpu_pilot_alloc_ticks,snapshot_ticks=g_gpu_pilot_snapshot_ticks;
+    MSI_INT64 scratch_begin=gpu_cost_now();
     MsiGpuRect region={0};
     unsigned region_pixels=0;
     if(msi_gpu_native_tagged_region(&g_gpu_capture_batch,&region))
         region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
     uint32_t *gpu=region_pixels?(uint32_t*)alloc(region_pixels*4u):0;
+    DWORD scratch_ticks=gpu_cost_elapsed(scratch_begin);
     MsiGpuBypass result;
     DWORD started=GetTickCount();
     g_gpu_bypass.attempted++;
@@ -2066,7 +2109,9 @@ static int gpu_bypass_try(void){
         putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,wait_valid?wait_ticks:0);
         msg[n]=0;logtext(msg);
     }
+    MSI_INT64 scratch_free_begin=gpu_cost_now();
     if(gpu)VirtualFree(gpu,0,MEM_RELEASE);
+    DWORD scratch_free_ticks=gpu_cost_elapsed(scratch_free_begin);
     if(ok){
         g_gpu_bypass.passed++;g_gpu_bypass.written+=result.written;
         g_gpu_bypass.changed+=result.changed;
@@ -2077,7 +2122,22 @@ static int gpu_bypass_try(void){
         g_gpu_bypass.failed++;g_gpu_bypass.disabled=1;
         lognum("GPU_BYPASS FALLBACK frame=",g_frames,"code=",(unsigned)rc);
     }
+    MSI_INT64 release_begin=gpu_cost_now();
     gpu_capture_release();
+    DWORD release_ticks=gpu_cost_elapsed(release_begin);
+    if(ok){
+        unsigned valid=g_cap_frequency&&capture_alloc_ticks!=UINT32_MAX&&snapshot_ticks!=UINT32_MAX&&
+            scratch_ticks!=UINT32_MAX&&scratch_free_ticks!=UINT32_MAX&&release_ticks!=UINT32_MAX;
+        char msg[300];DWORD n=0;
+        putstr(msg,&n,"GPU_BYPASS_COST frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,valid?g_cap_frequency:0);
+        putstr(msg,&n," capture_alloc_ticks=");putunsigned(msg,&n,valid?capture_alloc_ticks:0);
+        putstr(msg,&n," snapshot_ticks=");putunsigned(msg,&n,valid?snapshot_ticks:0);
+        putstr(msg,&n," scratch_alloc_ticks=");putunsigned(msg,&n,valid?scratch_ticks:0);
+        putstr(msg,&n," scratch_free_ticks=");putunsigned(msg,&n,valid?scratch_free_ticks:0);
+        putstr(msg,&n," capture_free_ticks=");putunsigned(msg,&n,valid?release_ticks:0);
+        msg[n]=0;logtext(msg);
+    }
     return ok;
 }
 static void gpu_capture_auto_finish(void){
@@ -4005,6 +4065,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     gpu_profile_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity);
     gpu_capture_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity,texW,texH,texOffset,texture,lut);
     if(gpu_bypass_try())return; /* No CPU pixel loop for the committed triangle. */
+    MsiGpuCaptureSlot *timing_slot=g_gpu_capture_draw&&!g_gpu_capture_bypass?g_gpu_capture_current:NULL;
+    MSI_INT64 loop_begin=timing_slot?gpu_cost_now():0;
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
     unsigned pixelCount=0;
@@ -4541,6 +4603,13 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             pixelCount++;
             if(sparseAtlas)g_sparse_atlas_drawn_pixels++;
         }
+    }
+    if(timing_slot){
+        DWORD ticks=gpu_cost_elapsed(loop_begin);
+        timing_slot->loop_draws++;
+        if(ticks==UINT32_MAX||ticks>UINT32_MAX-timing_slot->loop_ticks)
+            timing_slot->loop_untimed++;
+        else timing_slot->loop_ticks+=ticks;
     }
     if(pixelCount>0)g_drawn_triangles++;
     g_drawn_pixels+=pixelCount;

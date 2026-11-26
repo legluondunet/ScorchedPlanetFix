@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "4ab2c33d77c6f732ed5b0993cb1c9b56c82b31cf7d960ee3d20348c88f8c4b98"
+$expectedSourceHash = "ae50f51304313bddbf718dcd835d2e62defa3bd61a24ceb424bf108188151449"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 $vkSource = Join-Path $sourceRoot "vulkan_present.c"
 $vkHeader = Join-Path $sourceRoot "vulkan_present.h"
 $vkSourceHash = (Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($vkSourceHash -cne "5b37c41ccd9aad47cf8ed90f05e21ac8b5249f984081451e66fdfc570c2142a7") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
+if ($vkSourceHash -cne "cec20da612f9e8ef08e44c9cdce7f8444ce64f2a0045bb157888470634bfb71b") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
 $vkHeaderHash = (Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($vkHeaderHash -cne "238d3ee55866edc0ff105c812454fc453196ee468ae9f68f49eafd07f4c3d9fa") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b886a8f1161feeb45cf8e655ffbb380c7b1b7b74e7ebdad093e8e55a661a51c8") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }

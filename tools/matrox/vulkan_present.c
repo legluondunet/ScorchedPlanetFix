@@ -238,7 +238,8 @@ int matrox_vk_open(void *window,int linear,MatroxVkReport logger){
             VkBool32 support=0;
             if(queues[j].queueCount&&(queues[j].queueFlags&VK_QUEUE_GRAPHICS_BIT)&&
                vkGetPhysicalDeviceSurfaceSupportKHR(devices[i],j,surface,&support)==VK_SUCCESS&&support){
-                physical=devices[i];family=j;upload_format=candidate;report("VULKAN_SELECTED",0);report(prop.deviceName,(int)j);break;
+                physical=devices[i];family=j;upload_format=candidate;report("VULKAN_SELECTED",0);report(prop.deviceName,(int)j);
+                report("VULKAN_GRAPHICS_FAMILY_QUEUE_COUNT",(int)queues[j].queueCount);break;
             }
         }
     }
