@@ -257,7 +257,20 @@ void __cdecl probe_main(void){
     {
         char enabled[4];
         if(GetEnvironmentVariableA("MATROX_MSI_GPU_CAPTURE_SMOKE",enabled,sizeof(enabled))==1u&&enabled[0]=='1'){
-            rc=14;HANDLE window=FindWindowA("MSI95_Class",0);if(!window)goto done;
+            /* Direct alias and remap contract: retain the original guest
+             * pointers, invalidate both as RWSPMYS1 does, then rebind and
+             * verify a renderer clear through the retained guest alias.
+             * This is opt-in only, not run on original Matrox hardware. */
+            rc=14;
+            volatile BYTE *color=info->color.mem,*depth=info->depth.mem;
+            if(!color||!depth)goto done;
+            color[0]=0x42;color[1]=0x24;
+            info->color.mem=(volatile BYTE*)0xdeadbeefu;
+            info->depth.mem=(volatile BYTE*)0xdeadbeefu;
+            if(!set(0)||info->color.mem!=color||info->depth.mem!=depth||color[0]!=0x42||color[1]!=0x24)goto done;
+            if(!start(1,0,0,0,0,0)||color[0]||color[1]||!end(0,0,1))goto done;
+            trace_text("MSI95_GUEST_ALIAS_REMAP_PASS\r\n");
+            HANDLE window=FindWindowA("MSI95_Class",0);if(!window)goto done;
             SendMessageA(window,0x100u,0x7bu,0);SendMessageA(window,0x101u,0x7bu,0);
             if(!start(1,0,0,0,0,0))goto done;
             p.texture.enable=1;p.texture.mem=p.texture.heap=tex;

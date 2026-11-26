@@ -105,6 +105,10 @@ __declspec(dllimport) HANDLE __stdcall GetModuleHandleA(const char*);
 __declspec(dllimport) void* __stdcall GetProcAddress(HANDLE,const char*);
 __declspec(dllimport) void * __stdcall VirtualAlloc(void*,DWORD,DWORD,DWORD);
 __declspec(dllimport) BOOL __stdcall VirtualFree(void*,DWORD,DWORD);
+__declspec(dllimport) HANDLE __stdcall CreateFileMappingA(HANDLE,void*,DWORD,DWORD,DWORD,const char*);
+__declspec(dllimport) void* __stdcall MapViewOfFile(HANDLE,DWORD,DWORD,DWORD,SIZE_T);
+__declspec(dllimport) BOOL __stdcall UnmapViewOfFile(const void*);
+__declspec(dllimport) DWORD __stdcall GetCurrentThreadId(void);
 __declspec(dllimport) void* __stdcall AddVectoredExceptionHandler(unsigned long, void*);
 __declspec(dllimport) unsigned long __stdcall VirtualQuery(const void*,void*,SIZE_T);
 
@@ -394,6 +398,11 @@ static int g_blue_atlas_valid=0;
 
 static T_msiInfo g_info;
 static void *g_color, *g_depth, *g_texture;
+/* Diagnostic dual view: public guest alias and private engine alias.
+ * They refer to the SAME bytes. Both remain read/write in this stage. */
+static void *g_color_guest;
+static unsigned g_gpu_dual_checks,g_gpu_dual_mismatch,g_gpu_dual_thread_checks,g_gpu_dual_foreign;
+static DWORD g_gpu_dual_owner;
 /* The original game may keep hundreds of texture heaps live across scene
  * transitions. The previous shim's fixed 256-entry array returned NULL for
  * valid 4-page allocations, corrupting the game's scene data. Track actual
@@ -672,6 +681,7 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
     { char state[940];DWORD k=0;
       putstr(state,&k,"MSI_BUFFER_STATE color=");puthex(state,&k,(DWORD)g_info.msiColor.pMem);
       putstr(state,&k," backing_color=");puthex(state,&k,(DWORD)g_color);
+      putstr(state,&k," guest_color=");puthex(state,&k,(DWORD)g_color_guest);
       putstr(state,&k," depth=");puthex(state,&k,(DWORD)g_info.msiDepth.pMem);
       putstr(state,&k," backing_depth=");puthex(state,&k,(DWORD)g_depth);
       putstr(state,&k," frames=");putunsigned(state,&k,g_frames);
@@ -828,8 +838,22 @@ static void gpu_profile_flush(void){
     if(count>g_gpu_profile.max_wave)g_gpu_profile.max_wave=count;
     msi_gpu_wave_reset(&g_gpu_profile_wave);
 }
+static void gpu_dual_thread_observe(void){
+    if(g_gpu_profile_active&&g_color_guest&&g_color_guest!=g_color){
+        g_gpu_dual_thread_checks++;
+        g_gpu_dual_foreign+=GetCurrentThreadId()!=g_gpu_dual_owner;
+    }
+}
 static void gpu_profile_finish(void){
     if(!g_gpu_profile_active)return;
+    if(g_color_guest&&g_color_guest!=g_color){
+        g_gpu_dual_checks++;
+        if(!msi_gpu_snapshot_equal((const BYTE*)g_color_guest,(const BYTE*)g_color,
+                                    GPU_CAPTURE_NATIVE_BYTES)){
+            g_gpu_dual_mismatch++;
+            logtext("GPU_DUAL_VIEW MISMATCH sampled alias comparison");
+        }
+    }
     gpu_profile_flush();
     if(g_gpu_profile.frame_candidates)g_gpu_profile.drawn_frames++;
     else g_gpu_profile.empty_frames++;
@@ -839,7 +863,7 @@ static void gpu_profile_candidate(int left,int top,int right,int bottom,
     int width,int height,int textured,int modulate,int perspective,int bilinear,unsigned planes,unsigned opacity){
     if(!g_gpu_profile_active||g_zplane_draw_context)return;
     unsigned pointer_state=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
-        (DWORD)g_info.msiDepth.pMem,(DWORD)g_color,(DWORD)g_depth);
+        (DWORD)g_info.msiDepth.pMem,(DWORD)g_color_guest,(DWORD)g_depth);
     int defer_eligible=width==640&&height==400&&textured&&planes==8u&&opacity==100u&&
         perspective&&bilinear&&!(modulate&&g_rgb888_lighting_enabled)&&
         !g_state.msiDepth.Enable&&!g_state.msiDepth.Protect&&!g_state.msiColor.Protect&&
@@ -889,6 +913,8 @@ static void gpu_profile_report(void){
     lognum("GPU_DEFER_AUDIT split_key=",g_gpu_defer_audit.split_key,"split_limit=",g_gpu_defer_audit.split_limit);
     lognum("GPU_DEFER_AUDIT barriers=",g_gpu_defer_audit.barriers,"remaps=",g_gpu_defer_audit.remaps);
     lognum("GPU_DEFER_AUDIT remaps_invalidated=",g_gpu_defer_audit.remaps_invalidated,"counts_ok=",msi_gpu_defer_counts_ok(&g_gpu_defer_audit));
+    lognum("GPU_DUAL_VIEW checks=",g_gpu_dual_checks,"mismatch=",g_gpu_dual_mismatch);
+    lognum("GPU_DUAL_VIEW thread_checks=",g_gpu_dual_thread_checks,"foreign=",g_gpu_dual_foreign);
 }
 /* Sparse histogram: absent values have zero requests. Emit at F12 and exit
  * only, avoiding additional per-triangle logging or duplicated Z-plane halves. */
@@ -951,6 +977,34 @@ static void loginit(LONG w,LONG h,LONG planes,BOOL z,BOOL dbg){
 }
 static void zero(void*ptr,unsigned n){BYTE*p=(BYTE*)ptr;for(unsigned i=0;i<n;i++)p[i]=0;}
 static void* alloc(unsigned n){return n?VirtualAlloc(NULL,n,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE):NULL;}
+/* Map an anonymous section twice. Only diagnostic native RGB565 sessions
+ * use it; failure before exposing a pointer safely selects legacy allocation.
+ * No VirtualProtect or exception interception here. */
+static void color_allocate(unsigned bytes,int dual){
+    g_color=g_color_guest=NULL;
+    if(dual){
+        HANDLE mapping=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,bytes,NULL);
+        if(mapping){
+            g_color=MapViewOfFile(mapping,6u,0,0,bytes);
+            g_color_guest=MapViewOfFile(mapping,6u,0,0,bytes);
+            CloseHandle(mapping);
+        }
+        int ok=g_color&&g_color_guest&&g_color!=g_color_guest;
+        if(ok){
+            volatile WORD *a=(volatile WORD*)g_color,*b=(volatile WORD*)g_color_guest;
+            unsigned last=bytes/2u-1u;
+            a[0]=0x1234u;b[last]=0x5678u;
+            ok=b[0]==0x1234u&&a[last]==0x5678u;
+            a[0]=0;b[last]=0;
+        }
+        if(ok){logtext("GPU_DUAL_VIEW mapped=1 guard=0");return;}
+        if(g_color_guest&&g_color_guest!=g_color)UnmapViewOfFile(g_color_guest);
+        if(g_color)UnmapViewOfFile(g_color);
+        g_color=g_color_guest=NULL;
+        logtext("GPU_DUAL_VIEW mapped=0 guard=0 fallback=1");
+    }
+    g_color=alloc(bytes);g_color_guest=g_color;
+}
 
 static void gpu_capture_release(void){
     msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_SKIP);
@@ -1342,6 +1396,7 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         g_last_forwarded_msg=msg;
         g_last_forwarded_frame=g_frames;
         g_last_forwarded_tick=GetTickCount();
+        gpu_dual_thread_observe();
         if(g_gpu_profile_active)msi_gpu_defer_barrier(&g_gpu_defer_audit);
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
@@ -1488,7 +1543,12 @@ static void clean(void){
     if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
     g_heaps=NULL;
     g_heap_count=0;g_heap_capacity=0;g_heap_peak=0;
-    if(g_color)VirtualFree(g_color,0,MEM_RELEASE);
+    if(g_color_guest&&g_color_guest!=g_color){
+        BOOL guest_ok=UnmapViewOfFile(g_color_guest);
+        BOOL engine_ok=UnmapViewOfFile(g_color);
+        lognum("GPU_DUAL_VIEW_RELEASE success=",guest_ok&&engine_ok,NULL,0);
+    }else if(g_color)VirtualFree(g_color,0,MEM_RELEASE);
+    g_color_guest=NULL;
     if(g_depth)VirtualFree(g_depth,0,MEM_RELEASE);
     if(g_texture)VirtualFree(g_texture,0,MEM_RELEASE);
     if(g_ownership)VirtualFree(g_ownership,0,MEM_RELEASE);
@@ -2726,7 +2786,10 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     unsigned framesize=pitch*(unsigned)Height;
     unsigned zsize=(unsigned)Width*(unsigned)Height*2u;
     unsigned texsize=16u*1024u*1024u;
-    g_color=alloc(framesize);g_depth=alloc(zsize);g_texture=alloc(texsize);
+    g_gpu_dual_checks=g_gpu_dual_mismatch=g_gpu_dual_thread_checks=g_gpu_dual_foreign=0;
+    g_gpu_dual_owner=g_gpu_profile_enabled?GetCurrentThreadId():0u;
+    color_allocate(framesize,g_gpu_profile_enabled&&Width==640&&Height==400&&Planes==16);
+    g_depth=alloc(zsize);g_texture=alloc(texsize);
     g_ownership_bytes=(unsigned)Width*(unsigned)Height;
     g_ownership=(BYTE*)alloc(g_ownership_bytes);
     g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
@@ -2760,7 +2823,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_info.msiColor.rBitShift=16;g_info.msiColor.gBitShift=8;g_info.msiColor.aBitShift=24;}
     else {g_info.msiColor.rDepth=3;g_info.msiColor.gDepth=3;g_info.msiColor.bDepth=2;
       g_info.msiColor.rBitShift=5;g_info.msiColor.gBitShift=2;}
-    g_info.msiColor.Pitch=(LONG)pitch;g_info.msiColor.pMem=(LPBYTE)g_color;g_info.msiColor.MemSize=(LONG)framesize;
+    g_info.msiColor.Pitch=(LONG)pitch;g_info.msiColor.pMem=(LPBYTE)g_color_guest;g_info.msiColor.MemSize=(LONG)framesize;
     g_info.msiDepth.BytesPerPixel=2;g_info.msiDepth.zDepth=16;g_info.msiDepth.Pitch=Width*2;
     g_info.msiDepth.pMem=(LPBYTE)g_depth;g_info.msiDepth.MemSize=(LONG)zsize;
     g_info.msiTexture.pMem=(LPBYTE)g_texture;g_info.msiTexture.MemSize=(LONG)texsize;
@@ -2874,6 +2937,7 @@ static BOOL grow_heap_tracker(void){
     return TRUE;
 }
 LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
+    gpu_dual_thread_observe();
     gpu_capture_barrier();
     if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
@@ -2901,6 +2965,7 @@ LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     return (LPBYTE)ptr;
 }
 BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
+    gpu_dual_thread_observe();
     gpu_capture_barrier();
     if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
@@ -2931,6 +2996,7 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     gpu_profile_finish();
     if(g_gpu_profile_enabled&&!g_capture_ownership&&g_endframe_depth==0u&&g_frames%60u==0u){
         g_gpu_profile_active=1;g_gpu_profile.sampled++;g_gpu_profile.frame_candidates=0;
+        gpu_dual_thread_observe();
     }
     if(g_capture_ownership){
         if(g_ownership)zero(g_ownership,g_ownership_bytes);
@@ -3010,6 +3076,7 @@ static void frame_limit(void){
 BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     (void)Dump;(void)Frame;(void)Wait;
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
+    gpu_dual_thread_observe();
     if(g_endframe_depth==0u)gpu_profile_finish();
     g_endframe_depth++;
     g_frames++;
@@ -3156,13 +3223,14 @@ static BOOL readable_parameters(const T_msiParameters *p){
 }
 static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(!g_initialized){logtext("msiSetParameters called BEFORE successful msiInit");return FALSE;}
+    gpu_dual_thread_observe();
     g_params++;
     if(!p||p==(T_msiParameters*)0xffffffffu)gpu_capture_barrier();
     if(g_gpu_profile_active){
         if(!p){
             g_gpu_defer_audit.remaps++;
             g_gpu_defer_audit.remaps_invalidated+=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
-                (DWORD)g_info.msiDepth.pMem,(DWORD)g_color,(DWORD)g_depth)==MSI_DEFER_INVALIDATED;
+                (DWORD)g_info.msiDepth.pMem,(DWORD)g_color_guest,(DWORD)g_depth)==MSI_DEFER_INVALIDATED;
             g_gpu_profile.remaps++;gpu_profile_flush();
         }
         else if(p==(T_msiParameters*)0xffffffffu){g_gpu_profile.sentinels++;gpu_profile_flush();}
@@ -3181,13 +3249,13 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
          * at 0x00418F2B (rep stosd) after a few frames. */
         DWORD before_color=(DWORD)g_info.msiColor.pMem;
         DWORD before_depth=(DWORD)g_info.msiDepth.pMem;
-        g_info.msiColor.pMem=(LPBYTE)g_color;
+        g_info.msiColor.pMem=(LPBYTE)g_color_guest;
         g_info.msiDepth.pMem=(LPBYTE)g_depth;
-        if(g_params<=25 || ((before_color!=(DWORD)g_color || before_depth!=(DWORD)g_depth) && g_params%200==0)){
+        if(g_params<=25 || ((before_color!=(DWORD)g_color_guest || before_depth!=(DWORD)g_depth) && g_params%200==0)){
             char buf[940]; DWORD n=0;
             putstr(buf,&n,"msiSetParameters NULL REMAP call=");putunsigned(buf,&n,g_params);
             putstr(buf,&n," color ");puthex(buf,&n,before_color);
-            putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_color);
+            putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_color_guest);
             putstr(buf,&n," depth ");puthex(buf,&n,before_depth);
             putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_depth);
             buf[n]=0; logtext(buf);
@@ -4321,6 +4389,7 @@ static void rasterize_triangle(const T_msiVertex*a,const T_msiVertex*b,const T_m
 }
 BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE opacity){
     if(!g_initialized)return FALSE;
+    gpu_dual_thread_observe();
     g_triangles++;
     count_opacity(g_triangle_opacity,opacity);
     g_last_triangle_frame=g_frames;
@@ -4374,6 +4443,7 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
  * driver can supply transient records during level changes. */
 BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
     if(!g_initialized)return FALSE;
+    gpu_dual_thread_observe();
     g_zplanes++;
     gpu_capture_barrier();
     if(g_gpu_profile_active){g_gpu_profile.zplanes++;gpu_profile_flush();}

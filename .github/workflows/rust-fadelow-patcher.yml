@@ -290,6 +290,12 @@ jobs:
           }
           $runtime = Get-Content (Join-Path (Split-Path $folder -Parent) 'ScorchedPlanetFix.log') -Raw
           if (!$runtime.Contains('PREVIEW_RENDERER requested=vulkan')) { throw 'Vulkan request not passed' }
+          if (!$runtime.Contains('GPU_DUAL_VIEW mapped=1 guard=0') -or
+              $runtime -notmatch 'GPU_DUAL_VIEW checks=\s*[1-9][0-9]* mismatch=\s*0' -or
+              $runtime -notmatch 'GPU_DUAL_VIEW thread_checks=\s*[1-9][0-9]* foreign=\s*0' -or
+              $runtime -notmatch 'GPU_DUAL_VIEW_RELEASE success=\s*1') { throw 'Native shared framebuffer dual-view smoke failed' }
+          $probeTrace = Get-Content (Join-Path $folder 'PROBE.LOG') -Raw
+          if (!$probeTrace.Contains('MSI95_GUEST_ALIAS_REMAP_PASS')) { throw 'Guest alias remap smoke failed' }
           if (!$runtime.Contains('GPU_PROFILE enabled sample=1/60') -or $runtime -notmatch 'GPU_PROFILE sampled_frames=\s*[1-9][0-9]*') { throw 'Read-only GPU candidate profiling not exercised' }
           if ($runtime -notmatch 'GPU_PROFILE rgb888_excluded=\s*[1-9][0-9]*') { throw 'GPU profile must exclude experimental RGB888 lighting' }
           if ($runtime.Contains('PREVIEW_RENDERER active=vulkan')) {

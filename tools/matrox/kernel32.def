@@ -20,3 +20,7 @@ EXPORTS
  LoadLibraryExW
  FreeLibrary
  GetModuleHandleW
+ CreateFileMappingA
+ MapViewOfFile
+ UnmapViewOfFile
+ GetCurrentThreadId
