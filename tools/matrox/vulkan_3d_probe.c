@@ -915,11 +915,21 @@ static void test_packed_publication(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<count+2u;j++)packed[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count-1,&actual,0)==VK_ERROR_INITIALIZATION_FAILED);
     NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(!c.packed_fence&&!work.fence&&!work.pending);
+    for(unsigned fault=20;fault<=21;fault++){
+        NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!c.packed_fence&&!work.fence&&!work.pending&&!actual.x0&&!actual.x1);
+        for(size_t j=0;j<count+2u;j++)NEED(packed[j]==0xabcdef01u);
+    }
     NEED(!actual.x0&&!actual.x1);
     for(size_t j=0;j<count+2u;j++)NEED(packed[j]==0xabcdef01u);
     OK(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,0));
     NEED(actual.x0==region.x0&&actual.y0==region.y0&&actual.x1==region.x1&&actual.y1==region.y1);
     NEED(packed[0]==0xabcdef01u&&packed[count+1]==0xabcdef01u);
+    VkFence retained_fence=c.packed_fence;
+    NEED(retained_fence&&!work.fence);
+    OK(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,0));
+    NEED(c.packed_fence==retained_fence&&!work.fence&&!work.pending);
     for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
         uint32_t tag=x>=region.x0&&x<region.x1&&y>=region.y0&&y<region.y1?
             packed[1+(size_t)(y-region.y0)*rw+x-region.x0]:65536u;
@@ -960,7 +970,19 @@ static void test_packed_publication(const MsiGpuDrawBatch *batch){
     NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,actual));
     packed[1]=saved;
     for(size_t j=0;j<n;j++)NEED(live[j]==before[j]&&under[j]==3);
-    msi_vk_batch_pipeline_destroy(&c);
+    /* Simulate a timeout only after real fence completion. The uncertain
+     * ownership must still survive until explicit queue retirement. */
+    for(size_t j=0;j<count+2u;j++)packed[j]=0xabcdef01u;
+    MsiGpuRect untouched={0};
+    NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&untouched,22)==VK_TIMEOUT);
+    NEED(c.unusable&&work.pending&&work.fence==retained_fence&&!c.packed_fence);
+    NEED(!mvk_cleanup(&c,&work)&&!untouched.x0&&!untouched.x1);
+    for(size_t j=0;j<count+2u;j++)NEED(packed[j]==0xabcdef01u);
+    OK(msi_vk_batch_retire(&c,&work));
+    NEED(!work.pending&&!work.fence&&!work.cmd);
+    msi_vk_batch_pipeline_destroy(&c);msi_vk_batch_pipeline_destroy(&c);
+    NEED(!c.packed_fence);
+    puts("VULKAN_3D_PACKED_FENCE_PASS faults=2 reuse=1 timeout_retired=1");
     free(ref_under);free(under);free(ref);free(live);free(before);free(packed);free(full);free(one);
     puts("VULKAN_3D_PACKED_PUBLICATION_PASS exact=256000 stale_outside=1 guard=1 capacity=1 fault=1");
 }

@@ -29,6 +29,7 @@
     X(vkCreateCommandPool) \
     X(vkCreateDescriptorPool) \
     X(vkCreateDescriptorSetLayout) \
+    X(vkCreateFence) \
     X(vkCreateFramebuffer) \
     X(vkCreateGraphicsPipelines) \
     X(vkCreateImage) \
@@ -41,6 +42,7 @@
     X(vkDestroyCommandPool) \
     X(vkDestroyDescriptorPool) \
     X(vkDestroyDescriptorSetLayout) \
+    X(vkDestroyFence) \
     X(vkDestroyFramebuffer) \
     X(vkDestroyImage) \
     X(vkDestroyImageView) \
@@ -58,8 +60,10 @@
     X(vkQueueSubmit) \
     X(vkQueueWaitIdle) \
     X(vkResetCommandBuffer) \
+    X(vkResetFences) \
     X(vkUnmapMemory) \
-    X(vkUpdateDescriptorSets)
+    X(vkUpdateDescriptorSets) \
+    X(vkWaitForFences)
 
 #define DECLARE(name) static PFN_##name name;
 INSTANCE_COMMANDS(DECLARE)

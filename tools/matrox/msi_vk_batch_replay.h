@@ -44,11 +44,12 @@ typedef struct {
     VkDescriptorPool roi_pool;
     VkDescriptorSet roi_sets[MSI_GPU_SNAPSHOT_MAX];
     VkCommandBuffer roi_cmd;
+    VkFence packed_fence; /* unsignaled, idle, only for packed pilot */
 } MsiVkBatchContext;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
     MsiVkBuffer stage,vertices,read,initial;
-    VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
+    VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;VkFence fence;
     VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
     unsigned pending,roi_borrowed,upload_borrowed,descriptor_borrowed;
     MsiVkBuffer texture_reference; /* owned only on an uncommitted miss */
@@ -73,6 +74,8 @@ static void mvk_texture_entry_destroy(VkDevice d,MsiVkTextureEntry *e){
 static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
     /* Caller has retired pending work; release commands/descriptors before
      * referenced resources, framebuffer before render pass. */
+    if(c->packed_fence)vkDestroyFence(c->dev,c->packed_fence,0);
+    c->packed_fence=VK_NULL_HANDLE;
     if(c->roi_cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&c->roi_cmd);
     if(c->roi_pool)vkDestroyDescriptorPool(c->dev,c->roi_pool,0);
     c->roi_cmd=VK_NULL_HANDLE;c->roi_pool=VK_NULL_HANDLE;
@@ -318,6 +321,7 @@ static VkResult mvk_descriptor_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
 }
 static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pending)return 0;
+    if(k->fence)vkDestroyFence(c->dev,k->fence,0);
     if(k->cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&k->cmd);
     if(k->fb&&!k->roi_borrowed)vkDestroyFramebuffer(c->dev,k->fb,0);
     if(k->pool&&!k->descriptor_borrowed)vkDestroyDescriptorPool(c->dev,k->pool,0);
@@ -353,7 +357,9 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
  * upload-cache allocation failures (including staging growth); 14/15
  * inject immutable texture-cache miss buffer/image failures; 16/17
  * inject persistent descriptor pool/set failures; 18/19 command acquire
- * and post-idle reset failures. Cropped callers use a reset-capable pool. */
+ * and post-idle reset failures; 20/21 packed fence acquisition/reset
+ * failures; 22 simulates a timeout only after real fence completion.
+ * Cropped callers use a reset-capable pool. */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
@@ -493,13 +499,32 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=k->read.b;bar.size=VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,0,1,&bar,0,0);
     MVK_TRY(vkEndCommandBuffer(cmd));MVK_FAULT(5);
+    /* Packed single-draw qualification needs only this submission's
+     * completion, not a drain of the shared presentation queue.
+     * Full/expanded ROI reference paths keep their original idle wait. */
+    if(packed_region){
+        if(c->packed_fence){
+            k->fence=c->packed_fence;c->packed_fence=VK_NULL_HANDLE;
+        }else{
+            VkFenceCreateInfo fi=MVK_S(FENCE_CREATE_INFO);
+            MVK_TRY(vkCreateFence(c->dev,&fi,0,&k->fence));
+        }
+        MVK_FAULT(20);
+    }
     VkSubmitInfo submit=MVK_S(SUBMIT_INFO);submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;
-    MVK_TRY(vkQueueSubmit(c->queue,1,&submit,VK_NULL_HANDLE));k->pending=1;
-    rc=vkQueueWaitIdle(c->queue);
+    MVK_TRY(vkQueueSubmit(c->queue,1,&submit,k->fence));k->pending=1;
+    rc=k->fence?vkWaitForFences(c->dev,1,&k->fence,VK_TRUE,5000000000ull):vkQueueWaitIdle(c->queue);
+    if(rc==VK_SUCCESS&&k->fence&&fault==22u)rc=VK_TIMEOUT;
     if(rc==VK_SUCCESS&&fault==7)rc=VK_ERROR_OUT_OF_HOST_MEMORY;
     if(rc==VK_SUCCESS&&fault==8)rc=VK_ERROR_DEVICE_LOST;
     if(rc!=VK_SUCCESS){c->unusable=1;goto done;}
     k->pending=0;MVK_FAULT(6);
+    if(k->fence){
+        /* Only reset/return a completed fence. An uncertain wait retains
+         * all resources in work; retirement still drains the queue. */
+        MVK_TRY(vkResetFences(c->dev,1,&k->fence));MVK_FAULT(21);
+        c->packed_fence=k->fence;k->fence=VK_NULL_HANDLE;
+    }
     if(crop_tagged){
         /* Return only a successfully reset, non-pending command. All error
          * paths leave ownership in work, so normal cleanup frees it. */

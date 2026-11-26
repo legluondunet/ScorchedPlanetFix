@@ -107,6 +107,7 @@ jobs:
           grep -q 'VULKAN_3D_UPLOAD_CACHE_PASS init_faults=2 growth_fault=1 grow=1 reuse=1 pending_retired=1' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_COMMAND_CACHE_PASS descriptor_faults=2 command_faults=2 reuse=1 pending_retired=1' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PACKED_PUBLICATION_PASS exact=256000 stale_outside=1 guard=1 capacity=1 fault=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PACKED_FENCE_PASS faults=2 reuse=1 timeout_retired=1' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_PILOT_ORACLE_PASS exact=' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_TEXTURE_CACHE_PASS hits=2 misses=5 collision=1 shape=1 eviction=1 faults=3 pending_retired=1' /tmp/matrox-spv/probe.log
           grep -q 'VULKAN_3D_DEFERRED_FINISH_PASS gpu=1 cpu=2 blocked=2' /tmp/matrox-spv/probe.log
