@@ -9,6 +9,13 @@ static uint16_t before[640u*400u],out[640u*400u];
 static uint8_t written[640u*400u],raw[1024];
 static uint32_t decoded[4];
 int main(void){
+    assert(msi_gpu_defer_overlap(100,1,100,100));
+    assert(msi_gpu_defer_overlap(99,2,100,100));
+    assert(msi_gpu_defer_overlap(199,1,100,100));
+    assert(!msi_gpu_defer_overlap(200,1,100,100));
+    assert(!msi_gpu_defer_overlap(99,1,100,100));
+    assert(!msi_gpu_defer_overlap(100,0,100,100));
+    assert(msi_gpu_defer_overlap(UINTPTR_MAX-1,1,UINTPTR_MAX-2,2));
     MsiGpuVertex v[3]={{{10,10},{-128,128},.0001f,{255,255,255}},
         {{60,11},{128,-128},.0064f,{128,255,0}},
         {{11,60},{0,0},.001f,{0,128,255}}};

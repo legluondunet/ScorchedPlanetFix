@@ -13,6 +13,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_gpu_coverage.h"
 #include "msi_gpu_cpu_replay.h"
 #include "msi_gpu_defer_audit.h"
+#include "msi_gpu_defer_admit.h"
 #include "msi_gpu_deferred_finish.h"
 #include "msi_gpu_bypass.h"
 typedef unsigned char BYTE;
@@ -493,7 +494,9 @@ static struct {unsigned frames,last_frame,attempted,passed,failed,empty,written,
 _Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
 _Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
 static unsigned g_gpu_profile_enabled,g_gpu_profile_active;
-static MsiGpuDeferAudit g_gpu_defer_audit;
+static MsiGpuDeferAudit g_gpu_defer_audit,g_gpu_defer_strict;
+static unsigned g_gpu_defer_strict_seen,g_gpu_defer_strict_state,g_gpu_defer_strict_early;
+static unsigned g_gpu_defer_strict_numerical,g_gpu_defer_strict_alias;
 static struct {
     unsigned sampled,eligible,opaque,alpha,keyed,flat,rgb888,other,affine;
     unsigned waves,opaque_waves,alpha_waves,singletons,max_wave,split;
@@ -829,6 +832,7 @@ static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
 /* No rendering side effects: collect hypothetical waves, never submit. */
 static void gpu_profile_flush(void){
     msi_gpu_defer_barrier(&g_gpu_defer_audit);
+    msi_gpu_defer_barrier(&g_gpu_defer_strict);
     unsigned count=g_gpu_profile_wave.count;
     if(!count)return;
     g_gpu_profile.waves++;
@@ -859,7 +863,8 @@ static void gpu_profile_finish(void){
     else g_gpu_profile.empty_frames++;
     g_gpu_profile_active=0;
 }
-static void gpu_profile_candidate(int left,int top,int right,int bottom,
+static void gpu_profile_candidate(const T_msiVertex *a,const T_msiVertex *b,const T_msiVertex *c,
+    int left,int top,int right,int bottom,
     int width,int height,int textured,int modulate,int perspective,int bilinear,unsigned planes,unsigned opacity){
     if(!g_gpu_profile_active||g_zplane_draw_context)return;
     unsigned pointer_state=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
@@ -870,6 +875,32 @@ static void gpu_profile_candidate(int left,int top,int right,int bottom,
         !g_state.msiTexture.Decal&&!g_endframe_depth&&!g_guest_callback_depth;
     msi_gpu_defer_candidate(&g_gpu_defer_audit,pointer_state,
         (unsigned)g_state.msiTexture.Transparency,defer_eligible);
+    /* Strict opportunity: no intervening parameter API, invalid triangle,
+     * aliased vertex record or numerically inadmissible geometry. */
+    g_gpu_defer_strict_seen=1;
+    int strict=defer_eligible;
+    if(strict){
+        const T_msiVertex *in[3]={a,b,c};MsiGpuVertex v[3];
+        unsigned flags=9u|(g_state.msiTexture.Clamp_u?2u:0u)|
+            (g_state.msiTexture.Clamp_v?4u:0u)|(modulate?16u:0u)|
+            (modulate&&g_msi_dither_enabled&&g_state.msiColor.Dither?32u:0u)|
+            (g_state.msiTexture.Transparency?64u:0u);
+        unsigned alias=0;
+        for(unsigned i=0;i<3u;i++){
+            alias|=msi_gpu_defer_overlap((uintptr_t)in[i],sizeof(*in[i]),
+                (uintptr_t)g_color_guest,GPU_CAPTURE_NATIVE_BYTES);
+            v[i].xy[0]=in[i]->x;v[i].xy[1]=in[i]->y;
+            v[i].uv[0]=in[i]->u;v[i].uv[1]=in[i]->v;
+            v[i].iw=in[i]->invW;v[i].m[0]=in[i]->mr;v[i].m[1]=in[i]->mg;v[i].m[2]=in[i]->mb;
+        }
+        if(alias){g_gpu_defer_strict_alias++;strict=0;}
+        else if(!msi_gpu_defer_draw_admissible(v,(MsiGpuRect){(unsigned)left,(unsigned)top,
+                 (unsigned)right,(unsigned)bottom},flags)){
+            g_gpu_defer_strict_numerical++;strict=0;
+        }
+    }
+    msi_gpu_defer_candidate(&g_gpu_defer_strict,pointer_state,
+        (unsigned)g_state.msiTexture.Transparency,strict);
     if(width!=640||height!=400||opacity>100u){g_gpu_profile.other++;gpu_profile_flush();return;}
     if(!textured){g_gpu_profile.flat++;gpu_profile_flush();return;}
     if(modulate&&g_rgb888_lighting_enabled){g_gpu_profile.rgb888++;gpu_profile_flush();return;}
@@ -913,6 +944,13 @@ static void gpu_profile_report(void){
     lognum("GPU_DEFER_AUDIT split_key=",g_gpu_defer_audit.split_key,"split_limit=",g_gpu_defer_audit.split_limit);
     lognum("GPU_DEFER_AUDIT barriers=",g_gpu_defer_audit.barriers,"remaps=",g_gpu_defer_audit.remaps);
     lognum("GPU_DEFER_AUDIT remaps_invalidated=",g_gpu_defer_audit.remaps_invalidated,"counts_ok=",msi_gpu_defer_counts_ok(&g_gpu_defer_audit));
+    lognum("GPU_DEFER_STRICT eligible=",g_gpu_defer_strict.eligible,"mapped=",g_gpu_defer_strict.mapped);
+    lognum("GPU_DEFER_STRICT invalidated=",g_gpu_defer_strict.invalidated,"unknown=",g_gpu_defer_strict.unknown);
+    lognum("GPU_DEFER_STRICT groups=",g_gpu_defer_strict.groups,"group_draws=",g_gpu_defer_strict.group_draws);
+    lognum("GPU_DEFER_STRICT multi_groups=",g_gpu_defer_strict.multi_groups,"multi_draws=",g_gpu_defer_strict.multi_draws);
+    lognum("GPU_DEFER_STRICT max_group=",g_gpu_defer_strict.max_group,"counts_ok=",msi_gpu_defer_counts_ok(&g_gpu_defer_strict));
+    lognum("GPU_DEFER_STRICT state_barriers=",g_gpu_defer_strict_state,"early_barriers=",g_gpu_defer_strict_early);
+    lognum("GPU_DEFER_STRICT numerical_reject=",g_gpu_defer_strict_numerical,"vertex_alias_reject=",g_gpu_defer_strict_alias);
     lognum("GPU_DUAL_VIEW checks=",g_gpu_dual_checks,"mismatch=",g_gpu_dual_mismatch);
     lognum("GPU_DUAL_VIEW thread_checks=",g_gpu_dual_thread_checks,"foreign=",g_gpu_dual_foreign);
 }
@@ -1397,7 +1435,7 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         g_last_forwarded_frame=g_frames;
         g_last_forwarded_tick=GetTickCount();
         gpu_dual_thread_observe();
-        if(g_gpu_profile_active)msi_gpu_defer_barrier(&g_gpu_defer_audit);
+        if(g_gpu_profile_active){msi_gpu_defer_barrier(&g_gpu_defer_audit);msi_gpu_defer_barrier(&g_gpu_defer_strict);}
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
         sample_game_global_50dcd0("post_callback");
@@ -2763,7 +2801,9 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
         (n==6u&&setting[0]=='v'&&setting[1]=='u'&&setting[2]=='l'&&setting[3]=='k'&&setting[4]=='a'&&setting[5]=='n');
     }
     zero(&g_gpu_profile,sizeof(g_gpu_profile));msi_gpu_wave_reset(&g_gpu_profile_wave);
-    zero(&g_gpu_defer_audit,sizeof(g_gpu_defer_audit));
+    zero(&g_gpu_defer_audit,sizeof(g_gpu_defer_audit));zero(&g_gpu_defer_strict,sizeof(g_gpu_defer_strict));
+    g_gpu_defer_strict_seen=g_gpu_defer_strict_state=g_gpu_defer_strict_early=0;
+    g_gpu_defer_strict_numerical=g_gpu_defer_strict_alias=0;
     g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
     zero(&g_gpu_shadow_auto,sizeof(g_gpu_shadow_auto));
     zero(&g_gpu_publish,sizeof(g_gpu_publish));zero(&g_gpu_bypass,sizeof(g_gpu_bypass));
@@ -3227,6 +3267,8 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
     g_params++;
     if(!p||p==(T_msiParameters*)0xffffffffu)gpu_capture_barrier();
     if(g_gpu_profile_active){
+        g_gpu_defer_strict_state+=g_gpu_defer_strict.pending!=0;
+        msi_gpu_defer_barrier(&g_gpu_defer_strict);
         if(!p){
             g_gpu_defer_audit.remaps++;
             g_gpu_defer_audit.remaps_invalidated+=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
@@ -3839,7 +3881,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
         bilinear_palette_ready=1;
         g_world_bilinear_palette_triangles++;
     }
-    gpu_profile_candidate(left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity);
+    gpu_profile_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity);
     gpu_capture_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity,texW,texH,texOffset,texture,lut);
     if(gpu_bypass_try())return; /* No CPU pixel loop for the committed triangle. */
     float inv=1.0f/den;
@@ -4383,7 +4425,12 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
 }
 static void rasterize_triangle(const T_msiVertex*a,const T_msiVertex*b,const T_msiVertex*c,BYTE opacity){
     DWORD t=GetTickCount();
+    g_gpu_defer_strict_seen=0;
     rasterize_triangle_body(a,b,c,opacity);
+    if(g_gpu_profile_active&&!g_zplane_draw_context&&!g_gpu_defer_strict_seen){
+        g_gpu_defer_strict_early+=g_gpu_defer_strict.pending!=0;
+        msi_gpu_defer_barrier(&g_gpu_defer_strict);
+    }
     gpu_capture_draw_complete();
     g_raster_ms+=GetTickCount()-t;
 }
@@ -4431,7 +4478,13 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
     }
     if(vertices_ok)
         rasterize_triangle(a,b,c,opacity);
-    else g_rejected_triangles++;
+    else {
+        g_rejected_triangles++;
+        if(g_gpu_profile_active){
+            g_gpu_defer_strict_early+=g_gpu_defer_strict.pending!=0;
+            msi_gpu_defer_barrier(&g_gpu_defer_strict);
+        }
+    }
     return TRUE;
 }
 /* MSI95 SDK: a Z-plane is a screen-aligned rectangle whose (u,v,uWidth,vHeight)

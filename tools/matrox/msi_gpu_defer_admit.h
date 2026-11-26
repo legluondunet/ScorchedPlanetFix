@@ -7,6 +7,12 @@
 #ifndef MSI_GPU_DEFER_ADMIT_H
 #define MSI_GPU_DEFER_ADMIT_H
 #include "msi_gpu_draw_batch.h"
+/* Half-open ranges, no overflowing endpoint arithmetic. Callers already
+ * validated the source span; this is an extra conservative alias veto. */
+static inline int msi_gpu_defer_overlap(uintptr_t p,size_t bytes,uintptr_t base,size_t size){
+    if(!bytes||!size)return 0;
+    return p>=base?p-base<size:base-p<bytes;
+}
 static inline int msi_gpu_defer_draw_admissible(const MsiGpuVertex v[3],MsiGpuRect r,unsigned flags){
     if(!v||(flags&~127u)||(flags&9u)!=9u||
        r.x0>=r.x1||r.y0>=r.y1||r.x1>640u||r.y1>400u)return 0;

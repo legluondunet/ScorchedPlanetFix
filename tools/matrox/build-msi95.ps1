@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "9739b93ee9c2272969f9b6b8c8e28127a9acea81061f01ced07147c6ac63e751"
+$expectedSourceHash = "728ff5ad2c4acdc9248beb07363667e0fcd4f877c3ccb8f51de65693c6c8a5d6"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -49,6 +49,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_cpu_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "53d9c46a1623731bdadaa3245a1a4cf62668920d5620d069bb4be2a2278e96fe") { throw "CPU replay header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_defer_audit.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "840990a8b0cfda4cd1515725aac9f67dcd0b590db607ac1597c35a957acaf43f") { throw "GPU defer audit header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_deferred_finish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "80bf93ee14ac5836d03b523fc3514f37ff3f0dfcb7251087bb1dfcf947e54559") { throw "GPU deferred finish header checksum mismatch" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_defer_admit.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "20efae3b8c88de99e94c7e42d135bc06971a5cad53b0764d1c92ee72d82d5b18") { throw "GPU defer admission header checksum mismatch" }
 $vkRoot = Join-Path $projectRoot "third_party/vulkan-headers"
 if (!(Test-Path (Join-Path $vkRoot "include/vulkan/vulkan.h"))) { throw "Pinned Vulkan-Headers checkout required" }
 $vkCommit = (& git -C $vkRoot rev-parse HEAD).Trim()
