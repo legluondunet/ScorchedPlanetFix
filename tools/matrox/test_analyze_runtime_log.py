@@ -79,6 +79,25 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
                 r = self.parse(self.GPU_SESSION.replace(before, after))["gpu_diagnostics"]
                 self.assertEqual(r["status"], expected, r)
 
+    def test_gpu_roi_gate(self):
+        line = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", line + "GPU_RETIREMENT PASS")
+        r = self.parse(body)["gpu_diagnostics"]["roi"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["passes"], 1)
+        self.assertEqual(r["bytes"], 23760)
+        self.assertEqual(r["reduction_percent"], 97.68)
+        for before, after, expected in (
+            ("exact=256000 bytes=", "exact=255999 bytes=", "failed"),
+            ("bytes=23760", "bytes=23761", "failed"),
+            ("GPU_TAGGED_ROI PASS", "GPU_TAGGED_ROI ERROR", "failed"),
+            ("GPU_TAGGED_ROI PASS frame=120", "GPU_TAGGED_ROI PASS frame=121", "incomplete"),
+            (line, "", "incomplete"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
+                self.assertEqual(r["status"], expected, r)
+
     def test_gpu_legacy_and_truncation(self):
         self.assertEqual(self.parse("msiInit width=640\n")["gpu_diagnostics"]["status"], "unavailable")
         r = self.parse(self.GPU_SESSION.split("GPU_DEFER_AUDIT")[0])["gpu_diagnostics"]

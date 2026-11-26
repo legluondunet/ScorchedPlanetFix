@@ -797,13 +797,23 @@ static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expe
             written+=tagged[i]!=65536u;
         }
         NEED(written);
-        free(tagged);
+        uint32_t *roi=malloc(n*4u);NEED(roi);
+        unsigned pixels=0;
+        OK(msi_vk_bridge_tagged_roi(batch,roi,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),&pixels));
+        NEED(pixels>0&&pixels<n);
+        for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
+        /* Invalid output parameter must not mutate output or disable the
+         * borrowed session; normal R16 compare below must still pass. */
+        NEED(msi_vk_bridge_tagged_roi(batch,roi,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),NULL)==VK_ERROR_INITIALIZATION_FAILED);
+        for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
+        free(roi);free(tagged);
         /* R16 and R32 share a queue/pool, not pipeline objects. */
         OK(msi_vk_bridge_compare(batch,before,expected,scratch,&stats));
         NEED(stats.exact==n&&msi_gpu_compare_pass(&stats,(unsigned)n));
         OK(msi_vk_bridge_close());OK(msi_vk_bridge_close());
     }
     free(before);free(scratch);
+    puts("VULKAN_3D_TAGGED_ROI_BRIDGE_PASS reopen=2 exact=256000");
     puts("VULKAN_3D_TAGGED_BRIDGE_PASS reopen=2");
     puts("VULKAN_3D_SHADOW_BRIDGE_PASS missing_dispatch=1 reopen=1");
 }

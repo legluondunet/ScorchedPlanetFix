@@ -140,6 +140,8 @@ class GpuAudit:
         self.summaries = {name: {} for name in self.SUMMARY}
         self.records = {name: [] for name in self.STAGES}
         self.bypass = []
+        self.roi = []
+        self.roi_errors = []
         self.errors = []
 
     def feed(self, line):
@@ -153,6 +155,13 @@ class GpuAudit:
             self.limits["passes"] = fields(line).get("max_passes")
         elif line.startswith("GPU_BYPASS pilot "):
             self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_TAGGED_ROI "):
+            outcome = line.split(" ", 2)[1]
+            f = fields(line)
+            if outcome != "PASS" or any(k not in f for k in ("frame", "draws", "exact", "bytes", "full_bytes")):
+                self.roi_errors.append(line[:200])
+            else:
+                self.roi.append(f)
         elif line.startswith("GPU_BYPASS OK "):
             self.bypass.append(fields(line))
         elif line.startswith(("GPU_BYPASS FALLBACK ", "GPU_DUAL_VIEW MISMATCH ")):
@@ -180,6 +189,29 @@ class GpuAudit:
                     self.errors.append(f"{prefix}: duplicate summary keys")
                 self.summaries[prefix].update(f)
 
+    def roi_report(self):
+        errors = list(self.roi_errors)
+        missing = []
+        for r in self.roi:
+            if not (r["exact"] == 256000 and r["full_bytes"] == 1024000 and
+                    0 < r["bytes"] <= r["full_bytes"] and r["bytes"] % 4 == 0 and
+                    1 <= r["draws"] <= 32):
+                errors.append(f"invalid ROI evidence at {r['frame']}")
+        pairs = sorted((r["frame"], r["draws"]) for r in self.roi)
+        reference = sorted((r["frame"], r["draws"]) for r in self.records["GPU_TAGGED_BATCH"])
+        if pairs != reference:
+            missing.append("unmatched full-vs-cropped tagged records")
+        if not pairs:
+            missing.append("no ROI comparison")
+        byte_count = sum(r["bytes"] for r in self.roi)
+        full_count = sum(r["full_bytes"] for r in self.roi)
+        return {"status": "failed" if errors else "incomplete" if missing else "validated",
+                "passes": len(self.roi), "exact_pixels": sum(r["exact"] for r in self.roi),
+                "bytes": byte_count, "full_bytes": full_count,
+                "reduction_percent": round(100 * (1 - byte_count / full_count), 3)
+                    if full_count and not errors else None,
+                "errors": errors, "missing": missing}
+
     def report(self, clean):
         errors = list(self.errors)
         missing = []
@@ -203,7 +235,7 @@ class GpuAudit:
         totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
-                  "errors": errors, "missing": missing}
+                  "errors": errors, "missing": missing, "roi": self.roi_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -425,6 +457,8 @@ def main(argv=None) -> int:
     parser.add_argument("logs", type=Path, nargs="+")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--assert-clean", action="store_true")
+    parser.add_argument("--assert-gpu-roi", action="store_true",
+                        help="Require complete current GPU diagnostics and exact full-vs-ROI comparison")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -443,9 +477,13 @@ def main(argv=None) -> int:
                 f"space_evaluations={r['space_char_evaluations']} "
                 f"space_suppressed={r['space_char_suppressed']} "
                 f"opacity={r['opacity_audit']['status']} "
-                f"gpu_diagnostics={r['gpu_diagnostics']['status']}")
+                f"gpu_diagnostics={r['gpu_diagnostics']['status']} "
+                f"roi={r['gpu_diagnostics']['roi']['status']}")
             for error in r["errors"]:
                 print(f"  ERROR: {error}", file=sys.stderr)
+    if args.assert_gpu_roi and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                   r["gpu_diagnostics"]["roi"]["status"] != "validated" for r in reports):
+        return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_clean and any(r["status"] != "clean_exit" for r in reports):
