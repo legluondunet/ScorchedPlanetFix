@@ -20,6 +20,15 @@ typedef struct {MsiVkImage out;MsiVkBuffer read;VkFramebuffer fb;} MsiVkRoiCache
 /* Bounded reusable host-coherent uploads for the same cropped path. */
 typedef struct {MsiVkBuffer stage,vertices;} MsiVkUploadCache;
 enum {MSI_VK_STAGE_MAX=8388608u,MSI_VK_STAGE_MIN=65536u};
+/* Cache only single-draw/single-snapshot cropped submissions initially.
+ * Exact decoded R32 texels include discard and filter-veto bits. */
+enum {MSI_VK_TEX_SLOTS=4u,MSI_VK_TEX_MAX=16384u};
+typedef struct {unsigned width,height;uint32_t hash;} MsiVkTextureKey;
+typedef struct {MsiVkTextureKey key;MsiVkImage image;MsiVkBuffer reference;} MsiVkTextureEntry;
+typedef struct {
+    MsiVkTextureEntry entries[MSI_VK_TEX_SLOTS];
+    unsigned next,hits,misses;
+} MsiVkTextureCache;
 typedef struct {
     VkPhysicalDevice phys;VkDevice dev;VkQueue queue;VkCommandPool cp;
     VkPhysicalDeviceMemoryProperties mem;
@@ -29,6 +38,7 @@ typedef struct {
     unsigned tagged_output; /* fixed before pipeline creation: R32_UINT, clear=65536 */
     MsiVkRoiCache roi;
     MsiVkUploadCache uploads;
+    MsiVkTextureCache texture_cache;
 } MsiVkBatchContext;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
@@ -36,6 +46,9 @@ typedef struct {
     VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
     VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
     unsigned pending,roi_borrowed,upload_borrowed;
+    MsiVkBuffer texture_reference; /* owned only on an uncommitted miss */
+    MsiVkTextureKey texture_key;
+    unsigned texture_slot,texture_hit; /* slot is one-based; 0 = uncached */
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
 static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){if(b.b)vkDestroyBuffer(d,b.b,0);if(b.m)vkFreeMemory(d,b.m,0);}
@@ -44,6 +57,10 @@ static void mvk_roi_destroy(VkDevice d,MsiVkRoiCache *a){
     if(a->fb)vkDestroyFramebuffer(d,a->fb,0);
     mvk_freeimage(d,a->out);mvk_freebuffer(d,a->read);
     *a=(MsiVkRoiCache){0};
+}
+static void mvk_texture_entry_destroy(VkDevice d,MsiVkTextureEntry *e){
+    mvk_freeimage(d,e->image);mvk_freebuffer(d,e->reference);
+    *e=(MsiVkTextureEntry){0};
 }
 /* Persistent pipeline objects are owned by this context; device, queue,
  * command pool and dummy image are borrowed. Destroy only after all work
@@ -54,6 +71,8 @@ static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
     mvk_freebuffer(c->dev,c->uploads.stage);
     mvk_freebuffer(c->dev,c->uploads.vertices);
     c->uploads=(MsiVkUploadCache){0};
+    for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++)mvk_texture_entry_destroy(c->dev,&c->texture_cache.entries[i]);
+    c->texture_cache.next=c->texture_cache.hits=c->texture_cache.misses=0;
     if(c->pipe)vkDestroyPipeline(c->dev,c->pipe,0);
     if(c->rp_load)vkDestroyRenderPass(c->dev,c->rp_load,0);
     if(c->rp)vkDestroyRenderPass(c->dev,c->rp,0);
@@ -210,12 +229,60 @@ static VkResult mvk_upload_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
     k->stage=c->uploads.stage;k->vertices=c->uploads.vertices;k->upload_borrowed=1;
     return VK_SUCCESS;
 }
+/* Hash is only a rejection filter. Keep the immutable decoded bytes in
+ * their own host-coherent upload buffer, not a guest pointer or batch ID.
+ * No host allocation and no assumption about palette/texture lifetimes. */
+static uint32_t mvk_texture_hash(const uint32_t *p,size_t n){
+    uint32_t h=2166136261u;
+    for(size_t i=0;i<n;i++)h=(h^p[i])*16777619u;
+    return h;
+}
+static VkResult mvk_texture_prepare(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    const MsiGpuDrawBatch *batch,unsigned fault){
+    const MsiGpuSnapshot *s=&batch->snapshots.entries[0];
+    const uint32_t *src=batch->snapshots.decoded;
+    const size_t n=s->decoded_count;
+    MsiVkTextureKey key={s->state.width,s->state.height,mvk_texture_hash(src,n)};
+    for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++){
+        const MsiVkTextureEntry *e=&c->texture_cache.entries[i];
+        if(!e->image.i||e->key.width!=key.width||e->key.height!=key.height||
+           e->key.hash!=key.hash||e->reference.size!=n*4u)continue;
+        void *mapped=0;VkResult r=vkMapMemory(c->dev,e->reference.m,0,n*4u,0,&mapped);
+        if(r!=VK_SUCCESS)return r;
+        const uint32_t *old=(const uint32_t*)mapped;
+        int equal=1;
+        for(size_t j=0;j<n;j++)if(old[j]!=src[j]){equal=0;break;}
+        vkUnmapMemory(c->dev,e->reference.m);
+        if(!equal)continue;
+        k->texture_slot=i+1u;k->texture_hit=1;k->textures[0]=e->image;
+        return VK_SUCCESS;
+    }
+    /* Leave the victim intact until the new upload and readback finish.
+     * The old image can never be referenced by this miss submission. */
+    k->texture_slot=c->texture_cache.next+1u;k->texture_key=key;
+    VkResult r=mvk_buffer(c,&k->texture_reference,n*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    if(r!=VK_SUCCESS)return r;
+    if(fault==14u)return VK_ERROR_OUT_OF_HOST_MEMORY;
+    return mvk_write(c,k->texture_reference,src,n*4u);
+}
+static void mvk_texture_commit(MsiVkBatchContext *c,MsiVkBatchWork *k){
+    if(!k->texture_slot)return;
+    if(k->texture_hit){c->texture_cache.hits++;return;}
+    unsigned i=k->texture_slot-1u;
+    MsiVkTextureEntry *e=&c->texture_cache.entries[i];
+    mvk_texture_entry_destroy(c->dev,e);
+    e->key=k->texture_key;e->image=k->textures[0];e->reference=k->texture_reference;
+    k->textures[0]=(MsiVkImage){0};k->texture_reference=(MsiVkBuffer){0};
+    c->texture_cache.next=(i+1u)%MSI_VK_TEX_SLOTS;
+    c->texture_cache.misses++;
+}
 static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pending)return 0;
     if(k->cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&k->cmd);
     if(k->fb&&!k->roi_borrowed)vkDestroyFramebuffer(c->dev,k->fb,0);
     if(k->pool)vkDestroyDescriptorPool(c->dev,k->pool,0);
-    for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)mvk_freeimage(c->dev,k->textures[i]);
+    for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)if(i||!k->texture_hit)mvk_freeimage(c->dev,k->textures[i]);
+    mvk_freebuffer(c->dev,k->texture_reference);
     if(!k->roi_borrowed){mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->read);}
     if(!k->upload_borrowed){mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);}
     mvk_freebuffer(c->dev,k->initial);
@@ -243,7 +310,8 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
  * acquisition failures. 7/8 simulate wait errors ONLY after real idle.
  * 9..11 inject first-use ROI cache creation failures; 12/13 inject
- * upload-cache allocation failures (including staging growth). */
+ * upload-cache allocation failures (including staging growth); 14/15
+ * inject immutable texture-cache miss buffer/image failures. */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
@@ -315,9 +383,15 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     unsigned vertex_bytes=batch->count*3u*sizeof(MsiGpuVertex);
     if(crop_tagged)MVK_TRY(mvk_upload_acquire(c,k,stage_bytes,vertex_bytes,fault));
     else MVK_TRY(mvk_buffer(c,&k->stage,stage_bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
-    MVK_TRY(mvk_write(c,k->stage,batch->snapshots.decoded,stage_bytes));MVK_FAULT(2);
+    if(crop_tagged&&batch->count==1u&&batch->snapshots.count==1u&&
+       batch->snapshots.decoded_used<=MSI_VK_TEX_MAX)
+        MVK_TRY(mvk_texture_prepare(c,k,batch,fault));
+    else MVK_TRY(mvk_write(c,k->stage,batch->snapshots.decoded,stage_bytes));
+    MVK_FAULT(2);
     for(unsigned i=0;i<batch->snapshots.count;i++){
-        MVK_TRY(mvk_image(c,&k->textures[i],batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT));
+        if(!k->texture_hit)
+            MVK_TRY(mvk_image(c,&k->textures[i],batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT));
+        if(k->texture_slot&&!k->texture_hit)MVK_FAULT(15);
         VkDescriptorImageInfo ti[2]={{c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
         VkWriteDescriptorSet wr[2]={MVK_S(WRITE_DESCRIPTOR_SET),MVK_S(WRITE_DESCRIPTOR_SET)};
@@ -349,11 +423,13 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     VkCommandBuffer cmd=k->cmd;VkCommandBufferBeginInfo cb=MVK_S(COMMAND_BUFFER_BEGIN_INFO);cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     MVK_TRY(vkBeginCommandBuffer(cmd,&cb));
     for(unsigned i=0;i<batch->snapshots.count;i++){
+        if(k->texture_hit)continue; /* immutable image already in shader-read layout */
         mvk_transition(cmd,k->textures[i].i,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_ACCESS_TRANSFER_WRITE_BIT);
         VkBufferImageCopy br={0};br.bufferOffset=batch->snapshots.entries[i].decoded_offset*4u;
         br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,1};
-        vkCmdCopyBufferToImage(cmd,k->stage.b,k->textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
+        VkBuffer upload=k->texture_slot?k->texture_reference.b:k->stage.b;
+        vkCmdCopyBufferToImage(cmd,upload,k->textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&br);
         mvk_transition(cmd,k->textures[i].i,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT);
     }
@@ -416,6 +492,9 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
         for(size_t i=0;i<(size_t)w*h;i++)((uint16_t*)result)[i]=((const uint16_t*)mapped)[i];
     }
     vkUnmapMemory(c->dev,k->read.m);
+    /* Only a successful readback may publish/evict a cache entry. Failed
+     * waits retain owned or borrowed resources in work until retirement. */
+    mvk_texture_commit(c,k);
 
 done:
     /* The specification permits freeing in-use objects on device loss.

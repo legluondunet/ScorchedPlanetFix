@@ -780,6 +780,89 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     puts("VULKAN_3D_UPLOAD_CACHE_PASS init_faults=2 growth_fault=1 grow=1 reuse=1 pending_retired=1");
     free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
 }
+/* Independently compare cached single-draw output to the full transient
+ * path. Deliberately force a hash collision and exercise tag changes,
+ * shape changes, FIFO eviction, failed replacement and uncertain waits. */
+static void test_texture_cache(const MsiGpuDrawBatch *batch){
+    MsiGpuDrawBatch *one=malloc(sizeof(*one));NEED(one);
+    *one=*batch;one->count=1;one->draws[0].texture_id=0;
+    uint32_t *decoded=malloc(MSI_VK_TEX_MAX*4u);NEED(decoded);
+    one->snapshots.count=1;one->snapshots.decoded=decoded;
+    one->snapshots.decoded_capacity=MSI_VK_TEX_MAX;
+    one->snapshots.entries[0].decoded_offset=0;
+    one->snapshots.entries[0].decoded_count=4;one->snapshots.decoded_used=4;
+    one->snapshots.entries[0].state.width=2;one->snapshots.entries[0].state.height=2;
+    for(unsigned j=0;j<4;j++)decoded[j]=0xf800u;
+    MsiVkBatchContext c={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.tagged_output=1};
+    MsiVkBatchWork work={0};const size_t n=640u*400u;
+    uint32_t *full=malloc(n*4u),*roi=malloc(n*4u);NEED(full&&roi);
+    OK(msi_vk_batch_pipeline_create(&c,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    for(unsigned fault=14;fault<=15;fault++){
+        for(size_t j=0;j<n;j++)roi[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!c.texture_cache.entries[0].image.i&&!c.texture_cache.misses&&!work.texture_slot&&!work.texture_reference.b);
+        for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
+    }
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.misses==1&&c.texture_cache.hits==0&&c.texture_cache.next==1);
+    VkImage first=c.texture_cache.entries[0].image.i;
+    VkBuffer first_ref=c.texture_cache.entries[0].reference.b;
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.hits==1&&c.texture_cache.misses==1&&c.texture_cache.entries[0].image.i==first);
+    /* The same color with a discard bit is NOT the same cached texel. */
+    decoded[0]|=MSI_GPU_DISCARD|MSI_GPU_FILTER_VETO;
+    uint32_t oldhash=c.texture_cache.entries[0].key.hash;
+    c.texture_cache.entries[0].key.hash=mvk_texture_hash(decoded,4);
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.hits==1&&c.texture_cache.misses==2&&c.texture_cache.entries[0].image.i==first);
+    c.texture_cache.entries[0].key.hash=oldhash;
+    /* Same four decoded words, different dimensions, then a different
+     * color. Both are misses; geometry and shader flags remain independent. */
+    one->snapshots.entries[0].state.width=1;one->snapshots.entries[0].state.height=4;
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    decoded[1]=0x07e0;
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.misses==4&&c.texture_cache.next==0);
+    /* Representative 128x128 replacement. A post-idle failure must leave
+     * the victim and output unchanged, then the successful retry evicts. */
+    one->snapshots.entries[0].state.width=128;one->snapshots.entries[0].state.height=128;
+    one->snapshots.entries[0].decoded_count=MSI_VK_TEX_MAX;
+    one->snapshots.decoded_used=MSI_VK_TEX_MAX;
+    for(unsigned j=0;j<MSI_VK_TEX_MAX;j++)decoded[j]=(j&1u)?0x001fu:0xffffu;
+    for(size_t j=0;j<n;j++)roi[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(c.texture_cache.entries[0].image.i==first&&c.texture_cache.entries[0].reference.b==first_ref&&c.texture_cache.next==0);
+    for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.misses==5&&c.texture_cache.next==1&&c.texture_cache.entries[0].image.i!=first);
+    OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
+    for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.hits==2);
+    /* An uncertain hit submission retains the borrowed image and cannot
+     * increment successful-hit counters or free cache entries early. */
+    VkImage retained=c.texture_cache.entries[0].image.i;
+    for(size_t j=0;j<n;j++)roi[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(work.pending&&work.texture_hit&&work.textures[0].i==retained&&c.texture_cache.hits==2);
+    NEED(!mvk_cleanup(&c,&work));
+    for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
+    OK(msi_vk_batch_retire(&c,&work));NEED(!work.pending&&!work.texture_slot&&c.texture_cache.entries[0].image.i==retained);
+    msi_vk_batch_pipeline_destroy(&c);msi_vk_batch_pipeline_destroy(&c);
+    for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++)NEED(!c.texture_cache.entries[i].image.i&&!c.texture_cache.entries[i].reference.b);
+    free(roi);free(full);free(decoded);free(one);
+    puts("VULKAN_3D_TEXTURE_CACHE_PASS hits=2 misses=5 collision=1 shape=1 eviction=1 faults=3 pending_retired=1");
+}
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){
     MsiVkShadowSession session={0};
     const size_t n=640u*400u;
@@ -905,7 +988,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
-    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);test_tagged_batch_commit(&multi_batch);}
+    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);test_tagged_batch_commit(&multi_batch);test_texture_cache(&multi_batch);}
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;
