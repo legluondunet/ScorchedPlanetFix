@@ -164,7 +164,11 @@ class GpuAudit:
             else:
                 (self.bypass_roi if line.startswith("GPU_BYPASS_ROI ") else self.roi).append(f)
         elif line.startswith("GPU_BYPASS OK "):
-            self.bypass.append(fields(line))
+            f = fields(line)
+            if not all(k in f for k in ("frame", "written")) or not f.get("written"):
+                self.errors.append("GPU_BYPASS: incomplete or empty OK record")
+            else:
+                self.bypass.append(f)
         elif line.startswith(("GPU_BYPASS FALLBACK ", "GPU_DUAL_VIEW MISMATCH ")):
             self.errors.append(line[:200])
         else:

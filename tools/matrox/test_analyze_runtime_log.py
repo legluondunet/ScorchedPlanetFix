@@ -103,6 +103,13 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
                 r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
                 self.assertEqual(r["status"], expected, r)
 
+    def test_gpu_malformed_bypass_record(self):
+        r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
+                                               "GPU_BYPASS OK written=5"))["gpu_diagnostics"]
+        self.assertEqual(r["status"], "failed", r)
+        self.assertEqual(r["roi"]["status"], "incomplete")
+        self.assertTrue(any("incomplete" in e for e in r["errors"]))
+
     def test_gpu_legacy_and_truncation(self):
         self.assertEqual(self.parse("msiInit width=640\n")["gpu_diagnostics"]["status"], "unavailable")
         r = self.parse(self.GPU_SESSION.split("GPU_DEFER_AUDIT")[0])["gpu_diagnostics"]
