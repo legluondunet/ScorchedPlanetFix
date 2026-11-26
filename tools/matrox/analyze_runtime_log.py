@@ -142,6 +142,7 @@ class GpuAudit:
         self.bypass = []
         self.roi = []
         self.bypass_roi = []
+        self.bypass_roi_publish = []
         self.roi_errors = []
         self.errors = []
 
@@ -156,6 +157,12 @@ class GpuAudit:
             self.limits["passes"] = fields(line).get("max_passes")
         elif line.startswith("GPU_BYPASS pilot "):
             self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_BYPASS_ROI_PUBLISH "):
+            f = fields(line)
+            if line.split(" ", 2)[1] != "PASS" or any(k not in f for k in ("frame", "draws", "written", "bytes", "full_bytes")):
+                self.roi_errors.append(line[:200])
+            else:
+                self.bypass_roi_publish.append(f)
         elif line.startswith(("GPU_TAGGED_ROI ", "GPU_BYPASS_ROI ")):
             outcome = line.split(" ", 2)[1]
             f = fields(line)
@@ -208,17 +215,30 @@ class GpuAudit:
             missing.append("unmatched full-vs-cropped tagged records")
         if not pairs:
             missing.append("no ROI comparison")
-        if sorted((r["frame"], r["draws"]) for r in self.bypass_roi) != sorted((r["frame"], 1) for r in self.bypass):
+        if self.bypass_roi and self.bypass_roi_publish:
+            errors.append("mixed single-triangle ROI comparison and publication modes")
+        for r in self.bypass_roi_publish:
+            if not (r["draws"] == 1 and r["full_bytes"] == 1024000 and
+                    0 < r["bytes"] <= r["full_bytes"] and r["bytes"] % 4 == 0 and
+                    0 < r["written"] <= r["bytes"] // 4):
+                errors.append(f"invalid ROI publication at {r['frame']}")
+        if self.bypass_roi_publish:
+            if sorted((r["frame"], r["written"]) for r in self.bypass_roi_publish) != sorted((r["frame"], r["written"]) for r in self.bypass):
+                missing.append("unmatched single-triangle ROI publication records")
+        elif sorted((r["frame"], r["draws"]) for r in self.bypass_roi) != sorted((r["frame"], 1) for r in self.bypass):
             missing.append("unmatched single-triangle ROI records")
-        if not self.bypass_roi:
-            missing.append("no single-triangle ROI comparison")
+        if not self.bypass_roi and not self.bypass_roi_publish:
+            missing.append("no single-triangle ROI evidence")
         byte_count = sum(r["bytes"] for r in self.roi)
         full_count = sum(r["full_bytes"] for r in self.roi)
         return {"status": "failed" if errors else "incomplete" if missing else "validated",
                 "passes": len(self.roi), "exact_pixels": sum(r["exact"] for r in self.roi),
                 "single_triangle_passes": len(self.bypass_roi),
-                "single_triangle_bytes": sum(r["bytes"] for r in self.bypass_roi),
-                "single_triangle_full_bytes": sum(r["full_bytes"] for r in self.bypass_roi),
+                "single_triangle_publications": len(self.bypass_roi_publish),
+                "single_triangle_publication_written": sum(r["written"] for r in self.bypass_roi_publish),
+                "single_triangle_mode": "publication" if self.bypass_roi_publish else "comparison" if self.bypass_roi else None,
+                "single_triangle_bytes": sum(r["bytes"] for r in self.bypass_roi + self.bypass_roi_publish),
+                "single_triangle_full_bytes": sum(r["full_bytes"] for r in self.bypass_roi + self.bypass_roi_publish),
                 "bytes": byte_count, "full_bytes": full_count,
                 "reduction_percent": round(100 * (1 - byte_count / full_count), 3)
                     if full_count and not errors else None,

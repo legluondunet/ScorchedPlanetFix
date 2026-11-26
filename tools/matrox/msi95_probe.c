@@ -1966,33 +1966,26 @@ static int gpu_bypass_try(void){
     MsiGpuBypass result;
     DWORD started=GetTickCount();
     g_gpu_bypass.attempted++;
-    int rc=gpu?matrox_vk_shadow_tagged(&g_gpu_capture_batch,gpu):-1;
-    if(!rc){
-        /* Exercise the future synchronous optimization on exactly the
-         * triangle that would bypass CPU rasterization. Full tags remain
-         * the publication source until this gate is validated in game. */
-        uint32_t *roi=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
-        unsigned region_pixels=0,diff=0;
-        DWORD roi_start=GetTickCount();
-        rc=roi?matrox_vk_shadow_tagged_roi(&g_gpu_capture_batch,roi,&region_pixels):-1;
-        if(!rc)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)diff+=roi[j]!=gpu[j];
-        if(roi)VirtualFree(roi,0,MEM_RELEASE);
-        if(rc)lognum("GPU_BYPASS_ROI ERROR code=",(unsigned)rc,NULL,0);
-        else{
-            int pass=!diff&&region_pixels>0&&region_pixels<=GPU_CAPTURE_NATIVE_BYTES/2u;
-            char msg[256];DWORD n=0;
-            putstr(msg,&n,pass?"GPU_BYPASS_ROI PASS frame=":"GPU_BYPASS_ROI DIFFERENCES frame=");
-            putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=1 exact=");
-            putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES/2u-diff);
-            putstr(msg,&n," bytes=");putunsigned(msg,&n,region_pixels*4u);
-            putstr(msg,&n," full_bytes=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
-            putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-roi_start);
-            msg[n]=0;logtext(msg);
-            if(!pass)rc=-2;
-        }
-    }
+    /* Owner qualification verified full/cropped tags. Publish only the
+     * cropped readback, expanded with no-write sentinels by the bridge.
+     * Keep the original whole-frame transactional check and CPU fallback.
+     * Paired batch diagnostics still independently compare full and ROI. */
+    unsigned region_pixels=0;
+    int rc=gpu?matrox_vk_shadow_tagged_roi(&g_gpu_capture_batch,gpu,&region_pixels):-1;
+    if(!rc&&(!region_pixels||region_pixels>GPU_CAPTURE_NATIVE_BYTES/2u))rc=-2;
     int ok=!rc&&msi_gpu_bypass_tagged_commit(&result,640u,400u,&g_gpu_capture_batch,
         (WORD*)g_color,g_shadow_underlay,before,gpu);
+    if(!ok&&!rc)rc=-3;
+    if(ok){
+        char msg[256];DWORD n=0;
+        putstr(msg,&n,"GPU_BYPASS_ROI_PUBLISH PASS frame=");
+        putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=1 written=");
+        putunsigned(msg,&n,result.written);putstr(msg,&n," bytes=");
+        putunsigned(msg,&n,region_pixels*4u);putstr(msg,&n," full_bytes=");
+        putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
+        putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+        msg[n]=0;logtext(msg);
+    }
     if(gpu)VirtualFree(gpu,0,MEM_RELEASE);
     if(ok){
         g_gpu_bypass.passed++;g_gpu_bypass.written+=result.written;

@@ -103,6 +103,31 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
                 r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
                 self.assertEqual(r["status"], expected, r)
 
+    def test_gpu_roi_publication_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["roi"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["single_triangle_mode"], "publication")
+        self.assertEqual(r["single_triangle_passes"], 0)
+        self.assertEqual(r["single_triangle_publications"], 1)
+        self.assertEqual(r["single_triangle_publication_written"], 5)
+        self.assertEqual(r["single_triangle_bytes"], 80000)
+        for before, after, expected in (
+            ("written=5 bytes=", "written=20001 bytes=", "failed"),
+            ("bytes=80000", "bytes=80001", "failed"),
+            ("draws=1 written=", "draws=2 written=", "failed"),
+            ("written=5 bytes=", "written=4 bytes=", "incomplete"),
+            ("frame=240 draws=1", "frame=241 draws=1", "incomplete"),
+            ("GPU_BYPASS_ROI_PUBLISH PASS", "GPU_BYPASS_ROI_PUBLISH ERROR", "failed"),
+            (single, "", "incomplete"),
+            (single, single + "GPU_BYPASS_ROI PASS frame=240 draws=1 exact=256000 bytes=80000 full_bytes=1024000\n", "failed"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
+                self.assertEqual(r["status"], expected, r)
+
     def test_gpu_malformed_bypass_record(self):
         r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
                                                "GPU_BYPASS OK written=5"))["gpu_diagnostics"]
