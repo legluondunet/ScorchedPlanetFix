@@ -39,13 +39,18 @@ typedef struct {
     MsiVkRoiCache roi;
     MsiVkUploadCache uploads;
     MsiVkTextureCache texture_cache;
+    /* Cropped-only descriptor storage and one idle/reset command buffer.
+     * Command ownership moves to work until successful retirement. */
+    VkDescriptorPool roi_pool;
+    VkDescriptorSet roi_sets[MSI_GPU_SNAPSHOT_MAX];
+    VkCommandBuffer roi_cmd;
 } MsiVkBatchContext;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
     MsiVkBuffer stage,vertices,read,initial;
     VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
     VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
-    unsigned pending,roi_borrowed,upload_borrowed;
+    unsigned pending,roi_borrowed,upload_borrowed,descriptor_borrowed;
     MsiVkBuffer texture_reference; /* owned only on an uncommitted miss */
     MsiVkTextureKey texture_key;
     unsigned texture_slot,texture_hit; /* slot is one-based; 0 = uncached */
@@ -66,7 +71,12 @@ static void mvk_texture_entry_destroy(VkDevice d,MsiVkTextureEntry *e){
  * command pool and dummy image are borrowed. Destroy only after all work
  * has drained. No device teardown, host allocation or fatal exit here. */
 static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
-    /* Caller has retired pending work; framebuffer precedes render pass. */
+    /* Caller has retired pending work; release commands/descriptors before
+     * referenced resources, framebuffer before render pass. */
+    if(c->roi_cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&c->roi_cmd);
+    if(c->roi_pool)vkDestroyDescriptorPool(c->dev,c->roi_pool,0);
+    c->roi_cmd=VK_NULL_HANDLE;c->roi_pool=VK_NULL_HANDLE;
+    for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)c->roi_sets[i]=VK_NULL_HANDLE;
     mvk_roi_destroy(c->dev,&c->roi);
     mvk_freebuffer(c->dev,c->uploads.stage);
     mvk_freebuffer(c->dev,c->uploads.vertices);
@@ -278,11 +288,39 @@ static void mvk_texture_commit(MsiVkBatchContext *c,MsiVkBatchWork *k){
     c->texture_cache.next=(i+1u)%MSI_VK_TEX_SLOTS;
     c->texture_cache.misses++;
 }
+/* Fixed descriptor capacity, allocated transactionally. Each used set is
+ * rewritten before recording; stale descriptors in unused sets are never
+ * bound. No descriptor indexing, update-after-bind or pool reset. */
+static VkResult mvk_descriptor_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    unsigned count,unsigned fault){
+    if(!count||count>MSI_GPU_SNAPSHOT_MAX||k->pool||k->pending)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if(!c->roi_pool){
+        VkDescriptorPool pool=VK_NULL_HANDLE;
+        VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*MSI_GPU_SNAPSHOT_MAX};
+        VkDescriptorPoolCreateInfo pi=MVK_S(DESCRIPTOR_POOL_CREATE_INFO);
+        pi.maxSets=MSI_GPU_SNAPSHOT_MAX;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
+        VkResult r=vkCreateDescriptorPool(c->dev,&pi,0,&pool);
+        if(r!=VK_SUCCESS)return r;
+        if(fault==16u){vkDestroyDescriptorPool(c->dev,pool,0);return VK_ERROR_OUT_OF_HOST_MEMORY;}
+        for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)k->layouts[i]=c->dsl;
+        VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);
+        da.descriptorPool=pool;da.descriptorSetCount=MSI_GPU_SNAPSHOT_MAX;da.pSetLayouts=k->layouts;
+        r=vkAllocateDescriptorSets(c->dev,&da,k->sets);
+        if(r==VK_SUCCESS&&fault==17u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r!=VK_SUCCESS){vkDestroyDescriptorPool(c->dev,pool,0);return r;}
+        c->roi_pool=pool;
+        for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)c->roi_sets[i]=k->sets[i];
+    }
+    k->pool=c->roi_pool;k->descriptor_borrowed=1;
+    for(unsigned i=0;i<count;i++)k->sets[i]=c->roi_sets[i];
+    return VK_SUCCESS;
+}
 static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pending)return 0;
     if(k->cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&k->cmd);
     if(k->fb&&!k->roi_borrowed)vkDestroyFramebuffer(c->dev,k->fb,0);
-    if(k->pool)vkDestroyDescriptorPool(c->dev,k->pool,0);
+    if(k->pool&&!k->descriptor_borrowed)vkDestroyDescriptorPool(c->dev,k->pool,0);
     for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)if(i||!k->texture_hit)mvk_freeimage(c->dev,k->textures[i]);
     mvk_freebuffer(c->dev,k->texture_reference);
     if(!k->roi_borrowed){mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->read);}
@@ -313,7 +351,9 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
  * acquisition failures. 7/8 simulate wait errors ONLY after real idle.
  * 9..11 inject first-use ROI cache creation failures; 12/13 inject
  * upload-cache allocation failures (including staging growth); 14/15
- * inject immutable texture-cache miss buffer/image failures. */
+ * inject immutable texture-cache miss buffer/image failures; 16/17
+ * inject persistent descriptor pool/set failures; 18/19 command acquire
+ * and post-idle reset failures. Cropped callers use a reset-capable pool. */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
@@ -376,12 +416,16 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MVK_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
-    VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*batch->snapshots.count};
-    VkDescriptorPoolCreateInfo pi=MVK_S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=batch->snapshots.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
-    MVK_TRY(vkCreateDescriptorPool(c->dev,&pi,0,&k->pool));MVK_FAULT(1);
-    for(unsigned i=0;i<batch->snapshots.count;i++)k->layouts[i]=c->dsl;
-    VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=k->pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=k->layouts;
-    MVK_TRY(vkAllocateDescriptorSets(c->dev,&da,k->sets));
+    if(crop_tagged){
+        MVK_TRY(mvk_descriptor_acquire(c,k,batch->snapshots.count,fault));MVK_FAULT(1);
+    }else{
+        VkDescriptorPoolSize ps={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2u*batch->snapshots.count};
+        VkDescriptorPoolCreateInfo pi=MVK_S(DESCRIPTOR_POOL_CREATE_INFO);pi.maxSets=batch->snapshots.count;pi.poolSizeCount=1;pi.pPoolSizes=&ps;
+        MVK_TRY(vkCreateDescriptorPool(c->dev,&pi,0,&k->pool));MVK_FAULT(1);
+        for(unsigned i=0;i<batch->snapshots.count;i++)k->layouts[i]=c->dsl;
+        VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=k->pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=k->layouts;
+        MVK_TRY(vkAllocateDescriptorSets(c->dev,&da,k->sets));
+    }
     unsigned stage_bytes=(unsigned)batch->snapshots.decoded_used*4u;
     unsigned vertex_bytes=batch->count*3u*sizeof(MsiGpuVertex);
     if(crop_tagged)MVK_TRY(mvk_upload_acquire(c,k,stage_bytes,vertex_bytes,fault));
@@ -422,7 +466,10 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     }
     MVK_FAULT(4);
     VkCommandBufferAllocateInfo ca=MVK_S(COMMAND_BUFFER_ALLOCATE_INFO);ca.commandPool=c->cp;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
-    MVK_TRY(vkAllocateCommandBuffers(c->dev,&ca,&k->cmd));
+    if(crop_tagged&&c->roi_cmd){
+        k->cmd=c->roi_cmd;c->roi_cmd=VK_NULL_HANDLE;
+    }else MVK_TRY(vkAllocateCommandBuffers(c->dev,&ca,&k->cmd));
+    if(crop_tagged)MVK_FAULT(18);
     VkCommandBuffer cmd=k->cmd;VkCommandBufferBeginInfo cb=MVK_S(COMMAND_BUFFER_BEGIN_INFO);cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     MVK_TRY(vkBeginCommandBuffer(cmd,&cb));
     for(unsigned i=0;i<batch->snapshots.count;i++){
@@ -479,6 +526,12 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(rc==VK_SUCCESS&&fault==8)rc=VK_ERROR_DEVICE_LOST;
     if(rc!=VK_SUCCESS){c->unusable=1;goto done;}
     k->pending=0;MVK_FAULT(6);
+    if(crop_tagged){
+        /* Return only a successfully reset, non-pending command. All error
+         * paths leave ownership in work, so normal cleanup frees it. */
+        MVK_TRY(vkResetCommandBuffer(k->cmd,0));MVK_FAULT(19);
+        c->roi_cmd=k->cmd;k->cmd=VK_NULL_HANDLE;
+    }
     void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),0,&mapped));
     if(c->tagged_output){
         uint32_t *out=(uint32_t*)result;

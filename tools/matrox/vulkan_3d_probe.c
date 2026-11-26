@@ -148,7 +148,7 @@ static void setup(void){
     float priority=1;VkDeviceQueueCreateInfo qi=S(DEVICE_QUEUE_CREATE_INFO);qi.queueFamilyIndex=qfamily;qi.queueCount=1;qi.pQueuePriorities=&priority;
     VkDeviceCreateInfo di=S(DEVICE_CREATE_INFO);di.queueCreateInfoCount=1;di.pQueueCreateInfos=&qi;
     OK(vkCreateDevice(phys,&di,0,&dev));vkGetDeviceQueue(dev,qfamily,0,&queue);vkGetPhysicalDeviceMemoryProperties(phys,&mem);
-    VkCommandPoolCreateInfo pi=S(COMMAND_POOL_CREATE_INFO);pi.queueFamilyIndex=qfamily;OK(vkCreateCommandPool(dev,&pi,0,&cp));
+    VkCommandPoolCreateInfo pi=S(COMMAND_POOL_CREATE_INFO);pi.queueFamilyIndex=qfamily;pi.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;OK(vkCreateCommandPool(dev,&pi,0,&cp));
     tex=image(2,2,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     upload=buffer(sizeof(pixels),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);writebuf(upload,pixels,sizeof(pixels));
     vb=buffer(sizeof(tri),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);writebuf(vb,tri,sizeof(tri));
@@ -659,6 +659,12 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(msi_vk_tagged_region(ordered,&roi));
     unsigned region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
     NEED(roi.x0==7&&roi.y0==7&&roi.x1==97&&roi.y1==73&&region_pixels<n);
+    for(unsigned fault=16;fault<=17;fault++){
+        for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!tagged.roi_pool&&!tagged.roi_sets[0]&&!work.pool&&!work.descriptor_borrowed);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    }
     for(unsigned fault=12;fault<=13;fault++){
         for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
         NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -676,6 +682,26 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
     MsiVkRoiCache cached=tagged.roi;
     MsiVkUploadCache uploads=tagged.uploads;
+    VkDescriptorPool cached_pool=tagged.roi_pool;
+    VkDescriptorSet cached_set=tagged.roi_sets[0];
+    VkCommandBuffer cached_cmd=tagged.roi_cmd;
+    NEED(cached_pool&&cached_set&&cached_cmd&&!work.cmd&&!work.descriptor_borrowed);
+    /* Both acquisition and post-idle reset faults discard the borrowed
+     * command but preserve the reusable descriptor storage. */
+    for(unsigned fault=18;fault<=19;fault++){
+        for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!tagged.roi_cmd&&!work.cmd&&!work.pending&&!work.descriptor_borrowed);
+        NEED(tagged.roi_pool==cached_pool&&tagged.roi_sets[0]==cached_set);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+        OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
+        NEED(tagged.roi_cmd&&tagged.roi_pool==cached_pool&&tagged.roi_sets[0]==cached_set);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
+    }
+    cached_cmd=tagged.roi_cmd;
+    OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
+    NEED(tagged.roi_cmd==cached_cmd&&tagged.roi_pool==cached_pool&&tagged.roi_sets[0]==cached_set);
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
     NEED(cached.fb&&cached.out.i&&cached.read.b&&cached.read.size==n*4u&&!work.roi_borrowed);
     NEED(uploads.stage.b&&uploads.vertices.b&&uploads.stage.size>=ordered->snapshots.decoded_used*4u&&
          uploads.vertices.size==MSI_GPU_WAVE_MAX*3u*sizeof(MsiGpuVertex)&&!work.upload_borrowed);
@@ -724,6 +750,7 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,one,full_edge,0));
     NEED(tagged.roi.fb==cached.fb&&tagged.roi.out.i==cached.out.i&&tagged.roi.read.b==cached.read.b);
     NEED(tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b&&!work.upload_borrowed);
+    NEED(tagged.roi_pool==cached_pool&&tagged.roi_sets[0]==cached_set&&tagged.roi_cmd);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==full_edge[j]);
     free(full_edge);free(cropped);
     printf("VULKAN_3D_TAGGED_ROI_PASS exact=%u bytes=%u full_bytes=%u fault_preserved=1\n",
@@ -767,17 +794,21 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,one,out,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
     NEED(work.pending&&work.roi_borrowed&&work.fb==cached.fb&&work.read.b==cached.read.b);
     NEED(work.upload_borrowed&&work.stage.b==uploads.stage.b&&work.vertices.b==uploads.vertices.b);
+    NEED(work.descriptor_borrowed&&work.pool==cached_pool&&work.cmd&&!tagged.roi_cmd);
     NEED(!mvk_cleanup(&tagged,&work)&&tagged.unusable);
     for(size_t j=0;j<n;j++)NEED(out[j]==0xabcdef01u);
     OK(msi_vk_batch_retire(&tagged,&work));
     NEED(!work.pending&&!work.roi_borrowed&&!work.fb&&tagged.roi.fb==cached.fb&&tagged.roi.read.b==cached.read.b);
     NEED(!work.upload_borrowed&&!work.stage.b&&tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b);
+    NEED(!work.cmd&&!work.descriptor_borrowed&&!tagged.roi_cmd&&tagged.roi_pool==cached_pool);
     msi_vk_batch_pipeline_destroy(&tagged);
     msi_vk_batch_pipeline_destroy(&tagged);
     NEED(!tagged.roi.fb&&!tagged.roi.out.i&&!tagged.roi.read.b);
     NEED(!tagged.uploads.stage.b&&!tagged.uploads.stage.m&&!tagged.uploads.vertices.b&&!tagged.uploads.vertices.m);
     puts("VULKAN_3D_ROI_CACHE_PASS init_faults=3 reuse=1 pre_submit_fault=1 pending_retired=1");
     puts("VULKAN_3D_UPLOAD_CACHE_PASS init_faults=2 growth_fault=1 grow=1 reuse=1 pending_retired=1");
+    NEED(!tagged.roi_pool&&!tagged.roi_sets[0]&&!tagged.roi_cmd);
+    puts("VULKAN_3D_COMMAND_CACHE_PASS descriptor_faults=2 command_faults=2 reuse=1 pending_retired=1");
     free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
 }
 /* Independently compare cached single-draw output to the full transient

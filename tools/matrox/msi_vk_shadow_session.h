@@ -45,7 +45,7 @@ static VkResult msi_vk_shadow_open(MsiVkShadowSession *s,VkPhysicalDevice physic
     s->ctx.phys=physical;s->ctx.dev=device;s->ctx.queue=queue;
     vkGetPhysicalDeviceMemoryProperties(physical,&s->ctx.mem);
     VkCommandPoolCreateInfo pi={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pi.queueFamilyIndex=family;pi.flags=VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pi.queueFamilyIndex=family;pi.flags=VK_COMMAND_POOL_CREATE_TRANSIENT_BIT|VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     r=vkCreateCommandPool(device,&pi,0,&s->ctx.cp);
     if(r==VK_SUCCESS){
         if(fault==1u)r=VK_ERROR_OUT_OF_HOST_MEMORY;

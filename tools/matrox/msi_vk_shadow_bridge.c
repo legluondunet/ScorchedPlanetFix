@@ -57,6 +57,7 @@
     X(vkMapMemory) \
     X(vkQueueSubmit) \
     X(vkQueueWaitIdle) \
+    X(vkResetCommandBuffer) \
     X(vkUnmapMemory) \
     X(vkUpdateDescriptorSets)
 
