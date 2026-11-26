@@ -1965,6 +1965,46 @@ static int gpu_capture_publish_wave(void){
     gpu_capture_release();
     return 1;
 }
+/* A separate immutable replay measures the same admitted triangle on CPU
+ * and qualifies the packed Vulkan result before any live publication.
+ * Timing excludes scratch allocation and comparison. Not an original
+ * rasterizer benchmark: replay deliberately preserves scanline arithmetic. */
+static int gpu_bypass_oracle(const MsiGpuDrawBatch *batch,const WORD *before,
+    const uint32_t *gpu,unsigned count,MsiGpuRect roi){
+    WORD *cpu=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+    BYTE *mask=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+    MSI_LARGE_INTEGER a,b;
+    int timed=g_cap_frequency&&QueryPerformanceCounter(&a);
+    int replay=cpu&&mask&&msi_gpu_cpu_replay(batch,640u,400u,before,cpu,mask);
+    timed=timed&&QueryPerformanceCounter(&b);
+    MsiGpuPilotOracle r={0};
+    int pass=replay&&msi_gpu_pilot_oracle(&r,batch,cpu,mask,gpu,count,roi);
+    DWORD hz=0,ticks=0;
+    if(timed&&replay&&b.QuadPart>=a.QuadPart&&b.QuadPart-a.QuadPart<=4294967295LL){
+        hz=g_cap_frequency;ticks=(DWORD)(b.QuadPart-a.QuadPart);
+    }
+    char msg[512];DWORD n=0;
+    putstr(msg,&n,pass?"GPU_BYPASS_ORACLE PASS frame=":replay?"GPU_BYPASS_ORACLE DIFFERENCES frame=":"GPU_BYPASS_ORACLE ERROR frame=");
+    putunsigned(msg,&n,g_frames);
+    putstr(msg,&n," cpu_written=");putunsigned(msg,&n,r.cpu_written);
+    putstr(msg,&n," gpu_written=");putunsigned(msg,&n,r.gpu_written);
+    putstr(msg,&n," both=");putunsigned(msg,&n,r.both);
+    putstr(msg,&n," exact=");putunsigned(msg,&n,r.exact);
+    putstr(msg,&n," one_lsb=");putunsigned(msg,&n,r.one);
+    putstr(msg,&n," edge_color=");putunsigned(msg,&n,r.edge_color);
+    putstr(msg,&n," cpu_only=");putunsigned(msg,&n,r.cpu_only);
+    putstr(msg,&n," gpu_only=");putunsigned(msg,&n,r.gpu_only);
+    putstr(msg,&n," edge_coverage=");putunsigned(msg,&n,r.edge_coverage);
+    putstr(msg,&n," unexplained=");putunsigned(msg,&n,r.bad);
+    putstr(msg,&n," outside=");putunsigned(msg,&n,r.outside);
+    putstr(msg,&n," invalid=");putunsigned(msg,&n,r.invalid);
+    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,hz);
+    putstr(msg,&n," cpu_ticks=");putunsigned(msg,&n,ticks);
+    msg[n]=0;logtext(msg);
+    if(cpu)VirtualFree(cpu,0,MEM_RELEASE);
+    if(mask)VirtualFree(mask,0,MEM_RELEASE);
+    return pass;
+}
 /* Diagnostic-only single-triangle GPU execution, AFTER 24 successful
  * paired color/coverage samples. No batching/deferred guest writes. */
 static int gpu_bypass_try(void){
@@ -1983,16 +2023,18 @@ static int gpu_bypass_try(void){
     /* Publish packed ROI tags without expanding a full-frame scratch.
      * Still validate the entire unchanged framebuffer, the exact region,
      * and guard-ring tags before touching any live pixels. */
-    MSI_LARGE_INTEGER q0,q1,q2;
+    MSI_LARGE_INTEGER q0,q1,q2,q3;
     int timed=g_cap_frequency&&QueryPerformanceCounter(&q0);
     int rc=gpu?matrox_vk_shadow_tagged_packed(&g_gpu_capture_batch,gpu,region_pixels,&region):-1;
     timed=timed&&QueryPerformanceCounter(&q1);
     unsigned texture_mode=rc?3u:matrox_vk_shadow_roi_texture_mode();
     unsigned decoded_bytes=(unsigned)g_gpu_capture_batch.snapshots.decoded_used*4u;
     if(!rc&&(!region_pixels||region_pixels>GPU_CAPTURE_NATIVE_BYTES/2u))rc=-2;
+    if(!rc&&!gpu_bypass_oracle(&g_gpu_capture_batch,before,gpu,region_pixels,region))rc=-4;
+    timed=timed&&QueryPerformanceCounter(&q2);
     int ok=!rc&&msi_gpu_bypass_tagged_roi_commit(&result,&g_gpu_capture_batch,
         (WORD*)g_color,g_shadow_underlay,before,gpu,region_pixels,region);
-    timed=timed&&QueryPerformanceCounter(&q2);
+    timed=timed&&QueryPerformanceCounter(&q3);
     if(!ok&&!rc)rc=-3;
     if(ok){
         char msg[256];DWORD n=0;
@@ -2006,10 +2048,10 @@ static int gpu_bypass_try(void){
         /* Dispatch is host wall time including allocation/synchronization;
          * publish is the transactional CPU check/copy. Not GPU timestamps. */
         DWORD hz=0,dispatch_ticks=0,publish_ticks=0;
-        if(timed&&q1.QuadPart>=q0.QuadPart&&q2.QuadPart>=q1.QuadPart&&
-           q1.QuadPart-q0.QuadPart<=4294967295LL&&q2.QuadPart-q1.QuadPart<=4294967295LL){
+        if(timed&&q1.QuadPart>=q0.QuadPart&&q3.QuadPart>=q2.QuadPart&&
+           q1.QuadPart-q0.QuadPart<=4294967295LL&&q3.QuadPart-q2.QuadPart<=4294967295LL){
             hz=g_cap_frequency;dispatch_ticks=(DWORD)(q1.QuadPart-q0.QuadPart);
-            publish_ticks=(DWORD)(q2.QuadPart-q1.QuadPart);
+            publish_ticks=(DWORD)(q3.QuadPart-q2.QuadPart);
         }
         n=0;putstr(msg,&n,"GPU_BYPASS_METRICS frame=");putunsigned(msg,&n,g_frames);
         putstr(msg,&n," mode=");putunsigned(msg,&n,texture_mode);

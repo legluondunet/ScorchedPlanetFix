@@ -6,7 +6,7 @@
  */
 #ifndef MSI_GPU_BYPASS_H
 #define MSI_GPU_BYPASS_H
-#include "msi_gpu_draw_batch.h"
+#include "msi_gpu_compare.h"
 typedef struct {unsigned written,changed;} MsiGpuBypass;
 static inline int msi_gpu_bypass_commit(MsiGpuBypass *r,unsigned w,unsigned h,
     const MsiGpuDrawBatch *b,uint16_t *live,uint8_t *underlay,
@@ -98,6 +98,47 @@ static inline int msi_gpu_bypass_tagged_roi_commit(MsiGpuBypass *r,
         live[j]=(uint16_t)tag;if(underlay)underlay[j]=(d->flags&64u)?2u:1u;
     }
     r->written=written;r->changed=changed;return 1;
+}
+/* Qualification oracle, not the live publication path. Compare actual
+ * fragment writes (including same-color writes) against immutable CPU
+ * replay, with the same RGB565/edge tolerances as the wave diagnostics.
+ * All other color or coverage discrepancies reject this pilot attempt. */
+typedef struct {
+    unsigned cpu_written,gpu_written,both,exact,one,edge_color,
+        cpu_only,gpu_only,edge_coverage,bad,outside,invalid;
+} MsiGpuPilotOracle;
+static inline int msi_gpu_pilot_oracle(MsiGpuPilotOracle *r,const MsiGpuDrawBatch *b,
+    const uint16_t *cpu,const uint8_t *mask,const uint32_t *gpu,size_t count,MsiGpuRect roi){
+    *r=(MsiGpuPilotOracle){0};
+    MsiGpuRect expected;
+    if(!b||b->count!=1u||!cpu||!mask||!gpu||
+       !msi_gpu_native_tagged_region(b,&expected)||
+       roi.x0!=expected.x0||roi.y0!=expected.y0||roi.x1!=expected.x1||roi.y1!=expected.y1)
+        return 0;
+    const MsiGpuDraw *d=&b->draws[0];MsiGpuRect q=d->bounds;
+    const unsigned category=(d->flags&64u)?2u:1u;
+    unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    if((d->flags&9u)!=9u||(d->flags&~127u)||count!=(size_t)rw*rh)return 0;
+    for(unsigned y=0;y<400u;y++)for(unsigned x=0;x<640u;x++){
+        size_t j=(size_t)y*640u+x;
+        uint32_t tag=x>=roi.x0&&x<roi.x1&&y>=roi.y0&&y<roi.y1?
+            gpu[(size_t)(y-roi.y0)*rw+x-roi.x0]:65536u;
+        if(tag>65536u||(mask[j]&&mask[j]!=category)){r->invalid++;continue;}
+        unsigned cw=mask[j]!=0,gw=tag!=65536u;
+        if(!cw&&!gw)continue;
+        r->cpu_written+=cw;r->gpu_written+=gw;
+        r->both+=cw&&gw;r->cpu_only+=cw&&!gw;r->gpu_only+=gw&&!cw;
+        if(x<q.x0||x>=q.x1||y<q.y0||y>=q.y1){r->outside++;continue;}
+        if(cw&&gw&&tag==cpu[j]){r->exact++;continue;}
+        int edge=msi_gpu_compare_edge(b->vertices,x,y);
+        if(cw!=gw){if(edge)r->edge_coverage++;else r->bad++;continue;}
+        if(edge)r->edge_color++;
+        else if(msi_gpu_compare_channel((uint16_t)tag,cpu[j])==1u)r->one++;
+        else r->bad++;
+    }
+    return r->cpu_written&&r->gpu_written&&!r->bad&&!r->outside&&!r->invalid&&
+        r->both==r->exact+r->one+r->edge_color&&
+        r->cpu_only+r->gpu_only==r->edge_coverage;
 }
 /* Future bounded batch path. All draws must have the same shadow
  * provenance category. Mixed categories require a last-writer tag;

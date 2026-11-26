@@ -2,7 +2,39 @@
 #include <assert.h>
 #include <stdio.h>
 #include "msi_gpu_bypass.h"
+static void test_pilot_oracle(void){
+    static uint16_t cpu[640u*400u];
+    static uint8_t mask[640u*400u];
+    MsiGpuDrawBatch b={0};b.count=1;b.draws[0].flags=73;
+    b.draws[0].bounds=(MsiGpuRect){10,10,20,20};
+    b.vertices[0].xy[0]=10.f;b.vertices[0].xy[1]=10.f;
+    b.vertices[1].xy[0]=20.f;b.vertices[1].xy[1]=10.f;
+    b.vertices[2].xy[0]=10.f;b.vertices[2].xy[1]=20.f;
+    for(unsigned i=0;i<3;i++)b.vertices[i].iw=1.f;
+    MsiGpuRect roi;assert(msi_gpu_native_tagged_region(&b,&roi));
+    assert(roi.x0==9&&roi.y0==9&&roi.x1==21&&roi.y1==21);
+    uint32_t tags[144];for(unsigned i=0;i<144;i++)tags[i]=65536u;
+    size_t a=11u*640u+11u,z=12u*640u+12u,edge=15u*640u+14u;
+    mask[a]=mask[z]=mask[edge]=2;cpu[a]=0;cpu[z]=0xffff;cpu[edge]=0x1234;
+    tags[2u*12u+2u]=0;tags[3u*12u+3u]=0xfffe;
+    MsiGpuPilotOracle r;
+    assert(msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi));
+    assert(r.cpu_written==3&&r.gpu_written==2&&r.exact==1&&r.one==1&&r.edge_coverage==1);
+    tags[3u*12u+3u]=0;
+    assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.bad==1);
+    tags[3u*12u+3u]=0xfffe;tags[0]=1;
+    assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.outside==1);
+    tags[0]=65537u;
+    assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.invalid==1);
+    tags[0]=65536u;mask[a]=1;
+    assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.invalid==1);
+    mask[a]=2;assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,143,roi));
+    tags[2u*12u+2u]=65536u;
+    assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.bad==1);
+    puts("MSI_GPU_PILOT_ORACLE_PASS color=1 edge=1 outside=1 invalid=1");
+}
 int main(void){
+    test_pilot_oracle();
     MsiGpuDrawBatch b={0};b.count=1;b.draws[0].flags=73;
     b.draws[0].bounds=(MsiGpuRect){0,0,3,3};
     uint16_t before[16],gpu[16],alt[16],live[16];

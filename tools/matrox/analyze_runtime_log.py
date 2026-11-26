@@ -145,6 +145,8 @@ class GpuAudit:
         self.bypass_roi_publish = []
         self.metrics = []
         self.metrics_errors = []
+        self.oracle = []
+        self.oracle_errors = []
         self.roi_errors = []
         self.errors = []
 
@@ -159,6 +161,14 @@ class GpuAudit:
             self.limits["passes"] = fields(line).get("max_passes")
         elif line.startswith("GPU_BYPASS pilot "):
             self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_BYPASS_ORACLE "):
+            f = fields(line)
+            required = ("frame", "cpu_written", "gpu_written", "both", "exact", "one_lsb", "edge_color",
+                        "cpu_only", "gpu_only", "edge_coverage", "unexplained", "outside", "invalid", "qpc_hz", "cpu_ticks")
+            if line.split(" ", 2)[1] != "PASS" or any(k not in f for k in required):
+                self.oracle_errors.append(line[:240])
+            else:
+                self.oracle.append(f)
         elif line.startswith("GPU_BYPASS_METRICS "):
             f = fields(line)
             if any(k not in f for k in ("frame", "mode", "decoded_bytes", "upload_bytes", "qpc_hz", "dispatch_ticks", "publish_ticks")):
@@ -281,6 +291,31 @@ class GpuAudit:
                 "publish_ms": round(sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
                 "errors": errors, "missing": missing}
 
+    def oracle_report(self):
+        errors = list(self.oracle_errors)
+        missing = []
+        for r in self.oracle:
+            if not (0 < r["cpu_written"] <= 256000 and 0 < r["gpu_written"] <= 256000 and
+                    r["cpu_written"] == r["both"] + r["cpu_only"] and
+                    r["gpu_written"] == r["both"] + r["gpu_only"] and
+                    r["both"] == r["exact"] + r["one_lsb"] + r["edge_color"] and
+                    r["cpu_only"] + r["gpu_only"] == r["edge_coverage"] and
+                    r["both"] + r["cpu_only"] + r["gpu_only"] <= 256000 and
+                    not (r["unexplained"] or r["outside"] or r["invalid"])):
+                errors.append(f"invalid pilot oracle counts at {r['frame']}")
+            if not ((r["qpc_hz"] == 0 and r["cpu_ticks"] == 0) or
+                    (100000 <= r["qpc_hz"] <= 1000000000 and r["cpu_ticks"] <= 4294967295)):
+                errors.append(f"invalid pilot oracle timing at {r['frame']}")
+        if sorted((r["frame"], r["gpu_written"]) for r in self.oracle) != sorted(
+                (r["frame"], r["written"]) for r in self.bypass_roi_publish):
+            missing.append("unmatched pilot oracle/publication evidence")
+        timed = [r for r in self.oracle if r["qpc_hz"]]
+        status = "failed" if errors else "unavailable" if not self.oracle else "incomplete" if missing else "validated"
+        return {"status": status, "records": len(self.oracle), "timed_samples": len(timed),
+                "cpu_replay_ms": round(sum(r["cpu_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                **{k: sum(r[k] for r in self.oracle) for k in ("cpu_written", "gpu_written", "both", "exact", "one_lsb", "edge_color", "edge_coverage")},
+                "errors": errors, "missing": missing}
+
     def report(self, clean):
         errors = list(self.errors)
         missing = []
@@ -304,7 +339,7 @@ class GpuAudit:
         totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
-                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report()}
+                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -530,6 +565,8 @@ def main(argv=None) -> int:
                         help="Require complete current GPU diagnostics and exact full-vs-ROI comparison")
     parser.add_argument("--assert-gpu-metrics", action="store_true",
                         help="Require validated GPU diagnostics, ROI publication and matching pilot metrics")
+    parser.add_argument("--assert-gpu-oracle", action="store_true",
+                        help="Require validated GPU diagnostics, ROI, metrics and single-triangle CPU oracle")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -559,6 +596,9 @@ def main(argv=None) -> int:
     if args.assert_gpu_metrics and any(r["gpu_diagnostics"]["status"] != "validated" or
                                        r["gpu_diagnostics"]["roi"]["status"] != "validated" or
                                        r["gpu_diagnostics"]["metrics"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                      any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1

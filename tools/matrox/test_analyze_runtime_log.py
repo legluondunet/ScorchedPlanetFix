@@ -161,6 +161,27 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         self.assertEqual(r["timed_samples"], 0)
         self.assertIsNone(r["dispatch_ms"])
 
+    def test_gpu_pilot_oracle(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["oracle"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["exact"], r["edge_coverage"], r["cpu_replay_ms"]), (4, 1, 4.5))
+        for before, after, expected in (
+            ("ORACLE PASS", "ORACLE DIFFERENCES", "failed"),
+            ("unexplained=0 outside=0 invalid=0", "unexplained=1 outside=0 invalid=0", "failed"),
+            ("both=5 exact=4", "both=5 exact=3", "failed"),
+            ("edge_coverage=1", "edge_coverage=0", "failed"),
+            ("qpc_hz=10000000 cpu_ticks=45000", "qpc_hz=0 cpu_ticks=45000", "failed"),
+            ("ORACLE PASS frame=240", "ORACLE PASS frame=241", "incomplete"),
+            (oracle, "", "unavailable"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["oracle"]
+                self.assertEqual(r["status"], expected, r)
+
     def test_gpu_malformed_bypass_record(self):
         r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
                                                "GPU_BYPASS OK written=5"))["gpu_diagnostics"]
