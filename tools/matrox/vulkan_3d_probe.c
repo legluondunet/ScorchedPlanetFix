@@ -665,6 +665,13 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
         NEED(!tagged.roi_pool&&!tagged.roi_sets[0]&&!work.pool&&!work.descriptor_borrowed);
         for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
     }
+    for(unsigned fault=23;fault<=24;fault++){
+        for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_MEMORY_MAP_FAILED);
+        NEED(!tagged.uploads.stage.b&&!tagged.uploads.stage.mapped&&!tagged.uploads.vertices.b&&!tagged.uploads.vertices.mapped);
+        NEED(!work.pending&&!work.upload_borrowed&&!work.stage.mapped&&!work.vertices.mapped);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    }
     for(unsigned fault=12;fault<=13;fault++){
         for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
         NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -679,9 +686,13 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
              !tagged.roi.read.b&&!tagged.roi.read.m&&!work.pool&&!work.pending&&!work.roi_borrowed);
         for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
     }
+    NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,25)==VK_ERROR_MEMORY_MAP_FAILED);
+    NEED(!tagged.roi.fb&&!tagged.roi.read.b&&!tagged.roi.read.mapped&&!work.read.mapped);
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
     MsiVkRoiCache cached=tagged.roi;
     MsiVkUploadCache uploads=tagged.uploads;
+    NEED(cached.read.mapped&&uploads.stage.mapped&&uploads.vertices.mapped);
     VkDescriptorPool cached_pool=tagged.roi_pool;
     VkDescriptorSet cached_set=tagged.roi_sets[0];
     VkCommandBuffer cached_cmd=tagged.roi_cmd;
@@ -709,11 +720,14 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
      * allocating large fake textures or changing the rendered fixture. */
     unsigned larger=(unsigned)uploads.stage.size+1u;
     NEED(larger<=MSI_VK_STAGE_MAX);
+    NEED(mvk_upload_acquire(&tagged,&work,larger,96u,23)==VK_ERROR_MEMORY_MAP_FAILED);
+    NEED(tagged.uploads.stage.mapped==uploads.stage.mapped&&tagged.uploads.vertices.mapped==uploads.vertices.mapped);
     NEED(mvk_upload_acquire(&tagged,&work,larger,96u,12)==VK_ERROR_OUT_OF_HOST_MEMORY);
     NEED(tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b&&!work.upload_borrowed);
     NEED(mvk_upload_acquire(&tagged,&work,MSI_VK_STAGE_MAX+1u,96u,0)==VK_ERROR_INITIALIZATION_FAILED);
     OK(mvk_upload_acquire(&tagged,&work,larger,96u,0));
     NEED(work.upload_borrowed&&work.stage.size>=larger&&work.stage.b!=uploads.stage.b&&work.vertices.b==uploads.vertices.b);
+    NEED(work.stage.mapped&&work.vertices.mapped==uploads.vertices.mapped);
     NEED(mvk_cleanup(&tagged,&work)&&!work.upload_borrowed);
     uploads=tagged.uploads;
     NEED(uploads.stage.b&&uploads.vertices.b);
@@ -751,6 +765,8 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(tagged.roi.fb==cached.fb&&tagged.roi.out.i==cached.out.i&&tagged.roi.read.b==cached.read.b);
     NEED(tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b&&!work.upload_borrowed);
     NEED(tagged.roi_pool==cached_pool&&tagged.roi_sets[0]==cached_set&&tagged.roi_cmd);
+    NEED(tagged.roi.read.mapped==cached.read.mapped&&tagged.uploads.stage.mapped==uploads.stage.mapped&&
+         tagged.uploads.vertices.mapped==uploads.vertices.mapped&&!work.read.mapped&&!work.stage.mapped);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==full_edge[j]);
     free(full_edge);free(cropped);
     printf("VULKAN_3D_TAGGED_ROI_PASS exact=%u bytes=%u full_bytes=%u fault_preserved=1\n",
@@ -835,14 +851,20 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
         NEED(!c.texture_cache.entries[0].image.i&&!c.texture_cache.misses&&!work.texture_slot&&!work.texture_reference.b);
         for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
     }
+    NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,26)==VK_ERROR_MEMORY_MAP_FAILED);
+    NEED(!c.texture_cache.entries[0].reference.mapped&&!work.texture_reference.mapped);
+    for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
     OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
     for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
+    NEED(c.texture_cache.entries[0].reference.mapped);
     NEED(c.texture_cache.misses==1&&c.texture_cache.hits==0&&c.texture_cache.next==1&&c.texture_cache.last_mode==2);
     VkImage first=c.texture_cache.entries[0].image.i;
     VkBuffer first_ref=c.texture_cache.entries[0].reference.b;
+    void *first_map=c.texture_cache.entries[0].reference.mapped;
     OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
     for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
     NEED(c.texture_cache.hits==1&&c.texture_cache.misses==1&&c.texture_cache.entries[0].image.i==first&&c.texture_cache.last_mode==1);
+    NEED(c.texture_cache.entries[0].reference.mapped==first_map);
     /* The same color with a discard bit is NOT the same cached texel. */
     decoded[0]|=MSI_GPU_DISCARD|MSI_GPU_FILTER_VETO;
     uint32_t oldhash=c.texture_cache.entries[0].key.hash;
@@ -872,6 +894,7 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<n;j++)roi[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
     NEED(c.texture_cache.entries[0].image.i==first&&c.texture_cache.entries[0].reference.b==first_ref&&c.texture_cache.next==0);
+    NEED(c.texture_cache.entries[0].reference.mapped==first_map);
     for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
     OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
     OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
@@ -890,7 +913,8 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
     OK(msi_vk_batch_retire(&c,&work));NEED(!work.pending&&!work.texture_slot&&c.texture_cache.entries[0].image.i==retained);
     msi_vk_batch_pipeline_destroy(&c);msi_vk_batch_pipeline_destroy(&c);
-    for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++)NEED(!c.texture_cache.entries[i].image.i&&!c.texture_cache.entries[i].reference.b);
+    for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++)NEED(!c.texture_cache.entries[i].image.i&&!c.texture_cache.entries[i].reference.b&&!c.texture_cache.entries[i].reference.mapped);
+    puts("VULKAN_3D_MAPPED_CACHE_PASS stage=1 vertices=1 readback=1 texture=1 map_faults=4 growth_fault=1");
     free(roi);free(full);free(decoded);free(one);
     puts("VULKAN_3D_TEXTURE_CACHE_PASS hits=2 misses=5 collision=1 shape=1 eviction=1 faults=3 pending_retired=1");
 }

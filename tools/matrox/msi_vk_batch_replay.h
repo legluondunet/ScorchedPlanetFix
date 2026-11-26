@@ -12,7 +12,7 @@
 #include <stddef.h>
 #include "msi_gpu_draw_batch.h"
 #define MVK_S(t) {.sType=VK_STRUCTURE_TYPE_##t}
-typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} MsiVkBuffer;
+typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;void *mapped;} MsiVkBuffer;
 typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
 /* One fixed-size native R32 workspace, owned by its pipeline context.
  * Only borrowed by one synchronous cropped submission at a time. */
@@ -61,7 +61,11 @@ typedef struct {
     unsigned texture_slot,texture_hit; /* slot is one-based; 0 = uncached */
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
-static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){if(b.b)vkDestroyBuffer(d,b.b,0);if(b.m)vkFreeMemory(d,b.m,0);}
+static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){
+    if(b.mapped)vkUnmapMemory(d,b.m);
+    if(b.b)vkDestroyBuffer(d,b.b,0);
+    if(b.m)vkFreeMemory(d,b.m,0);
+}
 static void mvk_freeimage(VkDevice d,MsiVkImage a){if(a.v)vkDestroyImageView(d,a.v,0);if(a.i)vkDestroyImage(d,a.i,0);if(a.m)vkFreeMemory(d,a.m,0);}
 static void mvk_roi_destroy(VkDevice d,MsiVkRoiCache *a){
     if(a->fb)vkDestroyFramebuffer(d,a->fb,0);
@@ -167,12 +171,23 @@ static VkResult mvk_buffer(const MsiVkBatchContext *c,MsiVkBuffer *b,VkDeviceSiz
     r=vkAllocateMemory(c->dev,&a,0,&b->m);if(r!=VK_SUCCESS)return r;
     return vkBindBufferMemory(c->dev,b->b,b->m,0);
 }
+/* Only cache-owned HOST_VISIBLE | HOST_COHERENT allocations are
+ * persistently mapped. Borrowed copies of these handles never unmap.
+ * Host writes precede submit; host reads follow successful completion
+ * and the existing transfer-to-host barrier. No noncoherent fallback. */
+static VkResult mvk_map_cached(const MsiVkBatchContext *c,MsiVkBuffer *b){
+    if(!b->m||!b->size||b->mapped)return VK_ERROR_INITIALIZATION_FAILED;
+    void *mapped=0;VkResult r=vkMapMemory(c->dev,b->m,0,b->size,0,&mapped);
+    if(r==VK_SUCCESS)b->mapped=mapped;
+    return r;
+}
 static VkResult mvk_write(const MsiVkBatchContext *c,MsiVkBuffer b,const void *p,size_t n){
     if(!n||n>b.size)return VK_ERROR_INITIALIZATION_FAILED;
-    void *mapped=0;VkResult r=vkMapMemory(c->dev,b.m,0,n,0,&mapped);
-    if(r!=VK_SUCCESS)return r;
+    void *mapped=b.mapped;
+    if(!mapped){VkResult r=vkMapMemory(c->dev,b.m,0,n,0,&mapped);if(r!=VK_SUCCESS)return r;}
     for(size_t i=0;i<n;i++)((uint8_t*)mapped)[i]=((const uint8_t*)p)[i];
-    vkUnmapMemory(c->dev,b.m);return VK_SUCCESS;
+    if(!b.mapped)vkUnmapMemory(c->dev,b.m);
+    return VK_SUCCESS;
 }
 static VkResult mvk_image(const MsiVkBatchContext *c,MsiVkImage *a,uint32_t w,uint32_t h,VkFormat format,VkImageUsageFlags usage){
     VkImageFormatProperties p;VkResult r=vkGetPhysicalDeviceImageFormatProperties(c->phys,format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,usage,0,&p);
@@ -203,6 +218,8 @@ static VkResult mvk_roi_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,unsigned 
         if(r==VK_SUCCESS&&fault==9u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
         if(r==VK_SUCCESS)r=mvk_buffer(c,&a.read,640u*400u*4u,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         if(r==VK_SUCCESS&&fault==10u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r==VK_SUCCESS)r=mvk_map_cached(c,&a.read);
+        if(r==VK_SUCCESS&&fault==25u)r=VK_ERROR_MEMORY_MAP_FAILED;
         if(r==VK_SUCCESS){
             VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);
             fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&a.out.v;
@@ -218,8 +235,8 @@ static VkResult mvk_roi_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,unsigned 
 }
 /* Called only before recording a new synchronous cropped submission.
  * Grow staging geometrically, keep the old buffers on any allocation
- * failure, and copy only the current immutable input bytes. No persistent
- * mapping or new Vulkan dispatch is necessary. */
+ * failure, and copy only the current immutable input bytes. Mappings
+ * belong to the same transaction as the replacement allocations. */
 static VkResult mvk_upload_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
     unsigned stage_bytes,unsigned vertex_bytes,unsigned fault){
     const unsigned vertex_capacity=MSI_GPU_WAVE_MAX*3u*sizeof(MsiGpuVertex);
@@ -233,10 +250,14 @@ static VkResult mvk_upload_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
         while(capacity<stage_bytes)capacity*=2u;
         r=mvk_buffer(c,&a.stage,capacity,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         if(r==VK_SUCCESS&&fault==12u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r==VK_SUCCESS)r=mvk_map_cached(c,&a.stage);
+        if(r==VK_SUCCESS&&fault==23u)r=VK_ERROR_MEMORY_MAP_FAILED;
     }
     if(r==VK_SUCCESS&&!c->uploads.vertices.b){
         r=mvk_buffer(c,&a.vertices,vertex_capacity,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         if(r==VK_SUCCESS&&fault==13u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r==VK_SUCCESS)r=mvk_map_cached(c,&a.vertices);
+        if(r==VK_SUCCESS&&fault==24u)r=VK_ERROR_MEMORY_MAP_FAILED;
     }
     if(r!=VK_SUCCESS){
         mvk_freebuffer(c->dev,a.stage);mvk_freebuffer(c->dev,a.vertices);
@@ -265,12 +286,10 @@ static VkResult mvk_texture_prepare(MsiVkBatchContext *c,MsiVkBatchWork *k,
         const MsiVkTextureEntry *e=&c->texture_cache.entries[i];
         if(!e->image.i||e->key.width!=key.width||e->key.height!=key.height||
            e->key.hash!=key.hash||e->reference.size!=n*4u)continue;
-        void *mapped=0;VkResult r=vkMapMemory(c->dev,e->reference.m,0,n*4u,0,&mapped);
-        if(r!=VK_SUCCESS)return r;
-        const uint32_t *old=(const uint32_t*)mapped;
+        if(!e->reference.mapped)return VK_ERROR_INITIALIZATION_FAILED;
+        const uint32_t *old=(const uint32_t*)e->reference.mapped;
         int equal=1;
         for(size_t j=0;j<n;j++)if(old[j]!=src[j]){equal=0;break;}
-        vkUnmapMemory(c->dev,e->reference.m);
         if(!equal)continue;
         k->texture_slot=i+1u;k->texture_hit=1;k->textures[0]=e->image;
         return VK_SUCCESS;
@@ -281,6 +300,9 @@ static VkResult mvk_texture_prepare(MsiVkBatchContext *c,MsiVkBatchWork *k,
     VkResult r=mvk_buffer(c,&k->texture_reference,n*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     if(r!=VK_SUCCESS)return r;
     if(fault==14u)return VK_ERROR_OUT_OF_HOST_MEMORY;
+    r=mvk_map_cached(c,&k->texture_reference);
+    if(r!=VK_SUCCESS)return r;
+    if(fault==26u)return VK_ERROR_MEMORY_MAP_FAILED;
     return mvk_write(c,k->texture_reference,src,n*4u);
 }
 static void mvk_texture_commit(MsiVkBatchContext *c,MsiVkBatchWork *k){
@@ -363,6 +385,8 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
  * inject persistent descriptor pool/set failures; 18/19 command acquire
  * and post-idle reset failures; 20/21 packed fence acquisition/reset
  * failures; 22 simulates a timeout only after real fence completion.
+ * 23..26 inject errors after successful cache mappings (stage, vertices,
+ * readback, texture reference) to exercise cleanup of mapped memory.
  * Cropped callers use a reset-capable pool. */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
@@ -538,7 +562,8 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
         MVK_TRY(vkResetCommandBuffer(k->cmd,0));MVK_FAULT(19);
         c->roi_cmd=k->cmd;k->cmd=VK_NULL_HANDLE;
     }
-    void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),0,&mapped));
+    void *mapped=k->read.mapped;
+    if(!mapped)MVK_TRY(vkMapMemory(c->dev,k->read.m,0,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),0,&mapped));
     if(c->tagged_output){
         uint32_t *out=(uint32_t*)result;
         const uint32_t *src=(const uint32_t*)mapped;
@@ -556,7 +581,7 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     }else{
         for(size_t i=0;i<(size_t)w*h;i++)((uint16_t*)result)[i]=((const uint16_t*)mapped)[i];
     }
-    vkUnmapMemory(c->dev,k->read.m);
+    if(!k->read.mapped)vkUnmapMemory(c->dev,k->read.m);
     /* Only a successful readback may publish/evict a cache entry. Failed
      * waits retain owned or borrowed resources in work until retirement. */
     mvk_texture_commit(c,k);
