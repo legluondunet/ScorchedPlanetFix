@@ -1971,10 +1971,16 @@ static int gpu_bypass_try(void){
      * Keep the original whole-frame transactional check and CPU fallback.
      * Paired batch diagnostics still independently compare full and ROI. */
     unsigned region_pixels=0;
+    MSI_LARGE_INTEGER q0,q1,q2;
+    int timed=g_cap_frequency&&QueryPerformanceCounter(&q0);
     int rc=gpu?matrox_vk_shadow_tagged_roi(&g_gpu_capture_batch,gpu,&region_pixels):-1;
+    timed=timed&&QueryPerformanceCounter(&q1);
+    unsigned texture_mode=rc?3u:matrox_vk_shadow_roi_texture_mode();
+    unsigned decoded_bytes=(unsigned)g_gpu_capture_batch.snapshots.decoded_used*4u;
     if(!rc&&(!region_pixels||region_pixels>GPU_CAPTURE_NATIVE_BYTES/2u))rc=-2;
     int ok=!rc&&msi_gpu_bypass_tagged_commit(&result,640u,400u,&g_gpu_capture_batch,
         (WORD*)g_color,g_shadow_underlay,before,gpu);
+    timed=timed&&QueryPerformanceCounter(&q2);
     if(!ok&&!rc)rc=-3;
     if(ok){
         char msg[256];DWORD n=0;
@@ -1984,6 +1990,22 @@ static int gpu_bypass_try(void){
         putunsigned(msg,&n,region_pixels*4u);putstr(msg,&n," full_bytes=");
         putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
         putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+        msg[n]=0;logtext(msg);
+        /* Dispatch is host wall time including allocation/synchronization;
+         * publish is the transactional CPU check/copy. Not GPU timestamps. */
+        DWORD hz=0,dispatch_ticks=0,publish_ticks=0;
+        if(timed&&q1.QuadPart>=q0.QuadPart&&q2.QuadPart>=q1.QuadPart&&
+           q1.QuadPart-q0.QuadPart<=4294967295LL&&q2.QuadPart-q1.QuadPart<=4294967295LL){
+            hz=g_cap_frequency;dispatch_ticks=(DWORD)(q1.QuadPart-q0.QuadPart);
+            publish_ticks=(DWORD)(q2.QuadPart-q1.QuadPart);
+        }
+        n=0;putstr(msg,&n,"GPU_BYPASS_METRICS frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," mode=");putunsigned(msg,&n,texture_mode);
+        putstr(msg,&n," decoded_bytes=");putunsigned(msg,&n,decoded_bytes);
+        putstr(msg,&n," upload_bytes=");putunsigned(msg,&n,texture_mode==1u?0u:decoded_bytes);
+        putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,hz);
+        putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,dispatch_ticks);
+        putstr(msg,&n," publish_ticks=");putunsigned(msg,&n,publish_ticks);
         msg[n]=0;logtext(msg);
     }
     if(gpu)VirtualFree(gpu,0,MEM_RELEASE);

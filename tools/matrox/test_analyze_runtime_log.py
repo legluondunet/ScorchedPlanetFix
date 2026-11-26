@@ -128,6 +128,39 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
                 r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
                 self.assertEqual(r["status"], expected, r)
 
+    def test_gpu_pilot_metrics(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=1500\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + metric + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["metrics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["hits"], r["misses"], r["upload_bytes"], r["timed_samples"]), (1, 0, 0, 1))
+        self.assertEqual((r["dispatch_ms"], r["publish_ms"]), (2.5, 0.15))
+        for mode in (0, 2):
+            r = self.parse(body.replace("mode=1 decoded_bytes=65536 upload_bytes=0", f"mode={mode} decoded_bytes=65536 upload_bytes=65536"))["gpu_diagnostics"]["metrics"]
+            self.assertEqual(r["status"], "validated", r)
+            self.assertEqual(r["upload_bytes"], 65536)
+            self.assertEqual(r["misses" if mode == 2 else "uncached"], 1)
+        for before, after, expected in (
+            ("mode=1", "mode=3", "failed"),
+            ("upload_bytes=0", "upload_bytes=4", "failed"),
+            ("decoded_bytes=65536", "decoded_bytes=65540", "failed"),
+            ("qpc_hz=10000000", "qpc_hz=0", "failed"),
+            ("publish_ticks=1500", "", "failed"),
+            ("METRICS frame=240", "METRICS frame=241", "incomplete"),
+            (metric, metric + metric, "incomplete"),
+            (metric, "", "unavailable"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["metrics"]
+                self.assertEqual(r["status"], expected, r)
+        r = self.parse(body.replace("qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=1500",
+                                    "qpc_hz=0 dispatch_ticks=0 publish_ticks=0"))["gpu_diagnostics"]["metrics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["timed_samples"], 0)
+        self.assertIsNone(r["dispatch_ms"])
+
     def test_gpu_malformed_bypass_record(self):
         r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
                                                "GPU_BYPASS OK written=5"))["gpu_diagnostics"]

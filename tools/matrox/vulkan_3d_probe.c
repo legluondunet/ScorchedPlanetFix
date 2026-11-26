@@ -806,12 +806,12 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
     }
     OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
     for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
-    NEED(c.texture_cache.misses==1&&c.texture_cache.hits==0&&c.texture_cache.next==1);
+    NEED(c.texture_cache.misses==1&&c.texture_cache.hits==0&&c.texture_cache.next==1&&c.texture_cache.last_mode==2);
     VkImage first=c.texture_cache.entries[0].image.i;
     VkBuffer first_ref=c.texture_cache.entries[0].reference.b;
     OK(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,0));
     for(size_t j=0;j<n;j++)NEED(full[j]==roi[j]);
-    NEED(c.texture_cache.hits==1&&c.texture_cache.misses==1&&c.texture_cache.entries[0].image.i==first);
+    NEED(c.texture_cache.hits==1&&c.texture_cache.misses==1&&c.texture_cache.entries[0].image.i==first&&c.texture_cache.last_mode==1);
     /* The same color with a discard bit is NOT the same cached texel. */
     decoded[0]|=MSI_GPU_DISCARD|MSI_GPU_FILTER_VETO;
     uint32_t oldhash=c.texture_cache.entries[0].key.hash;
@@ -854,7 +854,7 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
     VkImage retained=c.texture_cache.entries[0].image.i;
     for(size_t j=0;j<n;j++)roi[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_roi(&c,&work,one,roi,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
-    NEED(work.pending&&work.texture_hit&&work.textures[0].i==retained&&c.texture_cache.hits==2);
+    NEED(work.pending&&work.texture_hit&&work.textures[0].i==retained&&c.texture_cache.hits==2&&c.texture_cache.last_mode==3);
     NEED(!mvk_cleanup(&c,&work));
     for(size_t j=0;j<n;j++)NEED(roi[j]==0xabcdef01u);
     OK(msi_vk_batch_retire(&c,&work));NEED(!work.pending&&!work.texture_slot&&c.texture_cache.entries[0].image.i==retained);
@@ -937,10 +937,12 @@ static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expe
         unsigned pixels=0;
         OK(msi_vk_bridge_tagged_roi(batch,roi,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),&pixels));
         NEED(pixels>0&&pixels<n);
+        NEED(msi_vk_bridge_roi_texture_mode()==0u); /* multi-draw reference uncached */
         for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
         /* Invalid output parameter must not mutate output or disable the
          * borrowed session; normal R16 compare below must still pass. */
         NEED(msi_vk_bridge_tagged_roi(batch,roi,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),NULL)==VK_ERROR_INITIALIZATION_FAILED);
+        NEED(msi_vk_bridge_roi_texture_mode()==3u);
         for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
         free(roi);free(tagged);
         /* R16 and R32 share a queue/pool, not pipeline objects. */

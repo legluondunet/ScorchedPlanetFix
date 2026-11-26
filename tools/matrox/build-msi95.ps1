@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "b3789089b3108a9a92fb83cea76a33ac6f8aa1f4e5c47ffa0c97cc72b4bb55b4"
+$expectedSourceHash = "d3f0388d9f4884f7a78553031f3b9cfe670a5dce49676299b0a7e865b315f6e2"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -31,13 +31,13 @@ if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 $vkSource = Join-Path $sourceRoot "vulkan_present.c"
 $vkHeader = Join-Path $sourceRoot "vulkan_present.h"
 $vkSourceHash = (Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($vkSourceHash -cne "28dd29eb0327d5e63c356fc49073626bc7105fb0065c027a74c979e0a8bd9950") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
+if ($vkSourceHash -cne "84e9cc13c38834f01157a2b31aecc16c2374b9849cb50ffab9ebae6754b6256a") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
 $vkHeaderHash = (Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($vkHeaderHash -cne "7b7e8c9a4eaa541c5ffd47069fc6e06a51926ea5414df92b57e96ca9f4ac45a9") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "88fb71ce7f74da614779ceffe0292b980df7e171e3821dea61c0f0297325c373") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
+if ($vkHeaderHash -cne "c0f7a912f9469b3309641711890a130de0362928615177b9292c9c31d91a8683") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "7a507aabe0aaf073edc8e49c665dccf49ec40c0077523d8f322fa2211e9baaf2") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_session.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "cf52c0216849600aeefa26c9cc071655bfeb7c5ff50a49d9edd34facc7288bc2") { throw "Shadow source checksum mismatch: msi_vk_shadow_session.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.c") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "e12b5269acbfc24c531f5a7b83b429781f74f53cf897b56de9e65555ce35e43e") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.c" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "5f74b0735d1b77e55e1c3687d39412748afd56253ba27a8e6b18f3b5890d0cb7") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.c") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "cd3eb71d2526ce50bff1f5632be9bd3ad1929e394855be9e0173f587734327ac") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.c" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "ba82915d744a9ed6624738c2a233af600d647838590b00513617afcf27466f8c") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_compare.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "202b14bbe97a6a30154113dbf12f83a738e19c8a43fa3b6b79cb843c18eeaf72") { throw "Shadow source checksum mismatch: msi_gpu_compare.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "world_spv_embedded.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "cf822014d61d7d25d0d78f13acb0dd7b38ddad9317288f832667a3c2ee46a732") { throw "Shadow source checksum mismatch: world_spv_embedded.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.vert") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "279dd28f45eeab662b6f5ef663b90668b9518085e1dfff711552839a719339c5") { throw "Shadow source checksum mismatch: shaders/opaque_world.vert" }

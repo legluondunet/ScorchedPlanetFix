@@ -371,6 +371,9 @@ int matrox_vk_shadow_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,u
     if(!region_pixels)return VK_ERROR_INITIALIZATION_FAILED;
     return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels);
 }
+unsigned matrox_vk_shadow_roi_texture_mode(void){
+    return ready&&shadow_ready?msi_vk_bridge_roi_texture_mode():3u;
+}
 #endif
 int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){
     if(!ready||!native_pixels||pitch<W*2u||pitch%2u)return 1;

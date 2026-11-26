@@ -27,7 +27,7 @@ typedef struct {unsigned width,height;uint32_t hash;} MsiVkTextureKey;
 typedef struct {MsiVkTextureKey key;MsiVkImage image;MsiVkBuffer reference;} MsiVkTextureEntry;
 typedef struct {
     MsiVkTextureEntry entries[MSI_VK_TEX_SLOTS];
-    unsigned next,hits,misses;
+    unsigned next,hits,misses,last_mode; /* 0 uncached, 1 hit, 2 miss, 3 unavailable */
 } MsiVkTextureCache;
 typedef struct {
     VkPhysicalDevice phys;VkDevice dev;VkQueue queue;VkCommandPool cp;
@@ -73,6 +73,7 @@ static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
     c->uploads=(MsiVkUploadCache){0};
     for(unsigned i=0;i<MSI_VK_TEX_SLOTS;i++)mvk_texture_entry_destroy(c->dev,&c->texture_cache.entries[i]);
     c->texture_cache.next=c->texture_cache.hits=c->texture_cache.misses=0;
+    c->texture_cache.last_mode=3u;
     if(c->pipe)vkDestroyPipeline(c->dev,c->pipe,0);
     if(c->rp_load)vkDestroyRenderPass(c->dev,c->rp_load,0);
     if(c->rp)vkDestroyRenderPass(c->dev,c->rp,0);
@@ -266,6 +267,7 @@ static VkResult mvk_texture_prepare(MsiVkBatchContext *c,MsiVkBatchWork *k,
     return mvk_write(c,k->texture_reference,src,n*4u);
 }
 static void mvk_texture_commit(MsiVkBatchContext *c,MsiVkBatchWork *k){
+    c->texture_cache.last_mode=k->texture_slot?(k->texture_hit?1u:2u):0u;
     if(!k->texture_slot)return;
     if(k->texture_hit){c->texture_cache.hits++;return;}
     unsigned i=k->texture_slot-1u;
@@ -370,6 +372,7 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(crop_tagged&&(!c->tagged_output||w!=640u||h!=400u||!msi_vk_tagged_region(batch,&roi)))
         return VK_ERROR_INITIALIZATION_FAILED;
     unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    c->texture_cache.last_mode=3u;
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MVK_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)

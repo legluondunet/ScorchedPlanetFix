@@ -143,6 +143,8 @@ class GpuAudit:
         self.roi = []
         self.bypass_roi = []
         self.bypass_roi_publish = []
+        self.metrics = []
+        self.metrics_errors = []
         self.roi_errors = []
         self.errors = []
 
@@ -157,6 +159,12 @@ class GpuAudit:
             self.limits["passes"] = fields(line).get("max_passes")
         elif line.startswith("GPU_BYPASS pilot "):
             self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_BYPASS_METRICS "):
+            f = fields(line)
+            if any(k not in f for k in ("frame", "mode", "decoded_bytes", "upload_bytes", "qpc_hz", "dispatch_ticks", "publish_ticks")):
+                self.metrics_errors.append("incomplete GPU_BYPASS_METRICS")
+            else:
+                self.metrics.append(f)
         elif line.startswith("GPU_BYPASS_ROI_PUBLISH "):
             f = fields(line)
             if line.split(" ", 2)[1] != "PASS" or any(k not in f for k in ("frame", "draws", "written", "bytes", "full_bytes")):
@@ -244,6 +252,35 @@ class GpuAudit:
                     if full_count and not errors else None,
                 "errors": errors, "missing": missing}
 
+    def metrics_report(self):
+        errors = list(self.metrics_errors)
+        missing = []
+        modes = {0: 0, 1: 0, 2: 0}
+        timed = []
+        for r in self.metrics:
+            mode, size, upload = r["mode"], r["decoded_bytes"], r["upload_bytes"]
+            hz, dispatch, publish = r["qpc_hz"], r["dispatch_ticks"], r["publish_ticks"]
+            if not (mode in modes and 0 < size <= 8388608 and size % 4 == 0 and
+                    (mode == 0 or size <= 65536) and upload == (0 if mode == 1 else size)):
+                errors.append(f"invalid texture metrics at {r['frame']}")
+            else:
+                modes[mode] += 1
+            if (hz == 0 and (dispatch or publish)) or (hz != 0 and not (
+                    100000 <= hz <= 1000000000 and dispatch <= 4294967295 and publish <= 4294967295)):
+                errors.append(f"invalid QPC metrics at {r['frame']}")
+            elif hz:
+                timed.append(r)
+        if sorted(r["frame"] for r in self.metrics) != sorted(r["frame"] for r in self.bypass_roi_publish):
+            missing.append("unmatched pilot publication metrics")
+        status = "failed" if errors else "unavailable" if not self.metrics else "incomplete" if missing else "validated"
+        return {"status": status, "records": len(self.metrics), "hits": modes[1], "misses": modes[2],
+                "uncached": modes[0], "decoded_bytes": sum(r["decoded_bytes"] for r in self.metrics),
+                "upload_bytes": sum(r["upload_bytes"] for r in self.metrics),
+                "timed_samples": len(timed),
+                "dispatch_ms": round(sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "publish_ms": round(sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "errors": errors, "missing": missing}
+
     def report(self, clean):
         errors = list(self.errors)
         missing = []
@@ -267,7 +304,7 @@ class GpuAudit:
         totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
-                  "errors": errors, "missing": missing, "roi": self.roi_report()}
+                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -491,6 +528,8 @@ def main(argv=None) -> int:
     parser.add_argument("--assert-clean", action="store_true")
     parser.add_argument("--assert-gpu-roi", action="store_true",
                         help="Require complete current GPU diagnostics and exact full-vs-ROI comparison")
+    parser.add_argument("--assert-gpu-metrics", action="store_true",
+                        help="Require validated GPU diagnostics, ROI publication and matching pilot metrics")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -510,11 +549,16 @@ def main(argv=None) -> int:
                 f"space_suppressed={r['space_char_suppressed']} "
                 f"opacity={r['opacity_audit']['status']} "
                 f"gpu_diagnostics={r['gpu_diagnostics']['status']} "
-                f"roi={r['gpu_diagnostics']['roi']['status']}")
+                f"roi={r['gpu_diagnostics']['roi']['status']} "
+                f"metrics={r['gpu_diagnostics']['metrics']['status']}")
             for error in r["errors"]:
                 print(f"  ERROR: {error}", file=sys.stderr)
     if args.assert_gpu_roi and any(r["gpu_diagnostics"]["status"] != "validated" or
                                    r["gpu_diagnostics"]["roi"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_metrics and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["roi"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["metrics"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1
