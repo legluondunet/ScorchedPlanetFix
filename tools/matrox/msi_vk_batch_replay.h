@@ -160,16 +160,29 @@ static uint32_t mvk_mt(const MsiVkBatchContext *c,uint32_t bits,VkMemoryProperty
         if((bits&(1u<<i))&&(c->mem.memoryTypes[i].propertyFlags&flags)==flags)return i;
     return UINT32_MAX;
 }
-static VkResult mvk_buffer(const MsiVkBatchContext *c,MsiVkBuffer *b,VkDeviceSize n,VkBufferUsageFlags usage){
+/* A CPU-read workload benefits from cached host memory when offered.
+ * Never trade away coherence or compatibility with memoryTypeBits. */
+static uint32_t mvk_host_mt(const MsiVkBatchContext *c,uint32_t bits,unsigned prefer_cached){
+    const VkMemoryPropertyFlags coherent=VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if(prefer_cached){
+        uint32_t i=mvk_mt(c,bits,coherent|VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        if(i!=UINT32_MAX)return i;
+    }
+    return mvk_mt(c,bits,coherent);
+}
+static VkResult mvk_buffer_mode(const MsiVkBatchContext *c,MsiVkBuffer *b,VkDeviceSize n,VkBufferUsageFlags usage,unsigned prefer_cached){
     b->size=n;
     VkBufferCreateInfo ci=MVK_S(BUFFER_CREATE_INFO);ci.size=n;ci.usage=usage;ci.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     VkResult r=vkCreateBuffer(c->dev,&ci,0,&b->b);if(r!=VK_SUCCESS)return r;
     VkMemoryRequirements m;vkGetBufferMemoryRequirements(c->dev,b->b,&m);
     VkMemoryAllocateInfo a=MVK_S(MEMORY_ALLOCATE_INFO);a.allocationSize=m.size;
-    a.memoryTypeIndex=mvk_mt(c,m.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    a.memoryTypeIndex=mvk_host_mt(c,m.memoryTypeBits,prefer_cached);
     if(a.memoryTypeIndex==UINT32_MAX)return VK_ERROR_FEATURE_NOT_PRESENT;
     r=vkAllocateMemory(c->dev,&a,0,&b->m);if(r!=VK_SUCCESS)return r;
     return vkBindBufferMemory(c->dev,b->b,b->m,0);
+}
+static VkResult mvk_buffer(const MsiVkBatchContext *c,MsiVkBuffer *b,VkDeviceSize n,VkBufferUsageFlags usage){
+    return mvk_buffer_mode(c,b,n,usage,0);
 }
 /* Only cache-owned HOST_VISIBLE | HOST_COHERENT allocations are
  * persistently mapped. Borrowed copies of these handles never unmap.
@@ -216,7 +229,7 @@ static VkResult mvk_roi_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,unsigned 
         VkResult r=mvk_image(c,&a.out,640u,400u,VK_FORMAT_R32_UINT,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         if(r==VK_SUCCESS&&fault==9u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
-        if(r==VK_SUCCESS)r=mvk_buffer(c,&a.read,640u*400u*4u,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        if(r==VK_SUCCESS)r=mvk_buffer_mode(c,&a.read,640u*400u*4u,VK_BUFFER_USAGE_TRANSFER_DST_BIT,1);
         if(r==VK_SUCCESS&&fault==10u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
         if(r==VK_SUCCESS)r=mvk_map_cached(c,&a.read);
         if(r==VK_SUCCESS&&fault==25u)r=VK_ERROR_MEMORY_MAP_FAILED;
@@ -297,7 +310,7 @@ static VkResult mvk_texture_prepare(MsiVkBatchContext *c,MsiVkBatchWork *k,
     /* Leave the victim intact until the new upload and readback finish.
      * The old image can never be referenced by this miss submission. */
     k->texture_slot=c->texture_cache.next+1u;k->texture_key=key;
-    VkResult r=mvk_buffer(c,&k->texture_reference,n*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    VkResult r=mvk_buffer_mode(c,&k->texture_reference,n*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,1);
     if(r!=VK_SUCCESS)return r;
     if(fault==14u)return VK_ERROR_OUT_OF_HOST_MEMORY;
     r=mvk_map_cached(c,&k->texture_reference);

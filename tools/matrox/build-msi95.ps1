@@ -34,7 +34,7 @@ $vkSourceHash = (Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant
 if ($vkSourceHash -cne "5b37c41ccd9aad47cf8ed90f05e21ac8b5249f984081451e66fdfc570c2142a7") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
 $vkHeaderHash = (Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($vkHeaderHash -cne "238d3ee55866edc0ff105c812454fc453196ee468ae9f68f49eafd07f4c3d9fa") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "7e1d87b62dfd1aaa8e3d1da48576f951c5a472b1043277e1bef08217a7642e6c") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b886a8f1161feeb45cf8e655ffbb380c7b1b7b74e7ebdad093e8e55a661a51c8") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_session.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "f4f2e06b85a47f2eaf44f5b53c37e6a73f37464c88b7b1ddb4877f1d706fb611") { throw "Shadow source checksum mismatch: msi_vk_shadow_session.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.c") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "9427b67637994b75f91695f331bab5145db5e9d4537f829eae16d5a5d531e47d") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.c" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "186e0b1970c356cc6464741afc14a4853e46ffb64309527f31ce096434b91b99") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.h" }

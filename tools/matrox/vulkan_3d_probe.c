@@ -830,7 +830,24 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
 /* Independently compare cached single-draw output to the full transient
  * path. Deliberately force a hash collision and exercise tag changes,
  * shape changes, FIFO eviction, failed replacement and uncertain waits. */
+static void test_host_memory_preference(void){
+    MsiVkBatchContext c={0};
+    const VkMemoryPropertyFlags base=VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    c.mem.memoryTypeCount=4;
+    c.mem.memoryTypes[0].propertyFlags=base;
+    c.mem.memoryTypes[1].propertyFlags=VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    c.mem.memoryTypes[2].propertyFlags=base|VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    c.mem.memoryTypes[3].propertyFlags=VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    NEED(mvk_host_mt(&c,15u,1)==2u);
+    NEED(mvk_host_mt(&c,15u,0)==0u);
+    NEED(mvk_host_mt(&c,3u,1)==0u);
+    NEED(mvk_host_mt(&c,4u,1)==2u);
+    NEED(mvk_host_mt(&c,10u,1)==UINT32_MAX);
+    NEED(mvk_host_mt(&c,0u,0)==UINT32_MAX);
+    puts("VULKAN_3D_HOST_MEMORY_PASS preferred=1 fallback=1 filtered=1");
+}
 static void test_texture_cache(const MsiGpuDrawBatch *batch){
+    test_host_memory_preference();
     MsiGpuDrawBatch *one=malloc(sizeof(*one));NEED(one);
     *one=*batch;one->count=1;one->draws[0].texture_id=0;
     uint32_t *decoded=malloc(MSI_VK_TEX_MAX*4u);NEED(decoded);
