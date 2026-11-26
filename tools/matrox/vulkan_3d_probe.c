@@ -652,6 +652,40 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     }
     NEED(overwritten>0);
     OK(msi_vk_batch_render(&tagged,&work,ordered,640,400,NULL,out,0));
+    /* Four overlapping offset draws: compare every tagged pixel including
+     * sentinel outside the cropped region, then exercise fault/no mutation. */
+    uint32_t *cropped=malloc(n*4u);NEED(cropped);
+    MsiGpuRect roi;
+    NEED(msi_vk_tagged_region(ordered,&roi));
+    unsigned region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
+    NEED(roi.x0==7&&roi.y0==7&&roi.x1==97&&roi.y1==73&&region_pixels<n);
+    OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
+    for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    MsiGpuRect saved=ordered->draws[0].bounds;
+    ordered->draws[0].bounds.x1=641;
+    NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0)==VK_ERROR_INITIALIZATION_FAILED);
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    ordered->draws[0].bounds=saved;
+    /* Boundary touching the viewport and disjoint clipped regions. */
+    *one=*ordered;one->count=2;
+    one->draws[0].bounds=(MsiGpuRect){0,0,72,72};
+    one->draws[1].bounds=(MsiGpuRect){568,328,640,400};
+    for(unsigned j=0;j<3;j++){
+        one->vertices[j]=ordered->vertices[j];
+        one->vertices[j].xy[0]-=8.f;one->vertices[j].xy[1]-=8.f;
+        one->vertices[j+3]=ordered->vertices[j];
+        one->vertices[j+3].xy[0]+=560.f;one->vertices[j+3].xy[1]+=320.f;
+    }
+    OK(msi_vk_batch_render(&tagged,&work,one,640,400,NULL,cropped,0));
+    uint32_t *full_edge=malloc(n*4u);NEED(full_edge);
+    OK(msi_vk_batch_render_tagged_roi(&tagged,&work,one,full_edge,0));
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==full_edge[j]);
+    free(full_edge);free(cropped);
+    printf("VULKAN_3D_TAGGED_ROI_PASS exact=%u bytes=%u full_bytes=%u fault_preserved=1\n",
+        (unsigned)n,region_pixels*4u,(unsigned)n*4u);
     MsiGpuBypass result;
     NEED(msi_gpu_bypass_tagged_batch_commit(&result,640,400,ordered,live,under,before,out));
     NEED(result.written>0&&result.changed>0);

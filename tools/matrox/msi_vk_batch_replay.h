@@ -168,8 +168,25 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
 }
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
  * acquisition failures. 7/8 simulate wait errors ONLY after real idle. */
-static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
-    const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault){
+/* Experimental native tagged ROI. Use the union of validated draw bounds
+ * plus a one-pixel guard ring to preserve and detect edge disagreements.
+ * Do not use this for scaled output or an initial-color LOAD pass. */
+static int msi_vk_tagged_region(const MsiGpuDrawBatch *batch,MsiGpuRect *out){
+    if(!batch||!out||!batch->count||batch->count>MSI_GPU_WAVE_MAX)return 0;
+    MsiGpuRect r={640u,400u,0,0};
+    for(unsigned i=0;i<batch->count;i++){
+        MsiGpuRect q=batch->draws[i].bounds;
+        if(q.x0>=q.x1||q.y0>=q.y1||q.x1>640u||q.y1>400u)return 0;
+        if(q.x0<r.x0)r.x0=q.x0;if(q.y0<r.y0)r.y0=q.y0;
+        if(q.x1>r.x1)r.x1=q.x1;if(q.y1>r.y1)r.y1=q.y1;
+    }
+    if(r.x0)r.x0--;if(r.y0)r.y0--;
+    if(r.x1<640u)r.x1++;if(r.y1<400u)r.y1++;
+    *out=r;return 1;
+}
+static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault,
+    unsigned crop_tagged){
     if(!c||!k||c->unusable||k->pending||k->pool||!batch||!result||result==before||
        (c->tagged_output&&before)||!w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
        !batch->snapshots.count||batch->snapshots.count>MSI_GPU_SNAPSHOT_MAX||
@@ -187,6 +204,10 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(offset!=batch->snapshots.decoded_used)return VK_ERROR_INITIALIZATION_FAILED;
     for(unsigned i=0;i<batch->count;i++)if(batch->draws[i].texture_id>=batch->snapshots.count||
         (c->tagged_output&&(batch->draws[i].flags&~127u)))return VK_ERROR_INITIALIZATION_FAILED;
+    MsiGpuRect roi={0,0,w,h};
+    if(crop_tagged&&(!c->tagged_output||w!=640u||h!=400u||!msi_vk_tagged_region(batch,&roi)))
+        return VK_ERROR_INITIALIZATION_FAILED;
+    unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MVK_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
@@ -216,7 +237,7 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
      * shader outputs are <=65535, so 65536 uniquely denotes no write. */
     MVK_TRY(mvk_image(c,&k->out,w,h,c->tagged_output?VK_FORMAT_R32_UINT:VK_FORMAT_R16_UINT,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-    MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)w*h*(c->tagged_output?4u:2u),VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+    MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),VK_BUFFER_USAGE_TRANSFER_DST_BIT));
     VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&k->out.v;fi.width=w;fi.height=h;fi.layers=1;
     MVK_TRY(vkCreateFramebuffer(c->dev,&fi,0,&k->fb));MVK_FAULT(4);
     VkCommandBufferAllocateInfo ca=MVK_S(COMMAND_BUFFER_ALLOCATE_INFO);ca.commandPool=c->cp;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -244,9 +265,9 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
             VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     }
     VkClearValue clear={.color.uint32={c->tagged_output?65536u:0xdeadu,0,0,0}};
-    VkRenderPassBeginInfo bi=MVK_S(RENDER_PASS_BEGIN_INFO);bi.renderPass=before?c->rp_load:c->rp;bi.framebuffer=k->fb;bi.renderArea.extent=(VkExtent2D){w,h};if(!before){bi.clearValueCount=1;bi.pClearValues=&clear;}
+    VkRenderPassBeginInfo bi=MVK_S(RENDER_PASS_BEGIN_INFO);bi.renderPass=before?c->rp_load:c->rp;bi.framebuffer=k->fb;bi.renderArea.offset=(VkOffset2D){(int32_t)roi.x0,(int32_t)roi.y0};bi.renderArea.extent=(VkExtent2D){rw,rh};if(!before){bi.clearValueCount=1;bi.pClearValues=&clear;}
     vkCmdBeginRenderPass(cmd,&bi,VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{0,0},{w,h}};
+    VkViewport vp={0,0,(float)w,(float)h,0,1};VkRect2D sc={{(int32_t)roi.x0,(int32_t)roi.y0},{rw,rh}};
     vkCmdSetViewport(cmd,0,1,&vp);vkCmdSetScissor(cmd,0,1,&sc);
     vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,c->pipe);
     VkDeviceSize off=0;vkCmdBindVertexBuffers(cmd,0,1,&k->vertices.b,&off);
@@ -260,7 +281,9 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     vkCmdEndRenderPass(cmd);
     mvk_transition(cmd,k->out.i,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
-    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};br.imageExtent=(VkExtent3D){w,h,1};
+    VkBufferImageCopy br={0};br.imageSubresource=(VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+    br.imageOffset=(VkOffset3D){(int32_t)roi.x0,(int32_t)roi.y0,0};
+    br.imageExtent=(VkExtent3D){rw,rh,1};
     vkCmdCopyImageToBuffer(cmd,k->out.i,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,k->read.b,1,&br);
     VkBufferMemoryBarrier bar=MVK_S(BUFFER_MEMORY_BARRIER);bar.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;bar.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
     bar.srcQueueFamilyIndex=bar.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;bar.buffer=k->read.b;bar.size=VK_WHOLE_SIZE;
@@ -275,7 +298,16 @@ static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     k->pending=0;MVK_FAULT(6);
     void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,k->read.size,0,&mapped));
     if(c->tagged_output){
-        for(size_t i=0;i<(size_t)w*h;i++)((uint32_t*)result)[i]=((const uint32_t*)mapped)[i];
+        uint32_t *out=(uint32_t*)result;
+        const uint32_t *src=(const uint32_t*)mapped;
+        if(crop_tagged){
+            /* The cropped render area is cleared to the no-write tag.
+             * Outside it no draw can execute because of the scissor.
+             * Expand only AFTER a successful wait and mapping. */
+            for(size_t i=0;i<(size_t)w*h;i++)out[i]=65536u;
+            for(unsigned y=0;y<rh;y++)for(unsigned x=0;x<rw;x++)
+                out[(size_t)(roi.y0+y)*w+roi.x0+x]=src[(size_t)y*rw+x];
+        }else for(size_t i=0;i<(size_t)w*h;i++)out[i]=src[i];
     }else{
         for(size_t i=0;i<(size_t)w*h;i++)((uint16_t*)result)[i]=((const uint16_t*)mapped)[i];
     }
@@ -289,6 +321,16 @@ done:
 #undef MVK_TRY
 #undef MVK_FAULT
     return rc;
+}
+/* Preserve full readback as the only current runtime path. ROI is an
+ * opt-in standalone proof until verified on representative GPU workloads. */
+static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    const MsiGpuDrawBatch *b,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault){
+    return msi_vk_batch_render_impl(c,k,b,w,h,before,result,fault,0);
+}
+static VkResult msi_vk_batch_render_tagged_roi(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    const MsiGpuDrawBatch *b,uint32_t *result,unsigned fault){
+    return msi_vk_batch_render_impl(c,k,b,640u,400u,NULL,result,fault,1);
 }
 #undef MVK_S
 #endif
