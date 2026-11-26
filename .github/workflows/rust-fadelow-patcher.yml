@@ -197,6 +197,16 @@ jobs:
           & $probe
           if ($LASTEXITCODE -ne 0) { throw 'Private access guard proof failed' }
 
+      - name: Validate x86 dual-view immutable batch recovery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Join-Path $env:RUNNER_TEMP 'msi95-dual-view-batch.exe'
+          clang --target=i686-pc-windows-msvc -O2 -ffp-contract=off tools/matrox/smoke_dual_view_batch.c -o $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Dual-view recovery proof compilation failed' }
+          & $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Dual-view recovery proof failed' }
+
       - name: Build and validate standalone MSI95 synthetic lighting probe
         shell: pwsh
         run: |
