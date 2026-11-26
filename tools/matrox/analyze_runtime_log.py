@@ -267,6 +267,7 @@ class GpuAudit:
         missing = []
         modes = {0: 0, 1: 0, 2: 0}
         timed = []
+        fence_timed = []
         for r in self.metrics:
             mode, size, upload = r["mode"], r["decoded_bytes"], r["upload_bytes"]
             hz, dispatch, publish = r["qpc_hz"], r["dispatch_ticks"], r["publish_ticks"]
@@ -280,6 +281,13 @@ class GpuAudit:
                 errors.append(f"invalid QPC metrics at {r['frame']}")
             elif hz:
                 timed.append(r)
+            if "fence_wait_valid" in r or "fence_wait_ticks" in r:
+                valid, wait = r.get("fence_wait_valid"), r.get("fence_wait_ticks")
+                if not ((valid == 0 and wait == 0) or
+                        (valid == 1 and hz and wait is not None and 0 <= wait <= dispatch)):
+                    errors.append(f"invalid fence wait metrics at {r['frame']}")
+                elif valid:
+                    fence_timed.append(r)
         if sorted(r["frame"] for r in self.metrics) != sorted(r["frame"] for r in self.bypass_roi_publish):
             missing.append("unmatched pilot publication metrics")
         status = "failed" if errors else "unavailable" if not self.metrics else "incomplete" if missing else "validated"
@@ -289,6 +297,9 @@ class GpuAudit:
                 "timed_samples": len(timed),
                 "dispatch_ms": round(sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
                 "publish_ms": round(sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "fence_timed_samples": len(fence_timed),
+                "fence_wait_ms": round(sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
+                "dispatch_excluding_fence_ms": round(sum((r["dispatch_ticks"] - r["fence_wait_ticks"]) * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
                 "errors": errors, "missing": missing}
 
     def oracle_report(self):

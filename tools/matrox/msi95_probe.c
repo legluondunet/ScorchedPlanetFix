@@ -2025,7 +2025,8 @@ static int gpu_bypass_try(void){
      * and guard-ring tags before touching any live pixels. */
     MSI_LARGE_INTEGER q0,q1,q2,q3;
     int timed=g_cap_frequency&&QueryPerformanceCounter(&q0);
-    int rc=gpu?matrox_vk_shadow_tagged_packed(&g_gpu_capture_batch,gpu,region_pixels,&region):-1;
+    uint32_t wait_ticks=UINT32_MAX;
+    int rc=gpu?matrox_vk_shadow_tagged_packed(&g_gpu_capture_batch,gpu,region_pixels,&region,&wait_ticks):-1;
     timed=timed&&QueryPerformanceCounter(&q1);
     unsigned texture_mode=rc?3u:matrox_vk_shadow_roi_texture_mode();
     unsigned decoded_bytes=(unsigned)g_gpu_capture_batch.snapshots.decoded_used*4u;
@@ -2060,6 +2061,9 @@ static int gpu_bypass_try(void){
         putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,hz);
         putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,dispatch_ticks);
         putstr(msg,&n," publish_ticks=");putunsigned(msg,&n,publish_ticks);
+        unsigned wait_valid=hz&&wait_ticks!=UINT32_MAX&&wait_ticks<=dispatch_ticks;
+        putstr(msg,&n," fence_wait_valid=");putunsigned(msg,&n,wait_valid);
+        putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,wait_valid?wait_ticks:0);
         msg[n]=0;logtext(msg);
     }
     if(gpu)VirtualFree(gpu,0,MEM_RELEASE);

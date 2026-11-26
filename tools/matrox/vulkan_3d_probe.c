@@ -896,6 +896,8 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
 }
 /* Prove packed dispatch and publication against the independent full
  * output, including same-color ownership and untouched outside pixels. */
+static uint64_t packed_clock_value;
+static uint64_t packed_test_clock(void){packed_clock_value+=17u;return packed_clock_value;}
 static void test_packed_publication(const MsiGpuDrawBatch *batch){
     MsiGpuDrawBatch *one=malloc(sizeof(*one));NEED(one);
     *one=*batch;one->count=1;one->draws[0].flags=79u;
@@ -927,9 +929,11 @@ static void test_packed_publication(const MsiGpuDrawBatch *batch){
     NEED(actual.x0==region.x0&&actual.y0==region.y0&&actual.x1==region.x1&&actual.y1==region.y1);
     NEED(packed[0]==0xabcdef01u&&packed[count+1]==0xabcdef01u);
     VkFence retained_fence=c.packed_fence;
-    NEED(retained_fence&&!work.fence);
+    NEED(retained_fence&&!work.fence&&c.packed_wait_ticks==UINT32_MAX);
+    c.packed_clock=packed_test_clock;packed_clock_value=0;
     OK(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,0));
     NEED(c.packed_fence==retained_fence&&!work.fence&&!work.pending);
+    NEED(c.packed_wait_ticks==17u&&packed_clock_value==34u);
     for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
         uint32_t tag=x>=region.x0&&x<region.x1&&y>=region.y0&&y<region.y1?
             packed[1+(size_t)(y-region.y0)*rw+x-region.x0]:65536u;
@@ -975,7 +979,7 @@ static void test_packed_publication(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<count+2u;j++)packed[j]=0xabcdef01u;
     MsiGpuRect untouched={0};
     NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&untouched,22)==VK_TIMEOUT);
-    NEED(c.unusable&&work.pending&&work.fence==retained_fence&&!c.packed_fence);
+    NEED(c.unusable&&work.pending&&work.fence==retained_fence&&!c.packed_fence&&c.packed_wait_ticks==UINT32_MAX);
     NEED(!mvk_cleanup(&c,&work)&&!untouched.x0&&!untouched.x1);
     for(size_t j=0;j<count+2u;j++)NEED(packed[j]==0xabcdef01u);
     OK(msi_vk_batch_retire(&c,&work));
@@ -1068,7 +1072,9 @@ static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expe
         NEED(msi_vk_bridge_roi_texture_mode()==3u);
         for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
         MsiGpuRect packed_region={0};
-        OK(msi_vk_bridge_tagged_packed(batch,roi,pixels,&packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)));
+        uint32_t wait_ticks=UINT32_MAX;packed_clock_value=0;
+        OK(msi_vk_bridge_tagged_packed(batch,roi,pixels,&packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),packed_test_clock,&wait_ticks));
+        NEED(wait_ticks==17u&&packed_clock_value==34u);
         unsigned pw=packed_region.x1-packed_region.x0,ph=packed_region.y1-packed_region.y0;
         NEED(pw*ph==pixels&&msi_vk_bridge_roi_texture_mode()==0u);
         for(unsigned yy=0;yy<ph;yy++)for(unsigned xx=0;xx<pw;xx++)

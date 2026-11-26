@@ -353,10 +353,15 @@ int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before
     }
     return r;
 }
+static uint64_t matrox_vk_qpc(void){
+    LARGE_INTEGER q;
+    return QueryPerformanceCounter(&q)&&q.QuadPart>0?(uint64_t)q.QuadPart:0;
+}
 static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels,
-    size_t packed_capacity,MsiGpuRect *packed_region){
+    size_t packed_capacity,MsiGpuRect *packed_region,uint32_t *wait_ticks){
+    if(wait_ticks)*wait_ticks=UINT32_MAX;
     if(!ready||!shadow_ready)return VK_NOT_READY;
-    VkResult r=packed_region?msi_vk_bridge_tagged_packed(batch,scratch,packed_capacity,packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)):
+    VkResult r=packed_region?msi_vk_bridge_tagged_packed(batch,scratch,packed_capacity,packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),wait_ticks?matrox_vk_qpc:0,wait_ticks):
         region_pixels?msi_vk_bridge_tagged_roi(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),region_pixels):
         msi_vk_bridge_tagged(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag));
     if(r!=VK_SUCCESS){
@@ -367,15 +372,16 @@ static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *s
     return r;
 }
 int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch){
-    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,0,NULL);
+    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,0,NULL,NULL);
 }
 int matrox_vk_shadow_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels){
     if(!region_pixels)return VK_ERROR_INITIALIZATION_FAILED;
-    return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels,0,NULL);
+    return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels,0,NULL,NULL);
 }
-int matrox_vk_shadow_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,MsiGpuRect *region){
+int matrox_vk_shadow_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,MsiGpuRect *region,uint32_t *wait_ticks){
+    if(wait_ticks)*wait_ticks=UINT32_MAX;
     if(!region)return VK_ERROR_INITIALIZATION_FAILED;
-    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,capacity,region);
+    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,capacity,region,wait_ticks);
 }
 unsigned matrox_vk_shadow_roi_texture_mode(void){
     return ready&&shadow_ready?msi_vk_bridge_roi_texture_mode():3u;

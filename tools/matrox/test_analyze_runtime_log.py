@@ -160,6 +160,21 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         self.assertEqual(r["status"], "validated", r)
         self.assertEqual(r["timed_samples"], 0)
         self.assertIsNone(r["dispatch_ms"])
+        # Optional newer fields do not invalidate historical logs.
+        for suffix, expected in (
+            (" fence_wait_valid=1 fence_wait_ticks=20000", "validated"),
+            (" fence_wait_valid=0 fence_wait_ticks=0", "validated"),
+            (" fence_wait_valid=1 fence_wait_ticks=25001", "failed"),
+            (" fence_wait_valid=1", "failed"),
+            (" fence_wait_ticks=1", "failed"),
+            (" fence_wait_valid=2 fence_wait_ticks=0", "failed"),
+            (" fence_wait_valid=0 fence_wait_ticks=1", "failed"),
+        ):
+            with self.subTest(suffix=suffix):
+                r = self.parse(body.replace(metric, metric.rstrip("\n") + suffix + "\n"))["gpu_diagnostics"]["metrics"]
+                self.assertEqual(r["status"], expected, r)
+                if suffix.endswith("ticks=20000"):
+                    self.assertEqual((r["fence_timed_samples"], r["fence_wait_ms"], r["dispatch_excluding_fence_ms"]), (1, 2.0, 0.5))
 
     def test_gpu_pilot_oracle(self):
         batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"

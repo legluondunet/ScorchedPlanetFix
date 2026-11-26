@@ -45,6 +45,10 @@ typedef struct {
     VkDescriptorSet roi_sets[MSI_GPU_SNAPSHOT_MAX];
     VkCommandBuffer roi_cmd;
     VkFence packed_fence; /* unsignaled, idle, only for packed pilot */
+    /* Optional owner-clock callback. 0 means no timestamp; UINT32_MAX
+     * denotes an unavailable/invalid interval. Host wall time only. */
+    uint64_t (*packed_clock)(void);
+    uint32_t packed_wait_ticks;
 } MsiVkBatchContext;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
@@ -75,7 +79,7 @@ static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
     /* Caller has retired pending work; release commands/descriptors before
      * referenced resources, framebuffer before render pass. */
     if(c->packed_fence)vkDestroyFence(c->dev,c->packed_fence,0);
-    c->packed_fence=VK_NULL_HANDLE;
+    c->packed_fence=VK_NULL_HANDLE;c->packed_clock=0;c->packed_wait_ticks=UINT32_MAX;
     if(c->roi_cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&c->roi_cmd);
     if(c->roi_pool)vkDestroyDescriptorPool(c->dev,c->roi_pool,0);
     c->roi_cmd=VK_NULL_HANDLE;c->roi_pool=VK_NULL_HANDLE;
@@ -369,6 +373,7 @@ static int msi_vk_tagged_region(const MsiGpuDrawBatch *batch,MsiGpuRect *out){
 static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault,
     unsigned crop_tagged,size_t packed_capacity,MsiGpuRect *packed_region){
+    if(c)c->packed_wait_ticks=UINT32_MAX;
     if(!c||!k||c->unusable||k->pending||k->pool||!batch||!result||result==before||
        (c->tagged_output&&before)||!w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
        !batch->snapshots.count||batch->snapshots.count>MSI_GPU_SNAPSHOT_MAX||
@@ -513,7 +518,9 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     }
     VkSubmitInfo submit=MVK_S(SUBMIT_INFO);submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;
     MVK_TRY(vkQueueSubmit(c->queue,1,&submit,k->fence));k->pending=1;
+    uint64_t wait_begin=k->fence&&c->packed_clock?c->packed_clock():0;
     rc=k->fence?vkWaitForFences(c->dev,1,&k->fence,VK_TRUE,5000000000ull):vkQueueWaitIdle(c->queue);
+    uint64_t wait_end=wait_begin?c->packed_clock():0;
     if(rc==VK_SUCCESS&&k->fence&&fault==22u)rc=VK_TIMEOUT;
     if(rc==VK_SUCCESS&&fault==7)rc=VK_ERROR_OUT_OF_HOST_MEMORY;
     if(rc==VK_SUCCESS&&fault==8)rc=VK_ERROR_DEVICE_LOST;
@@ -553,6 +560,8 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     /* Only a successful readback may publish/evict a cache entry. Failed
      * waits retain owned or borrowed resources in work until retirement. */
     mvk_texture_commit(c,k);
+    if(wait_begin&&wait_end>=wait_begin&&wait_end-wait_begin<UINT32_MAX)
+        c->packed_wait_ticks=(uint32_t)(wait_end-wait_begin);
 
 done:
     /* The specification permits freeing in-use objects on device loss.
