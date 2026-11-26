@@ -659,6 +659,13 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(msi_vk_tagged_region(ordered,&roi));
     unsigned region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
     NEED(roi.x0==7&&roi.y0==7&&roi.x1==97&&roi.y1==73&&region_pixels<n);
+    for(unsigned fault=12;fault<=13;fault++){
+        for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!tagged.uploads.stage.b&&!tagged.uploads.stage.m&&!tagged.uploads.vertices.b&&
+             !tagged.uploads.vertices.m&&!work.pool&&!work.pending&&!work.upload_borrowed);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    }
     for(unsigned fault=9;fault<=11;fault++){
         for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
         NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -668,7 +675,22 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     }
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
     MsiVkRoiCache cached=tagged.roi;
+    MsiVkUploadCache uploads=tagged.uploads;
     NEED(cached.fb&&cached.out.i&&cached.read.b&&cached.read.size==n*4u&&!work.roi_borrowed);
+    NEED(uploads.stage.b&&uploads.vertices.b&&uploads.stage.size>=ordered->snapshots.decoded_used*4u&&
+         uploads.vertices.size==MSI_GPU_WAVE_MAX*3u*sizeof(MsiGpuVertex)&&!work.upload_borrowed);
+    /* Grow outside a submission to exercise transactionality without
+     * allocating large fake textures or changing the rendered fixture. */
+    unsigned larger=(unsigned)uploads.stage.size+1u;
+    NEED(larger<=MSI_VK_STAGE_MAX);
+    NEED(mvk_upload_acquire(&tagged,&work,larger,96u,12)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b&&!work.upload_borrowed);
+    NEED(mvk_upload_acquire(&tagged,&work,MSI_VK_STAGE_MAX+1u,96u,0)==VK_ERROR_INITIALIZATION_FAILED);
+    OK(mvk_upload_acquire(&tagged,&work,larger,96u,0));
+    NEED(work.upload_borrowed&&work.stage.size>=larger&&work.stage.b!=uploads.stage.b&&work.vertices.b==uploads.vertices.b);
+    NEED(mvk_cleanup(&tagged,&work)&&!work.upload_borrowed);
+    uploads=tagged.uploads;
+    NEED(uploads.stage.b&&uploads.vertices.b);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
     for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,4)==VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -701,6 +723,7 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     uint32_t *full_edge=malloc(n*4u);NEED(full_edge);
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,one,full_edge,0));
     NEED(tagged.roi.fb==cached.fb&&tagged.roi.out.i==cached.out.i&&tagged.roi.read.b==cached.read.b);
+    NEED(tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b&&!work.upload_borrowed);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==full_edge[j]);
     free(full_edge);free(cropped);
     printf("VULKAN_3D_TAGGED_ROI_PASS exact=%u bytes=%u full_bytes=%u fault_preserved=1\n",
@@ -743,14 +766,18 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<n;j++)out[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,one,out,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
     NEED(work.pending&&work.roi_borrowed&&work.fb==cached.fb&&work.read.b==cached.read.b);
+    NEED(work.upload_borrowed&&work.stage.b==uploads.stage.b&&work.vertices.b==uploads.vertices.b);
     NEED(!mvk_cleanup(&tagged,&work)&&tagged.unusable);
     for(size_t j=0;j<n;j++)NEED(out[j]==0xabcdef01u);
     OK(msi_vk_batch_retire(&tagged,&work));
     NEED(!work.pending&&!work.roi_borrowed&&!work.fb&&tagged.roi.fb==cached.fb&&tagged.roi.read.b==cached.read.b);
+    NEED(!work.upload_borrowed&&!work.stage.b&&tagged.uploads.stage.b==uploads.stage.b&&tagged.uploads.vertices.b==uploads.vertices.b);
     msi_vk_batch_pipeline_destroy(&tagged);
     msi_vk_batch_pipeline_destroy(&tagged);
     NEED(!tagged.roi.fb&&!tagged.roi.out.i&&!tagged.roi.read.b);
+    NEED(!tagged.uploads.stage.b&&!tagged.uploads.stage.m&&!tagged.uploads.vertices.b&&!tagged.uploads.vertices.m);
     puts("VULKAN_3D_ROI_CACHE_PASS init_faults=3 reuse=1 pre_submit_fault=1 pending_retired=1");
+    puts("VULKAN_3D_UPLOAD_CACHE_PASS init_faults=2 growth_fault=1 grow=1 reuse=1 pending_retired=1");
     free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
 }
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){

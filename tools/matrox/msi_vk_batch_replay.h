@@ -17,6 +17,9 @@ typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
 /* One fixed-size native R32 workspace, owned by its pipeline context.
  * Only borrowed by one synchronous cropped submission at a time. */
 typedef struct {MsiVkImage out;MsiVkBuffer read;VkFramebuffer fb;} MsiVkRoiCache;
+/* Bounded reusable host-coherent uploads for the same cropped path. */
+typedef struct {MsiVkBuffer stage,vertices;} MsiVkUploadCache;
+enum {MSI_VK_STAGE_MAX=8388608u,MSI_VK_STAGE_MIN=65536u};
 typedef struct {
     VkPhysicalDevice phys;VkDevice dev;VkQueue queue;VkCommandPool cp;
     VkPhysicalDeviceMemoryProperties mem;
@@ -25,13 +28,14 @@ typedef struct {
     unsigned unusable; /* never reset except by a fresh device context */
     unsigned tagged_output; /* fixed before pipeline creation: R32_UINT, clear=65536 */
     MsiVkRoiCache roi;
+    MsiVkUploadCache uploads;
 } MsiVkBatchContext;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
     MsiVkBuffer stage,vertices,read,initial;
     VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
     VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
-    unsigned pending,roi_borrowed;
+    unsigned pending,roi_borrowed,upload_borrowed;
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
 static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){if(b.b)vkDestroyBuffer(d,b.b,0);if(b.m)vkFreeMemory(d,b.m,0);}
@@ -47,6 +51,9 @@ static void mvk_roi_destroy(VkDevice d,MsiVkRoiCache *a){
 static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
     /* Caller has retired pending work; framebuffer precedes render pass. */
     mvk_roi_destroy(c->dev,&c->roi);
+    mvk_freebuffer(c->dev,c->uploads.stage);
+    mvk_freebuffer(c->dev,c->uploads.vertices);
+    c->uploads=(MsiVkUploadCache){0};
     if(c->pipe)vkDestroyPipeline(c->dev,c->pipe,0);
     if(c->rp_load)vkDestroyRenderPass(c->dev,c->rp_load,0);
     if(c->rp)vkDestroyRenderPass(c->dev,c->rp,0);
@@ -124,8 +131,8 @@ static VkResult mvk_buffer(const MsiVkBatchContext *c,MsiVkBuffer *b,VkDeviceSiz
     return vkBindBufferMemory(c->dev,b->b,b->m,0);
 }
 static VkResult mvk_write(const MsiVkBatchContext *c,MsiVkBuffer b,const void *p,size_t n){
-    if(n>b.size)return VK_ERROR_INITIALIZATION_FAILED;
-    void *mapped=0;VkResult r=vkMapMemory(c->dev,b.m,0,b.size,0,&mapped);
+    if(!n||n>b.size)return VK_ERROR_INITIALIZATION_FAILED;
+    void *mapped=0;VkResult r=vkMapMemory(c->dev,b.m,0,n,0,&mapped);
     if(r!=VK_SUCCESS)return r;
     for(size_t i=0;i<n;i++)((uint8_t*)mapped)[i]=((const uint8_t*)p)[i];
     vkUnmapMemory(c->dev,b.m);return VK_SUCCESS;
@@ -172,6 +179,37 @@ static VkResult mvk_roi_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,unsigned 
     k->out=c->roi.out;k->read=c->roi.read;k->fb=c->roi.fb;k->roi_borrowed=1;
     return VK_SUCCESS;
 }
+/* Called only before recording a new synchronous cropped submission.
+ * Grow staging geometrically, keep the old buffers on any allocation
+ * failure, and copy only the current immutable input bytes. No persistent
+ * mapping or new Vulkan dispatch is necessary. */
+static VkResult mvk_upload_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    unsigned stage_bytes,unsigned vertex_bytes,unsigned fault){
+    const unsigned vertex_capacity=MSI_GPU_WAVE_MAX*3u*sizeof(MsiGpuVertex);
+    if(!stage_bytes||stage_bytes>MSI_VK_STAGE_MAX||!vertex_bytes||vertex_bytes>vertex_capacity||
+       k->pending||k->upload_borrowed||k->stage.b||k->vertices.b)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    MsiVkUploadCache a={0};
+    VkResult r=VK_SUCCESS;
+    if(c->uploads.stage.size<stage_bytes){
+        unsigned capacity=MSI_VK_STAGE_MIN;
+        while(capacity<stage_bytes)capacity*=2u;
+        r=mvk_buffer(c,&a.stage,capacity,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        if(r==VK_SUCCESS&&fault==12u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if(r==VK_SUCCESS&&!c->uploads.vertices.b){
+        r=mvk_buffer(c,&a.vertices,vertex_capacity,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        if(r==VK_SUCCESS&&fault==13u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if(r!=VK_SUCCESS){
+        mvk_freebuffer(c->dev,a.stage);mvk_freebuffer(c->dev,a.vertices);
+        return r;
+    }
+    if(a.stage.b){mvk_freebuffer(c->dev,c->uploads.stage);c->uploads.stage=a.stage;}
+    if(a.vertices.b)c->uploads.vertices=a.vertices;
+    k->stage=c->uploads.stage;k->vertices=c->uploads.vertices;k->upload_borrowed=1;
+    return VK_SUCCESS;
+}
 static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pending)return 0;
     if(k->cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&k->cmd);
@@ -179,7 +217,7 @@ static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pool)vkDestroyDescriptorPool(c->dev,k->pool,0);
     for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)mvk_freeimage(c->dev,k->textures[i]);
     if(!k->roi_borrowed){mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->read);}
-    mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);
+    if(!k->upload_borrowed){mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);}
     mvk_freebuffer(c->dev,k->initial);
     for(size_t i=0;i<sizeof(*k);i++)((volatile uint8_t*)k)[i]=0;
     return 1;
@@ -204,7 +242,8 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
 }
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
  * acquisition failures. 7/8 simulate wait errors ONLY after real idle.
- * 9..11 inject first-use ROI cache creation failures. */
+ * 9..11 inject first-use ROI cache creation failures; 12/13 inject
+ * upload-cache allocation failures (including staging growth). */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
@@ -272,8 +311,11 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     for(unsigned i=0;i<batch->snapshots.count;i++)k->layouts[i]=c->dsl;
     VkDescriptorSetAllocateInfo da=MVK_S(DESCRIPTOR_SET_ALLOCATE_INFO);da.descriptorPool=k->pool;da.descriptorSetCount=batch->snapshots.count;da.pSetLayouts=k->layouts;
     MVK_TRY(vkAllocateDescriptorSets(c->dev,&da,k->sets));
-    MVK_TRY(mvk_buffer(c,&k->stage,batch->snapshots.decoded_used*4u,VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
-    MVK_TRY(mvk_write(c,k->stage,batch->snapshots.decoded,batch->snapshots.decoded_used*4u));MVK_FAULT(2);
+    unsigned stage_bytes=(unsigned)batch->snapshots.decoded_used*4u;
+    unsigned vertex_bytes=batch->count*3u*sizeof(MsiGpuVertex);
+    if(crop_tagged)MVK_TRY(mvk_upload_acquire(c,k,stage_bytes,vertex_bytes,fault));
+    else MVK_TRY(mvk_buffer(c,&k->stage,stage_bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT));
+    MVK_TRY(mvk_write(c,k->stage,batch->snapshots.decoded,stage_bytes));MVK_FAULT(2);
     for(unsigned i=0;i<batch->snapshots.count;i++){
         MVK_TRY(mvk_image(c,&k->textures[i],batch->snapshots.entries[i].state.width,batch->snapshots.entries[i].state.height,VK_FORMAT_R32_UINT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT));
         VkDescriptorImageInfo ti[2]={{c->sampler,k->textures[i].v,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -286,8 +328,8 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
         vkUpdateDescriptorSets(c->dev,2,wr,0,0);
     }
     MVK_FAULT(3);
-    MVK_TRY(mvk_buffer(c,&k->vertices,batch->count*3u*sizeof(MsiGpuVertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
-    MVK_TRY(mvk_write(c,k->vertices,batch->vertices,batch->count*3u*sizeof(MsiGpuVertex)));
+    if(!crop_tagged)MVK_TRY(mvk_buffer(c,&k->vertices,vertex_bytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
+    MVK_TRY(mvk_write(c,k->vertices,batch->vertices,vertex_bytes));
     /* Tagged opaque rendering needs no initial-color upload. All actual
      * shader outputs are <=65535, so 65536 uniquely denotes no write. */
     if(crop_tagged){
