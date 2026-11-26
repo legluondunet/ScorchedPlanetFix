@@ -1,0 +1,57 @@
+name: Matrox x86 memory contract under Wine
+on:
+  pull_request:
+    branches: [feature/matrox-vulkan-presentation]
+    paths:
+      - 'tools/matrox/smoke_dual_view_*.c'
+      - 'tools/matrox/msi_gpu_deferred_finish.h'
+      - 'tools/matrox/msi_gpu_cpu_replay.h'
+      - 'tools/matrox/msi_gpu_draw_batch.h'
+      - 'tools/matrox/msi_gpu_snapshot.h'
+      - 'tools/matrox/msi_gpu_bypass.h'
+      - 'tools/matrox/msi_gpu_texel.h'
+      - 'tools/matrox/msi_world_bilinear.h'
+      - '.github/workflows/matrox-wine-memory.yml'
+permissions:
+  contents: read
+jobs:
+  wine-memory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install distro Wine x86 and MinGW compiler
+        run: |
+          set -eu
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine wine32:i386 gcc-mingw-w64-i686-posix xvfb xauth
+          wine --version
+      - name: Compile the exact native memory probes for Win32
+        run: |
+          set -eu
+          mkdir -p /tmp/msi95-memory
+          for name in batch extended; do
+            i686-w64-mingw32-gcc-posix -std=c11 -O2 -ffp-contract=off -D_WIN32_WINNT=0x0602 -static-libgcc \
+              "tools/matrox/smoke_dual_view_${name}.c" -o "/tmp/msi95-memory/${name}.exe"
+            i686-w64-mingw32-objdump -f "/tmp/msi95-memory/${name}.exe" | grep -q 'pei-i386'
+          done
+      - name: Run read/write, concurrent and kernel-copy probes under Wine
+        env:
+          WINEARCH: win32
+          WINEPREFIX: /tmp/msi95-memory/wine-prefix
+          WINEDEBUG: -all
+        run: |
+          set -eu
+          xvfb-run -a timeout 120s wineboot -u
+          for name in batch extended; do
+            xvfb-run -a timeout 90s wine "/tmp/msi95-memory/${name}.exe" > "/tmp/msi95-memory/${name}.log" 2>&1 || {
+              cat "/tmp/msi95-memory/${name}.log"; exit 1;
+            }
+            cat "/tmp/msi95-memory/${name}.log"
+          done
+          grep -q 'MSI95_DUAL_VIEW_BATCH_PASS read=1 write=1 explicit=1 draws=2' /tmp/msi95-memory/batch.log
+          grep -q 'MSI95_DUAL_VIEW_CONCURRENT_PASS foreign=1 delayed=1 retirements=2' /tmp/msi95-memory/extended.log
+          grep -q 'MSI95_DUAL_VIEW_KERNEL_PROBE_DONE' /tmp/msi95-memory/extended.log
+          grep -q 'MSI95_DUAL_VIEW_EXTENDED_PASS' /tmp/msi95-memory/extended.log
+          wineserver -k || true
