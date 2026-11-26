@@ -475,6 +475,10 @@ static MsiGpuWave g_gpu_profile_wave;
 #define GPU_CAPTURE_NATIVE_BYTES 512000u
 #define GPU_CAPTURE_RAW_BYTES (2u*1024u*1024u)
 #define GPU_CAPTURE_DECODED_COUNT (2u*1024u*1024u)
+/* The one-draw recorder accepts at most 1 MiB of indexed8 texels plus
+ * a 512-byte palette. It does not need the best-wave or CPU-mask buffers. */
+#define GPU_CAPTURE_PILOT_TEXELS (1024u*1024u)
+#define GPU_CAPTURE_PILOT_RAW_BYTES (GPU_CAPTURE_PILOT_TEXELS+512u)
 typedef struct {
     MsiGpuDrawBatch batch;
     BYTE *before,*after,*written;
@@ -1073,22 +1077,27 @@ static void gpu_capture_begin(void){
         g_frames%GPU_SHADOW_SAMPLE_INTERVAL==0u&&g_gpu_bypass.last_frame!=g_frames;
     if(!g_manual_capture_active&&!sample&&!bypass)return;
     if(bypass){g_gpu_bypass.frames++;g_gpu_bypass.last_frame=g_frames;}
-    for(unsigned i=0;i<2u;i++){
+    unsigned slots=bypass?1u:2u;
+    unsigned raw_bytes=bypass?GPU_CAPTURE_PILOT_RAW_BYTES:GPU_CAPTURE_RAW_BYTES;
+    unsigned decoded_count=bypass?GPU_CAPTURE_PILOT_TEXELS:GPU_CAPTURE_DECODED_COUNT;
+    for(unsigned i=0;i<slots;i++){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
         slot->before=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
-        slot->after=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
-        slot->written=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
-        slot->batch.snapshots.raw=(BYTE*)alloc(GPU_CAPTURE_RAW_BYTES);
-        slot->batch.snapshots.decoded=(uint32_t*)alloc(GPU_CAPTURE_DECODED_COUNT*4u);
-        if(!slot->before||!slot->after||!slot->written||!slot->batch.snapshots.raw||
-           !slot->batch.snapshots.decoded){
+        if(!bypass){
+            slot->after=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+            slot->written=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+        }
+        slot->batch.snapshots.raw=(BYTE*)alloc(raw_bytes);
+        slot->batch.snapshots.decoded=(uint32_t*)alloc(decoded_count*4u);
+        if(!slot->before||(!bypass&&(!slot->after||!slot->written))||
+           !slot->batch.snapshots.raw||!slot->batch.snapshots.decoded){
             if(sample)msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_ERROR);
             if(bypass){g_gpu_bypass.disabled=1;g_gpu_bypass.empty++;}
             gpu_capture_release();logtext("GPU_CAPTURE allocation failed");
             return;
         }
-        slot->batch.snapshots.raw_capacity=GPU_CAPTURE_RAW_BYTES;
-        slot->batch.snapshots.decoded_capacity=GPU_CAPTURE_DECODED_COUNT;
+        slot->batch.snapshots.raw_capacity=raw_bytes;
+        slot->batch.snapshots.decoded_capacity=decoded_count;
     }
     g_gpu_capture_active=1;g_gpu_capture_sample=sample;g_gpu_capture_bypass=bypass;
 }
@@ -1132,7 +1141,8 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     /* Even a guest write without an observed lock/remap cannot silently
        contaminate the reference. Compare current native color with the
        previous accepted draw's exact CPU output before extending the wave. */
-    if(g_gpu_capture_batch.count&&!msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES))
+    if(g_gpu_capture_batch.count&&(g_gpu_capture_bypass||
+       !msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES)))
         gpu_capture_barrier();
     MsiGpuVertex vertices[3];
     const T_msiVertex *in[3]={a,b,c};
@@ -1159,7 +1169,7 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     }
     if(g_gpu_capture_batch.count==1u){
         gpu_capture_copy(g_gpu_capture_before,(const BYTE*)g_color);
-        zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
+        if(!g_gpu_capture_bypass)zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
     }
     g_gpu_capture_draw=1;
 }
@@ -4388,7 +4398,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 }
             }
             dst[y*width+x]=(WORD)color;
-            if(g_gpu_capture_draw)g_gpu_capture_current->written[j]=(BYTE)(g_state.msiTexture.Transparency?2u:1u);
+            if(g_gpu_capture_draw&&!g_gpu_capture_bypass)
+                g_gpu_capture_current->written[j]=(BYTE)(g_state.msiTexture.Transparency?2u:1u);
             if(g_capture_ownership && g_final_light_inputs){
                 BYTE *out=g_final_light_inputs+5u*j;
                 if(!g_zplane_draw_context && textured && g_final_source_audit){
