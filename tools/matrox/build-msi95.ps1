@@ -8,12 +8,12 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "d3f0388d9f4884f7a78553031f3b9cfe670a5dce49676299b0a7e865b315f6e2"
+$expectedSourceHash = "cd8533e89a6f131ac4c02b50cb01f804fc3058582e9307aa8b6bb32ca8f238a9"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($waveHeaderHash -cne "521478141d660739d7f29fba2d8e8c5bb52201d42ef3a2bc56f89d113164f1d9") { throw "GPU wave header checksum mismatch: $waveHeaderHash" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_draw_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "dbfd7c5ddea03fb440b2392ee12426c1d565f716b785620053bad6157eef980a") { throw "GPU header checksum mismatch: msi_gpu_draw_batch.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_draw_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "afb6f8a1cadd8e7dee1e73fc93b0f34880e46da1742be9bc2d0c6984aab9513f") { throw "GPU header checksum mismatch: msi_gpu_draw_batch.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_snapshot.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "300028ebbc25f278eb063b65c82901904b869c595da477a2a89f7930fdb639cf") { throw "GPU header checksum mismatch: msi_gpu_snapshot.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_texel.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "e51a6794beeb7a8cfa361ffdeba2e4ab1d08a2e2af72f42f16f832f5c81f2264") { throw "GPU header checksum mismatch: msi_gpu_texel.h" }
 
@@ -31,13 +31,13 @@ if ($LASTEXITCODE -ne 0) { throw "MSI95 x86 C compilation failed" }
 $vkSource = Join-Path $sourceRoot "vulkan_present.c"
 $vkHeader = Join-Path $sourceRoot "vulkan_present.h"
 $vkSourceHash = (Get-FileHash $vkSource -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($vkSourceHash -cne "84e9cc13c38834f01157a2b31aecc16c2374b9849cb50ffab9ebae6754b6256a") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
+if ($vkSourceHash -cne "bb1bd89277908a24dd797e4c5302d15b1bc2dc14a625176c1b0fc2ab4283e9b9") { throw "Vulkan presenter source checksum mismatch: $vkSourceHash" }
 $vkHeaderHash = (Get-FileHash $vkHeader -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($vkHeaderHash -cne "c0f7a912f9469b3309641711890a130de0362928615177b9292c9c31d91a8683") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "c9eef33709499aaa3455524dc5e043cf697a869a895f475c1724ab95351ade42") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_session.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "9bfd4cdedd037c1c559bf2576a39de32f02e522e4a2450f9e651bd4951eab535") { throw "Shadow source checksum mismatch: msi_vk_shadow_session.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.c") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "dca070ed999d79ca5b569b5cfc2bec49ce008df3435487d518cc2ddd1b7e4b3c") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.c" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "ba82915d744a9ed6624738c2a233af600d647838590b00513617afcf27466f8c") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.h" }
+if ($vkHeaderHash -cne "25d1ca0d785a96884191c882c07adc4df7204eb6fb2032999df8a7cf9480bd0b") { throw "Vulkan presenter header checksum mismatch: $vkHeaderHash" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_batch_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "fc8c7e80f90b9a1545d95f886ef61f509ce8d1ed5060f6a90d0d83509c4d3d14") { throw "Shadow source checksum mismatch: msi_vk_batch_replay.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_session.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "f4f2e06b85a47f2eaf44f5b53c37e6a73f37464c88b7b1ddb4877f1d706fb611") { throw "Shadow source checksum mismatch: msi_vk_shadow_session.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.c") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "81ebbca13c212d64439509f7ac2a586946af2f50680f6070a90daca722f31c3e") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.c" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_vk_shadow_bridge.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "6c8bd63d49d74e30ce69a3f12a3194c5d194c91c9aab67990baf3b567d763a12") { throw "Shadow source checksum mismatch: msi_vk_shadow_bridge.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_compare.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "202b14bbe97a6a30154113dbf12f83a738e19c8a43fa3b6b79cb843c18eeaf72") { throw "Shadow source checksum mismatch: msi_gpu_compare.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "world_spv_embedded.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "cf822014d61d7d25d0d78f13acb0dd7b38ddad9317288f832667a3c2ee46a732") { throw "Shadow source checksum mismatch: world_spv_embedded.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.vert") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "279dd28f45eeab662b6f5ef663b90668b9518085e1dfff711552839a719339c5") { throw "Shadow source checksum mismatch: shaders/opaque_world.vert" }
@@ -45,7 +45,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.frag") -Algorithm
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_shadow_sampler.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "27b4c493b33f3283466ada32e516f1f5ee5fc808c763fb5666f6cbecc76e4dd9") { throw "Shadow source checksum mismatch: msi_gpu_shadow_sampler.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_publish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b0046243701d3a62e661bf785ad619efed429f20457fe340de903ee3ff176fd0") { throw "Shadow source checksum mismatch: msi_gpu_publish.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_coverage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "ebb7194bd204cb643229e1fe3006c49374e26329f008f6e80481e5febd30f46f") { throw "Shadow source checksum mismatch: msi_gpu_coverage.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "aa62b904f871f738ffa6eea227d0aad320fdbe6bd020425cf2e6e06c521fab50") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "6610d4a5c42b7a3d6c8fd6da2df1549fc91466f4b4badbd5229d77d9f07edb48") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_cpu_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "53d9c46a1623731bdadaa3245a1a4cf62668920d5620d069bb4be2a2278e96fe") { throw "CPU replay header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_defer_audit.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "840990a8b0cfda4cd1515725aac9f67dcd0b590db607ac1597c35a957acaf43f") { throw "GPU defer audit header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_deferred_finish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "80bf93ee14ac5836d03b523fc3514f37ff3f0dfcb7251087bb1dfcf947e54559") { throw "GPU deferred finish header checksum mismatch" }

@@ -69,7 +69,7 @@ static VkResult msi_vk_shadow_compare(MsiVkShadowSession *s,const MsiGpuDrawBatc
  * An ambiguous wait poisons the entire session; close retires on that pool. */
 static VkResult msi_vk_shadow_tagged_impl(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
     uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault,
-    unsigned *region_pixels){
+    unsigned *region_pixels,size_t packed_capacity,MsiGpuRect *packed_region){
     if(!s||!s->ready||s->ctx.unusable||s->tagged.unusable||s->work.pending||!b||!scratch)
         return VK_ERROR_INITIALIZATION_FAILED;
     if(!s->tagged.pipe){
@@ -88,7 +88,8 @@ static VkResult msi_vk_shadow_tagged_impl(MsiVkShadowSession *s,const MsiGpuDraw
     }
     MsiGpuRect roi;
     if(region_pixels&&!msi_vk_tagged_region(b,&roi))return VK_ERROR_INITIALIZATION_FAILED;
-    VkResult r=region_pixels?msi_vk_batch_render_tagged_roi(&s->tagged,&s->work,b,scratch,fault):
+    VkResult r=packed_region?msi_vk_batch_render_tagged_packed(&s->tagged,&s->work,b,scratch,packed_capacity,packed_region,fault):
+        region_pixels?msi_vk_batch_render_tagged_roi(&s->tagged,&s->work,b,scratch,fault):
         msi_vk_batch_render(&s->tagged,&s->work,b,640u,400u,NULL,scratch,fault);
     if(s->tagged.unusable)s->ready=0;
     if(r==VK_SUCCESS&&region_pixels)*region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
@@ -96,6 +97,6 @@ static VkResult msi_vk_shadow_tagged_impl(MsiVkShadowSession *s,const MsiGpuDraw
 }
 static VkResult msi_vk_shadow_tagged(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
     uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault){
-    return msi_vk_shadow_tagged_impl(s,b,scratch,vs,vs_bytes,fs,fs_bytes,fault,NULL);
+    return msi_vk_shadow_tagged_impl(s,b,scratch,vs,vs_bytes,fs,fs_bytes,fault,NULL,0,NULL);
 }
 #endif

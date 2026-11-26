@@ -65,6 +65,40 @@ static inline int msi_gpu_bypass_tagged_commit(MsiGpuBypass *r,unsigned w,unsign
     }
     r->written=written;r->changed=changed;return 1;
 }
+/* Packed native ROI publication for the synchronous pilot. Preserve the
+ * entire live/baseline comparison, reject invalid/outside-bound tags even
+ * in the guard ring, and mutate only after both checks succeed. */
+static inline int msi_gpu_bypass_tagged_roi_commit(MsiGpuBypass *r,
+    const MsiGpuDrawBatch *b,uint16_t *live,uint8_t *underlay,
+    const uint16_t *before,const uint32_t *gpu,size_t count,MsiGpuRect roi){
+    *r=(MsiGpuBypass){0};
+    MsiGpuRect expected;
+    if(!b||b->count!=1u||!live||!before||!gpu||live==before||
+       (const void*)live==(const void*)gpu||(const void*)before==(const void*)gpu||
+       !msi_gpu_native_tagged_region(b,&expected)||
+       roi.x0!=expected.x0||roi.y0!=expected.y0||roi.x1!=expected.x1||roi.y1!=expected.y1)
+        return 0;
+    const MsiGpuDraw *d=&b->draws[0];MsiGpuRect q=d->bounds;
+    if((d->flags&~127u)||(d->flags&9u)!=9u)return 0;
+    unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    if(count!=(size_t)rw*rh)return 0;
+    for(size_t j=0;j<640u*400u;j++)if(live[j]!=before[j])return 0;
+    unsigned written=0,changed=0;
+    for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
+        uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];
+        if(tag==65536u)continue;
+        if(tag>65535u||x<q.x0||x>=q.x1||y<q.y0||y>=q.y1)return 0;
+        written++;changed+=tag!=before[(size_t)y*640u+x];
+    }
+    if(!written)return 0;
+    for(unsigned y=q.y0;y<q.y1;y++)for(unsigned x=q.x0;x<q.x1;x++){
+        uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];
+        if(tag==65536u)continue;
+        size_t j=(size_t)y*640u+x;
+        live[j]=(uint16_t)tag;if(underlay)underlay[j]=(d->flags&64u)?2u:1u;
+    }
+    r->written=written;r->changed=changed;return 1;
+}
 /* Future bounded batch path. All draws must have the same shadow
  * provenance category. Mixed categories require a last-writer tag;
  * reject them rather than guessing ownership from final color.

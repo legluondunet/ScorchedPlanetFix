@@ -19,6 +19,7 @@ int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before
     const uint16_t *cpu,uint16_t *scratch,MsiGpuCompare *stats);
 int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch);
 int matrox_vk_shadow_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels);
+int matrox_vk_shadow_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,MsiGpuRect *region);
 /* Owning thread, immediately after successful tagged ROI dispatch. */
 unsigned matrox_vk_shadow_roi_texture_mode(void);
 #endif

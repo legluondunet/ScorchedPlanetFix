@@ -17,6 +17,8 @@ VkResult msi_vk_bridge_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch,
     const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes);
 VkResult msi_vk_bridge_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,
     const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned *region_pixels);
+VkResult msi_vk_bridge_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,
+    MsiGpuRect *region,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes);
 /* Valid immediately after a successful tagged ROI call; 0 uncached,
  * 1 exact cache hit, 2 uploaded cache miss, 3 unavailable. */
 unsigned msi_vk_bridge_roi_texture_mode(void);

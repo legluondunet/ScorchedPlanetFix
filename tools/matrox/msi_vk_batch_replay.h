@@ -358,39 +358,11 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
 static int msi_vk_tagged_region(const MsiGpuDrawBatch *batch,MsiGpuRect *out){
-    if(!batch||!out||!batch->count||batch->count>MSI_GPU_WAVE_MAX)return 0;
-    MsiGpuRect r={640u,400u,0,0};
-    for(unsigned i=0;i<batch->count;i++){
-        MsiGpuRect q=batch->draws[i].bounds;
-        if(q.x0>=q.x1||q.y0>=q.y1||q.x1>640u||q.y1>400u)return 0;
-        /* Never trust the caller's bookkeeping rectangle to clip GPU
-         * geometry. Union with conservative clipped vertex bounds, even
-         * if a malformed record underreports its true triangle extent. */
-        for(unsigned j=0;j<3u;j++){
-            const MsiGpuVertex *v=&batch->vertices[3u*i+j];
-            if(!msi_gpu_vertex_valid(v,batch->draws[i].flags))return 0;
-            float x=v->xy[0],y=v->xy[1];
-            unsigned x0=x<=0.f?0u:x>=640.f?640u:(unsigned)x;
-            unsigned y0=y<=0.f?0u:y>=400.f?400u:(unsigned)y;
-            unsigned x1=x>=640.f?640u:x<=0.f?0u:(unsigned)x+1u;
-            unsigned y1=y>=400.f?400u:y<=0.f?0u:(unsigned)y+1u;
-            /* Exact integer endpoints do not need an additional pixel;
-             * the separate guard ring below covers transform rounding. */
-            if(x>0.f&&x<640.f&&x==(float)x0)x1=x0;
-            if(y>0.f&&y<400.f&&y==(float)y0)y1=y0;
-            if(x0<q.x0)q.x0=x0;if(y0<q.y0)q.y0=y0;
-            if(x1>q.x1)q.x1=x1;if(y1>q.y1)q.y1=y1;
-        }
-        if(q.x0<r.x0)r.x0=q.x0;if(q.y0<r.y0)r.y0=q.y0;
-        if(q.x1>r.x1)r.x1=q.x1;if(q.y1>r.y1)r.y1=q.y1;
-    }
-    if(r.x0)r.x0--;if(r.y0)r.y0--;
-    if(r.x1<640u)r.x1++;if(r.y1<400u)r.y1++;
-    *out=r;return 1;
+    return msi_gpu_native_tagged_region(batch,out);
 }
 static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *batch,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault,
-    unsigned crop_tagged){
+    unsigned crop_tagged,size_t packed_capacity,MsiGpuRect *packed_region){
     if(!c||!k||c->unusable||k->pending||k->pool||!batch||!result||result==before||
        (c->tagged_output&&before)||!w||!h||w>4096u||h>4096u||!batch->count||batch->count>MSI_GPU_WAVE_MAX||
        !batch->snapshots.count||batch->snapshots.count>MSI_GPU_SNAPSHOT_MAX||
@@ -412,6 +384,8 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(crop_tagged&&(!c->tagged_output||w!=640u||h!=400u||!msi_vk_tagged_region(batch,&roi)))
         return VK_ERROR_INITIALIZATION_FAILED;
     unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    if(packed_region&&(!crop_tagged||packed_capacity!=(size_t)rw*rh))
+        return VK_ERROR_INITIALIZATION_FAILED;
     c->texture_cache.last_mode=3u;
     VkResult rc=VK_SUCCESS;
 #define MVK_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
@@ -536,7 +510,10 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(c->tagged_output){
         uint32_t *out=(uint32_t*)result;
         const uint32_t *src=(const uint32_t*)mapped;
-        if(crop_tagged){
+        if(packed_region){
+            for(size_t i=0;i<(size_t)rw*rh;i++)out[i]=src[i];
+            *packed_region=roi;
+        }else if(crop_tagged){
             /* The cropped render area is cleared to the no-write tag.
              * Outside it no draw can execute because of the scissor.
              * Expand only AFTER a successful wait and mapping. */
@@ -565,11 +542,18 @@ done:
  * Native tagged ROI also serves the qualified sparse synchronous pilot. */
 static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *b,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault){
-    return msi_vk_batch_render_impl(c,k,b,w,h,before,result,fault,0);
+    return msi_vk_batch_render_impl(c,k,b,w,h,before,result,fault,0,0,NULL);
 }
 static VkResult msi_vk_batch_render_tagged_roi(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *b,uint32_t *result,unsigned fault){
-    return msi_vk_batch_render_impl(c,k,b,640u,400u,NULL,result,fault,1);
+    return msi_vk_batch_render_impl(c,k,b,640u,400u,NULL,result,fault,1,0,NULL);
+}
+/* Caller supplies exactly the precomputed region capacity. Region and
+ * packed tags are untouched on failed acquisition, wait, reset or map. */
+static VkResult msi_vk_batch_render_tagged_packed(MsiVkBatchContext *c,MsiVkBatchWork *k,
+    const MsiGpuDrawBatch *b,uint32_t *result,size_t capacity,MsiGpuRect *region,unsigned fault){
+    if(!region)return VK_ERROR_INITIALIZATION_FAILED;
+    return msi_vk_batch_render_impl(c,k,b,640u,400u,NULL,result,fault,1,capacity,region);
 }
 #undef MVK_S
 #endif

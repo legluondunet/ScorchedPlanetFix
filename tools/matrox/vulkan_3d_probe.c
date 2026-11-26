@@ -894,6 +894,67 @@ static void test_texture_cache(const MsiGpuDrawBatch *batch){
     free(roi);free(full);free(decoded);free(one);
     puts("VULKAN_3D_TEXTURE_CACHE_PASS hits=2 misses=5 collision=1 shape=1 eviction=1 faults=3 pending_retired=1");
 }
+/* Prove packed dispatch and publication against the independent full
+ * output, including same-color ownership and untouched outside pixels. */
+static void test_packed_publication(const MsiGpuDrawBatch *batch){
+    MsiGpuDrawBatch *one=malloc(sizeof(*one));NEED(one);
+    *one=*batch;one->count=1;one->draws[0].flags=79u;
+    MsiGpuRect region,actual={0};
+    NEED(msi_gpu_native_tagged_region(one,&region));
+    const unsigned rw=region.x1-region.x0,rh=region.y1-region.y0;
+    const size_t count=(size_t)rw*rh,n=640u*400u;
+    NEED(count<n&&region.x0>0&&region.y0>0);
+    uint32_t *full=malloc(n*4u),*packed=malloc((count+2u)*4u);
+    uint16_t *before=malloc(n*2u),*live=malloc(n*2u),*ref=malloc(n*2u);
+    uint8_t *under=malloc(n),*ref_under=malloc(n);
+    NEED(full&&packed&&before&&live&&ref&&under&&ref_under);
+    MsiVkBatchContext c={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.tagged_output=1};
+    MsiVkBatchWork work={0};
+    OK(msi_vk_batch_pipeline_create(&c,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    OK(msi_vk_batch_render(&c,&work,one,640,400,NULL,full,0));
+    for(size_t j=0;j<count+2u;j++)packed[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count-1,&actual,0)==VK_ERROR_INITIALIZATION_FAILED);
+    NEED(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(!actual.x0&&!actual.x1);
+    for(size_t j=0;j<count+2u;j++)NEED(packed[j]==0xabcdef01u);
+    OK(msi_vk_batch_render_tagged_packed(&c,&work,one,packed+1,count,&actual,0));
+    NEED(actual.x0==region.x0&&actual.y0==region.y0&&actual.x1==region.x1&&actual.y1==region.y1);
+    NEED(packed[0]==0xabcdef01u&&packed[count+1]==0xabcdef01u);
+    for(unsigned y=0;y<400;y++)for(unsigned x=0;x<640;x++){
+        uint32_t tag=x>=region.x0&&x<region.x1&&y>=region.y0&&y<region.y1?
+            packed[1+(size_t)(y-region.y0)*rw+x-region.x0]:65536u;
+        NEED(tag==full[(size_t)y*640u+x]);
+    }
+    for(size_t j=0;j<n;j++){
+        /* Deliberate same-color writes mixed with changed writes. */
+        before[j]=live[j]=ref[j]=(j&1u)&&full[j]<=65535u?(uint16_t)full[j]:0xdead;
+        under[j]=ref_under[j]=3;
+    }
+    MsiGpuBypass a,b;
+    NEED(msi_gpu_bypass_tagged_commit(&a,640,400,one,ref,ref_under,before,full));
+    NEED(a.written>a.changed&&a.changed>0);
+    NEED(msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,actual));
+    NEED(a.written==b.written&&a.changed==b.changed);
+    for(size_t j=0;j<n;j++)NEED(live[j]==ref[j]&&under[j]==ref_under[j]);
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
+    live[0]^=1u; /* outside ROI still rejects stale baseline */
+    NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,actual));
+    NEED(live[0]==(uint16_t)(before[0]^1u));
+    live[0]=before[0];
+    NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count-1,actual));
+    MsiGpuRect bad=actual;bad.x0++;
+    NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,bad));
+    uint32_t saved=packed[1];NEED(saved==65536u);
+    packed[1]=0u; /* a valid color in the guard ring must still be rejected */
+    NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,actual));
+    packed[1]=65537u;
+    NEED(!msi_gpu_bypass_tagged_roi_commit(&b,one,live,under,before,packed+1,count,actual));
+    packed[1]=saved;
+    for(size_t j=0;j<n;j++)NEED(live[j]==before[j]&&under[j]==3);
+    msi_vk_batch_pipeline_destroy(&c);
+    free(ref_under);free(under);free(ref);free(live);free(before);free(packed);free(full);free(one);
+    puts("VULKAN_3D_PACKED_PUBLICATION_PASS exact=256000 stale_outside=1 guard=1 capacity=1 fault=1");
+}
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){
     MsiVkShadowSession session={0};
     const size_t n=640u*400u;
@@ -975,6 +1036,12 @@ static void test_shadow_bridge(const MsiGpuDrawBatch *batch,const uint16_t *expe
         NEED(msi_vk_bridge_tagged_roi(batch,roi,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),NULL)==VK_ERROR_INITIALIZATION_FAILED);
         NEED(msi_vk_bridge_roi_texture_mode()==3u);
         for(size_t i=0;i<n;i++)NEED(tagged[i]==roi[i]);
+        MsiGpuRect packed_region={0};
+        OK(msi_vk_bridge_tagged_packed(batch,roi,pixels,&packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)));
+        unsigned pw=packed_region.x1-packed_region.x0,ph=packed_region.y1-packed_region.y0;
+        NEED(pw*ph==pixels&&msi_vk_bridge_roi_texture_mode()==0u);
+        for(unsigned yy=0;yy<ph;yy++)for(unsigned xx=0;xx<pw;xx++)
+            NEED(roi[(size_t)yy*pw+xx]==tagged[(size_t)(packed_region.y0+yy)*640u+packed_region.x0+xx]);
         free(roi);free(tagged);
         /* R16 and R32 share a queue/pool, not pipeline objects. */
         OK(msi_vk_bridge_compare(batch,before,expected,scratch,&stats));
@@ -1021,7 +1088,7 @@ static int test_indexed_batch(unsigned w,unsigned h){
     memset(source,0,sizeof(source));memset(palette,0,sizeof(palette));
     if(w==640u&&h==400u)test_batch_recovery(&multi_batch);
     uint16_t *p=render_recorded(&multi_batch,w,h,NULL);
-    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);test_tagged_batch_commit(&multi_batch);test_texture_cache(&multi_batch);}
+    if(w==640u&&h==400u){test_shadow_session(&multi_batch,p);test_shadow_bridge(&multi_batch,p);test_tagged_output(&multi_batch);test_tagged_batch_commit(&multi_batch);test_texture_cache(&multi_batch);test_packed_publication(&multi_batch);}
     unsigned checked=0,errors=0,keyed=0,visible=0;
     for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
         double lx=(x+.5)*640/w,ly=(y+.5)*400/h;

@@ -94,7 +94,13 @@ VkResult msi_vk_bridge_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch
     const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned *region_pixels){
     shadow.tagged.texture_cache.last_mode=3u;
     if(!region_pixels)return VK_ERROR_INITIALIZATION_FAILED;
-    return msi_vk_shadow_tagged_impl(&shadow,batch,scratch,vs,vs_bytes,fs,fs_bytes,0,region_pixels);
+    return msi_vk_shadow_tagged_impl(&shadow,batch,scratch,vs,vs_bytes,fs,fs_bytes,0,region_pixels,0,NULL);
+}
+VkResult msi_vk_bridge_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,
+    MsiGpuRect *region,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes){
+    shadow.tagged.texture_cache.last_mode=3u;
+    if(!region)return VK_ERROR_INITIALIZATION_FAILED;
+    return msi_vk_shadow_tagged_impl(&shadow,batch,scratch,vs,vs_bytes,fs,fs_bytes,0,NULL,capacity,region);
 }
 unsigned msi_vk_bridge_roi_texture_mode(void){
     if(!shadow.ready||!shadow.tagged.pipe||shadow.tagged.unusable)return 3u;

@@ -353,9 +353,11 @@ int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before
     }
     return r;
 }
-static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels){
+static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels,
+    size_t packed_capacity,MsiGpuRect *packed_region){
     if(!ready||!shadow_ready)return VK_NOT_READY;
-    VkResult r=region_pixels?msi_vk_bridge_tagged_roi(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),region_pixels):
+    VkResult r=packed_region?msi_vk_bridge_tagged_packed(batch,scratch,packed_capacity,packed_region,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag)):
+        region_pixels?msi_vk_bridge_tagged_roi(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),region_pixels):
         msi_vk_bridge_tagged(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag));
     if(r!=VK_SUCCESS){
         shadow_ready=0;report("VULKAN_TAGGED disabled",(int)r);
@@ -365,11 +367,15 @@ static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *s
     return r;
 }
 int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch){
-    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL);
+    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,0,NULL);
 }
 int matrox_vk_shadow_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels){
     if(!region_pixels)return VK_ERROR_INITIALIZATION_FAILED;
-    return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels);
+    return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels,0,NULL);
+}
+int matrox_vk_shadow_tagged_packed(const MsiGpuDrawBatch *batch,uint32_t *scratch,size_t capacity,MsiGpuRect *region){
+    if(!region)return VK_ERROR_INITIALIZATION_FAILED;
+    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL,capacity,region);
 }
 unsigned matrox_vk_shadow_roi_texture_mode(void){
     return ready&&shadow_ready?msi_vk_bridge_roi_texture_mode():3u;

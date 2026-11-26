@@ -1962,24 +1962,26 @@ static int gpu_bypass_try(void){
        !g_vk_active||g_endframe_depth||g_guest_callback_depth||g_capture_ownership||
        g_manual_capture_active||g_zplane_draw_context)return 0;
     const WORD *before=(const WORD*)g_gpu_capture_before;
-    uint32_t *gpu=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
+    MsiGpuRect region={0};
+    unsigned region_pixels=0;
+    if(msi_gpu_native_tagged_region(&g_gpu_capture_batch,&region))
+        region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
+    uint32_t *gpu=region_pixels?(uint32_t*)alloc(region_pixels*4u):0;
     MsiGpuBypass result;
     DWORD started=GetTickCount();
     g_gpu_bypass.attempted++;
-    /* Owner qualification verified full/cropped tags. Publish only the
-     * cropped readback, expanded with no-write sentinels by the bridge.
-     * Keep the original whole-frame transactional check and CPU fallback.
-     * Paired batch diagnostics still independently compare full and ROI. */
-    unsigned region_pixels=0;
+    /* Publish packed ROI tags without expanding a full-frame scratch.
+     * Still validate the entire unchanged framebuffer, the exact region,
+     * and guard-ring tags before touching any live pixels. */
     MSI_LARGE_INTEGER q0,q1,q2;
     int timed=g_cap_frequency&&QueryPerformanceCounter(&q0);
-    int rc=gpu?matrox_vk_shadow_tagged_roi(&g_gpu_capture_batch,gpu,&region_pixels):-1;
+    int rc=gpu?matrox_vk_shadow_tagged_packed(&g_gpu_capture_batch,gpu,region_pixels,&region):-1;
     timed=timed&&QueryPerformanceCounter(&q1);
     unsigned texture_mode=rc?3u:matrox_vk_shadow_roi_texture_mode();
     unsigned decoded_bytes=(unsigned)g_gpu_capture_batch.snapshots.decoded_used*4u;
     if(!rc&&(!region_pixels||region_pixels>GPU_CAPTURE_NATIVE_BYTES/2u))rc=-2;
-    int ok=!rc&&msi_gpu_bypass_tagged_commit(&result,640u,400u,&g_gpu_capture_batch,
-        (WORD*)g_color,g_shadow_underlay,before,gpu);
+    int ok=!rc&&msi_gpu_bypass_tagged_roi_commit(&result,&g_gpu_capture_batch,
+        (WORD*)g_color,g_shadow_underlay,before,gpu,region_pixels,region);
     timed=timed&&QueryPerformanceCounter(&q2);
     if(!ok&&!rc)rc=-3;
     if(ok){
