@@ -268,6 +268,7 @@ class GpuAudit:
         modes = {0: 0, 1: 0, 2: 0}
         timed = []
         fence_timed = []
+        fence_fields_seen = False
         for r in self.metrics:
             mode, size, upload = r["mode"], r["decoded_bytes"], r["upload_bytes"]
             hz, dispatch, publish = r["qpc_hz"], r["dispatch_ticks"], r["publish_ticks"]
@@ -282,6 +283,7 @@ class GpuAudit:
             elif hz:
                 timed.append(r)
             if "fence_wait_valid" in r or "fence_wait_ticks" in r:
+                fence_fields_seen = True
                 valid, wait = r.get("fence_wait_valid"), r.get("fence_wait_ticks")
                 if not ((valid == 0 and wait == 0) or
                         (valid == 1 and hz and wait is not None and 0 <= wait <= dispatch)):
@@ -291,12 +293,26 @@ class GpuAudit:
         if sorted(r["frame"] for r in self.metrics) != sorted(r["frame"] for r in self.bypass_roi_publish):
             missing.append("unmatched pilot publication metrics")
         status = "failed" if errors else "unavailable" if not self.metrics else "incomplete" if missing else "validated"
+        fence_status = ("failed" if errors else "unavailable" if not fence_fields_seen else
+                        "incomplete" if missing or len(fence_timed) != len(self.metrics) else "validated")
+        def fence_totals(rows):
+            wait_ms = sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            dispatch_ms = sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            return {"samples": len(rows),
+                    "wait_ms": round(wait_ms, 3) if rows else None,
+                    "dispatch_excluding_wait_ms": round(dispatch_ms - wait_ms, 3) if rows else None,
+                    "wait_share_pct": round(wait_ms * 100 / dispatch_ms, 3) if dispatch_ms > 0 else None}
+        fence = {"status": fence_status, **fence_totals(fence_timed),
+                 "missing_samples": len(self.metrics) - len(fence_timed),
+                 "by_texture_mode": {str(mode): fence_totals([r for r in fence_timed if r["mode"] == mode])
+                                     for mode in (0, 1, 2)}}
         return {"status": status, "records": len(self.metrics), "hits": modes[1], "misses": modes[2],
                 "uncached": modes[0], "decoded_bytes": sum(r["decoded_bytes"] for r in self.metrics),
                 "upload_bytes": sum(r["upload_bytes"] for r in self.metrics),
                 "timed_samples": len(timed),
                 "dispatch_ms": round(sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
                 "publish_ms": round(sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "fence": fence,
                 "fence_timed_samples": len(fence_timed),
                 "fence_wait_ms": round(sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
                 "dispatch_excluding_fence_ms": round(sum((r["dispatch_ticks"] - r["fence_wait_ticks"]) * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
@@ -614,6 +630,8 @@ def main(argv=None) -> int:
                         help="Require validated GPU diagnostics, ROI, metrics and single-triangle CPU oracle")
     parser.add_argument("--assert-gpu-timing", action="store_true",
                         help="Require all pilot gates and timed CPU/GPU pairs for every publication")
+    parser.add_argument("--assert-gpu-fence", action="store_true",
+                        help="Require all pilot/timing gates and a valid submission-fence interval for every publication")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -647,9 +665,11 @@ def main(argv=None) -> int:
     if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
         return 1
-    if args.assert_gpu_timing and any(r["gpu_diagnostics"]["status"] != "validated" or
+    if (args.assert_gpu_timing or args.assert_gpu_fence) and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
                                       r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
+        return 1
+    if args.assert_gpu_fence and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1

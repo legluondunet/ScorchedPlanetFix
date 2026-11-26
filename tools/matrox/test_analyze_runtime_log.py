@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic test cases only: no game content or user's real logs in repo."""
 import importlib.util
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -213,6 +215,35 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         r = self.parse(body.replace("qpc_hz=10000000 cpu_ticks=45000", "qpc_hz=0 cpu_ticks=0"))["gpu_diagnostics"]["paired_timing"]
         self.assertEqual(r["status"], "unavailable")
         self.assertEqual(r["samples"], 0)
+
+    def test_gpu_fence_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=5000"
+        for suffix, expected, code in (
+            (" fence_wait_valid=1 fence_wait_ticks=20000", "validated", 0),
+            (" fence_wait_valid=1 fence_wait_ticks=0", "validated", 0),
+            (" fence_wait_valid=0 fence_wait_ticks=0", "incomplete", 1),
+            ("", "unavailable", 1),
+            (" fence_wait_valid=1 fence_wait_ticks=25001", "failed", 1),
+            (" fence_wait_valid=1", "failed", 1),
+        ):
+            with self.subTest(suffix=suffix):
+                body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + metric + suffix + "\n" + single + "GPU_BYPASS OK")
+                r = self.parse(body)["gpu_diagnostics"]["metrics"]["fence"]
+                self.assertEqual(r["status"], expected, r)
+                if suffix.endswith("ticks=20000"):
+                    self.assertEqual((r["samples"], r["missing_samples"], r["wait_ms"], r["dispatch_excluding_wait_ms"], r["wait_share_pct"]), (1, 0, 2.0, 0.5, 80.0))
+                    self.assertEqual(r["by_texture_mode"]["1"]["wait_ms"], 2.0)
+                    self.assertIsNone(r["by_texture_mode"]["2"]["wait_share_pct"])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory, "ScorchedPlanetFix.log")
+                    path.write_text(body, encoding="utf-8")
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-fence", "--json", str(path)]), code)
+                        if expected in ("unavailable", "incomplete"):
+                            self.assertEqual(analyzer.main(["--assert-gpu-timing", "--json", str(path)]), 0)
 
     def test_gpu_malformed_bypass_record(self):
         r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
