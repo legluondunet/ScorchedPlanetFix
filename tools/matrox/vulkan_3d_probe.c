@@ -659,8 +659,21 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(msi_vk_tagged_region(ordered,&roi));
     unsigned region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
     NEED(roi.x0==7&&roi.y0==7&&roi.x1==97&&roi.y1==73&&region_pixels<n);
+    for(unsigned fault=9;fault<=11;fault++){
+        for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+        NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,fault)==VK_ERROR_OUT_OF_HOST_MEMORY);
+        NEED(!tagged.roi.fb&&!tagged.roi.out.i&&!tagged.roi.out.m&&!tagged.roi.out.v&&
+             !tagged.roi.read.b&&!tagged.roi.read.m&&!work.pool&&!work.pending&&!work.roi_borrowed);
+        for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
+    }
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
+    MsiVkRoiCache cached=tagged.roi;
+    NEED(cached.fb&&cached.out.i&&cached.read.b&&cached.read.size==n*4u&&!work.roi_borrowed);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
+    for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,4)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(tagged.roi.fb==cached.fb&&tagged.roi.out.i==cached.out.i&&tagged.roi.read.b==cached.read.b&&!work.roi_borrowed);
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
     for(size_t j=0;j<n;j++)cropped[j]=0xabcdef01u;
     NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
@@ -687,6 +700,7 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     OK(msi_vk_batch_render(&tagged,&work,one,640,400,NULL,cropped,0));
     uint32_t *full_edge=malloc(n*4u);NEED(full_edge);
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,one,full_edge,0));
+    NEED(tagged.roi.fb==cached.fb&&tagged.roi.out.i==cached.out.i&&tagged.roi.read.b==cached.read.b);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==full_edge[j]);
     free(full_edge);free(cropped);
     printf("VULKAN_3D_TAGGED_ROI_PASS exact=%u bytes=%u full_bytes=%u fault_preserved=1\n",
@@ -724,7 +738,19 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     for(size_t j=0;j<n;j++)NEED(live[j]==before[j]&&under[j]==3);
     free(cpu);free(cpu_ref);free(mask);free(mask_ref);
     puts("VULKAN_3D_DEFERRED_FINISH_PASS gpu=1 cpu=2 blocked=2");
+    /* An uncertain wait preserves borrowed workspace until retirement.
+     * Fault 7 is simulated only after actual idle, per recovery contract. */
+    for(size_t j=0;j<n;j++)out[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,one,out,7)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    NEED(work.pending&&work.roi_borrowed&&work.fb==cached.fb&&work.read.b==cached.read.b);
+    NEED(!mvk_cleanup(&tagged,&work)&&tagged.unusable);
+    for(size_t j=0;j<n;j++)NEED(out[j]==0xabcdef01u);
+    OK(msi_vk_batch_retire(&tagged,&work));
+    NEED(!work.pending&&!work.roi_borrowed&&!work.fb&&tagged.roi.fb==cached.fb&&tagged.roi.read.b==cached.read.b);
     msi_vk_batch_pipeline_destroy(&tagged);
+    msi_vk_batch_pipeline_destroy(&tagged);
+    NEED(!tagged.roi.fb&&!tagged.roi.out.i&&!tagged.roi.read.b);
+    puts("VULKAN_3D_ROI_CACHE_PASS init_faults=3 reuse=1 pre_submit_fault=1 pending_retired=1");
     free(out);free(ref_under);free(under);free(reference);free(live);free(before);free(one);free(ordered);
 }
 static void test_shadow_session(const MsiGpuDrawBatch *batch,const uint16_t *expected){

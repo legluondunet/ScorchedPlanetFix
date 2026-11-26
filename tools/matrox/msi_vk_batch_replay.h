@@ -12,6 +12,11 @@
 #include <stddef.h>
 #include "msi_gpu_draw_batch.h"
 #define MVK_S(t) {.sType=VK_STRUCTURE_TYPE_##t}
+typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} MsiVkBuffer;
+typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
+/* One fixed-size native R32 workspace, owned by its pipeline context.
+ * Only borrowed by one synchronous cropped submission at a time. */
+typedef struct {MsiVkImage out;MsiVkBuffer read;VkFramebuffer fb;} MsiVkRoiCache;
 typedef struct {
     VkPhysicalDevice phys;VkDevice dev;VkQueue queue;VkCommandPool cp;
     VkPhysicalDeviceMemoryProperties mem;
@@ -19,21 +24,29 @@ typedef struct {
     VkPipeline pipe;VkSampler sampler;VkImageView dummy;
     unsigned unusable; /* never reset except by a fresh device context */
     unsigned tagged_output; /* fixed before pipeline creation: R32_UINT, clear=65536 */
+    MsiVkRoiCache roi;
 } MsiVkBatchContext;
-typedef struct {VkBuffer b;VkDeviceMemory m;VkDeviceSize size;} MsiVkBuffer;
-typedef struct {VkImage i;VkDeviceMemory m;VkImageView v;} MsiVkImage;
 typedef struct {
     MsiVkImage textures[MSI_GPU_SNAPSHOT_MAX],out;
     MsiVkBuffer stage,vertices,read,initial;
     VkDescriptorPool pool;VkFramebuffer fb;VkCommandBuffer cmd;
     VkDescriptorSet sets[MSI_GPU_SNAPSHOT_MAX];VkDescriptorSetLayout layouts[MSI_GPU_SNAPSHOT_MAX];
-    unsigned pending;
+    unsigned pending,roi_borrowed;
 } MsiVkBatchWork;
 typedef struct {float logical[2],target[2];uint32_t flags,reserved;} MsiVkPush;
+static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){if(b.b)vkDestroyBuffer(d,b.b,0);if(b.m)vkFreeMemory(d,b.m,0);}
+static void mvk_freeimage(VkDevice d,MsiVkImage a){if(a.v)vkDestroyImageView(d,a.v,0);if(a.i)vkDestroyImage(d,a.i,0);if(a.m)vkFreeMemory(d,a.m,0);}
+static void mvk_roi_destroy(VkDevice d,MsiVkRoiCache *a){
+    if(a->fb)vkDestroyFramebuffer(d,a->fb,0);
+    mvk_freeimage(d,a->out);mvk_freebuffer(d,a->read);
+    *a=(MsiVkRoiCache){0};
+}
 /* Persistent pipeline objects are owned by this context; device, queue,
  * command pool and dummy image are borrowed. Destroy only after all work
  * has drained. No device teardown, host allocation or fatal exit here. */
 static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
+    /* Caller has retired pending work; framebuffer precedes render pass. */
+    mvk_roi_destroy(c->dev,&c->roi);
     if(c->pipe)vkDestroyPipeline(c->dev,c->pipe,0);
     if(c->rp_load)vkDestroyRenderPass(c->dev,c->rp_load,0);
     if(c->rp)vkDestroyRenderPass(c->dev,c->rp,0);
@@ -46,7 +59,7 @@ static void msi_vk_batch_pipeline_destroy(MsiVkBatchContext *c){
 static VkResult msi_vk_batch_pipeline_create(MsiVkBatchContext *c,
     const uint32_t *vs_code,size_t vs_bytes,const uint32_t *fs_code,size_t fs_bytes,unsigned fault){
     if(!c||!c->dev||c->unusable||!vs_code||!fs_code||!vs_bytes||!fs_bytes||vs_bytes%4u||fs_bytes%4u||
-       c->pipe||c->rp||c->rp_load||c->pl||c->dsl||c->sampler)return VK_ERROR_INITIALIZATION_FAILED;
+       c->pipe||c->rp||c->rp_load||c->pl||c->dsl||c->sampler||c->roi.fb)return VK_ERROR_INITIALIZATION_FAILED;
     VkResult rc=VK_SUCCESS;VkShaderModule vs=VK_NULL_HANDLE,fs=VK_NULL_HANDLE;
 #define MP_TRY(x) do{rc=(x);if(rc!=VK_SUCCESS)goto done;}while(0)
 #define MP_FAULT(n) do{if(fault==(n)){rc=VK_ERROR_OUT_OF_HOST_MEMORY;goto done;}}while(0)
@@ -135,16 +148,39 @@ static VkResult mvk_image(const MsiVkBatchContext *c,MsiVkImage *a,uint32_t w,ui
     vi.subresourceRange=(VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
     return vkCreateImageView(c->dev,&vi,0,&a->v);
 }
-static void mvk_freebuffer(VkDevice d,MsiVkBuffer b){if(b.b)vkDestroyBuffer(d,b.b,0);if(b.m)vkFreeMemory(d,b.m,0);}
-static void mvk_freeimage(VkDevice d,MsiVkImage a){if(a.v)vkDestroyImageView(d,a.v,0);if(a.i)vkDestroyImage(d,a.i,0);if(a.m)vkFreeMemory(d,a.m,0);}
+/* Native tagged-only cache, all-or-nothing creation. Keep an unchanging
+ * capacity: only rw*rh texels are copied/mapped, irrespective of allocation.
+ * No pending work may borrow it during acquisition or destruction. */
+static VkResult mvk_roi_acquire(MsiVkBatchContext *c,MsiVkBatchWork *k,unsigned fault){
+    if(!c->roi.fb){
+        MsiVkRoiCache a={0};
+        VkResult r=mvk_image(c,&a.out,640u,400u,VK_FORMAT_R32_UINT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        if(r==VK_SUCCESS&&fault==9u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r==VK_SUCCESS)r=mvk_buffer(c,&a.read,640u*400u*4u,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        if(r==VK_SUCCESS&&fault==10u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r==VK_SUCCESS){
+            VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);
+            fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&a.out.v;
+            fi.width=640u;fi.height=400u;fi.layers=1;
+            r=vkCreateFramebuffer(c->dev,&fi,0,&a.fb);
+        }
+        if(r==VK_SUCCESS&&fault==11u)r=VK_ERROR_OUT_OF_HOST_MEMORY;
+        if(r!=VK_SUCCESS){mvk_roi_destroy(c->dev,&a);return r;}
+        c->roi=a;
+    }
+    k->out=c->roi.out;k->read=c->roi.read;k->fb=c->roi.fb;k->roi_borrowed=1;
+    return VK_SUCCESS;
+}
 static int mvk_cleanup(const MsiVkBatchContext *c,MsiVkBatchWork *k){
     if(k->pending)return 0;
     if(k->cmd)vkFreeCommandBuffers(c->dev,c->cp,1,&k->cmd);
-    if(k->fb)vkDestroyFramebuffer(c->dev,k->fb,0);
+    if(k->fb&&!k->roi_borrowed)vkDestroyFramebuffer(c->dev,k->fb,0);
     if(k->pool)vkDestroyDescriptorPool(c->dev,k->pool,0);
     for(unsigned i=0;i<MSI_GPU_SNAPSHOT_MAX;i++)mvk_freeimage(c->dev,k->textures[i]);
-    mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);
-    mvk_freebuffer(c->dev,k->read);mvk_freebuffer(c->dev,k->initial);
+    if(!k->roi_borrowed){mvk_freeimage(c->dev,k->out);mvk_freebuffer(c->dev,k->read);}
+    mvk_freebuffer(c->dev,k->stage);mvk_freebuffer(c->dev,k->vertices);
+    mvk_freebuffer(c->dev,k->initial);
     for(size_t i=0;i<sizeof(*k);i++)((volatile uint8_t*)k)[i]=0;
     return 1;
 }
@@ -167,7 +203,8 @@ static VkResult msi_vk_batch_retire(MsiVkBatchContext *c,MsiVkBatchWork *k){
     return r;
 }
 /* Work must start zeroed. fault=0 normally; 1..6 are deterministic CI
- * acquisition failures. 7/8 simulate wait errors ONLY after real idle. */
+ * acquisition failures. 7/8 simulate wait errors ONLY after real idle.
+ * 9..11 inject first-use ROI cache creation failures. */
 /* Experimental native tagged ROI. Use the union of validated draw bounds
  * plus a one-pixel guard ring to preserve and detect edge disagreements.
  * Do not use this for scaled output or an initial-color LOAD pass. */
@@ -253,11 +290,18 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     MVK_TRY(mvk_write(c,k->vertices,batch->vertices,batch->count*3u*sizeof(MsiGpuVertex)));
     /* Tagged opaque rendering needs no initial-color upload. All actual
      * shader outputs are <=65535, so 65536 uniquely denotes no write. */
-    MVK_TRY(mvk_image(c,&k->out,w,h,c->tagged_output?VK_FORMAT_R32_UINT:VK_FORMAT_R16_UINT,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-    MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),VK_BUFFER_USAGE_TRANSFER_DST_BIT));
-    VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&k->out.v;fi.width=w;fi.height=h;fi.layers=1;
-    MVK_TRY(vkCreateFramebuffer(c->dev,&fi,0,&k->fb));MVK_FAULT(4);
+    if(crop_tagged){
+        /* Previous submission is retired before reuse. The CLEAR render
+         * pass begins from UNDEFINED; old ROI contents are irrelevant. */
+        MVK_TRY(mvk_roi_acquire(c,k,fault));
+    }else{
+        MVK_TRY(mvk_image(c,&k->out,w,h,c->tagged_output?VK_FORMAT_R32_UINT:VK_FORMAT_R16_UINT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT));
+        MVK_TRY(mvk_buffer(c,&k->read,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+        VkFramebufferCreateInfo fi=MVK_S(FRAMEBUFFER_CREATE_INFO);fi.renderPass=c->rp;fi.attachmentCount=1;fi.pAttachments=&k->out.v;fi.width=w;fi.height=h;fi.layers=1;
+        MVK_TRY(vkCreateFramebuffer(c->dev,&fi,0,&k->fb));
+    }
+    MVK_FAULT(4);
     VkCommandBufferAllocateInfo ca=MVK_S(COMMAND_BUFFER_ALLOCATE_INFO);ca.commandPool=c->cp;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
     MVK_TRY(vkAllocateCommandBuffers(c->dev,&ca,&k->cmd));
     VkCommandBuffer cmd=k->cmd;VkCommandBufferBeginInfo cb=MVK_S(COMMAND_BUFFER_BEGIN_INFO);cb.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -314,7 +358,7 @@ static VkResult msi_vk_batch_render_impl(MsiVkBatchContext *c,MsiVkBatchWork *k,
     if(rc==VK_SUCCESS&&fault==8)rc=VK_ERROR_DEVICE_LOST;
     if(rc!=VK_SUCCESS){c->unusable=1;goto done;}
     k->pending=0;MVK_FAULT(6);
-    void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,k->read.size,0,&mapped));
+    void *mapped=0;MVK_TRY(vkMapMemory(c->dev,k->read.m,0,(VkDeviceSize)rw*rh*(c->tagged_output?4u:2u),0,&mapped));
     if(c->tagged_output){
         uint32_t *out=(uint32_t*)result;
         const uint32_t *src=(const uint32_t*)mapped;
@@ -340,8 +384,8 @@ done:
 #undef MVK_FAULT
     return rc;
 }
-/* Preserve full readback as the only current runtime path. ROI is an
- * opt-in standalone proof until verified on representative GPU workloads. */
+/* Full readback stays independent for diagnostic reference comparisons.
+ * Native tagged ROI also serves the qualified sparse synchronous pilot. */
 static VkResult msi_vk_batch_render(MsiVkBatchContext *c,MsiVkBatchWork *k,
     const MsiGpuDrawBatch *b,unsigned w,unsigned h,const uint16_t *before,void *result,unsigned fault){
     return msi_vk_batch_render_impl(c,k,b,w,h,before,result,fault,0);
