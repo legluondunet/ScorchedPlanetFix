@@ -24,6 +24,7 @@
 #include "msi_gpu_bypass.h"
 #include "msi_gpu_cpu_replay.h"
 #include "msi_gpu_deferred_finish.h"
+#include "msi_gpu_defer_admit.h"
 #ifdef _WIN32
 #include "world_vk_dispatch.h"
 #endif
@@ -877,6 +878,7 @@ done:
 }
 static int replay_capture(void){
     MsiGpuDrawBatch *b=&replay_batch;
+    printf("MSI_GPU_DEFER_ADMISSION frame=%u draws=%u admissible=%u\n",replay_frame,b->count,msi_gpu_defer_batch_admissible(b));
     uint16_t *cpu=malloc(CAPTURE_PIXELS*2u);uint8_t *mask=malloc(CAPTURE_PIXELS);
     unsigned exact=0,written=0;int replay_ok=cpu&&mask&&msi_gpu_cpu_replay(b,640,400,replay_before,cpu,mask);
     if(replay_ok)for(unsigned j=0;j<CAPTURE_PIXELS;j++){exact+=cpu[j]==replay_after[j];written+=mask[j]!=0;}
