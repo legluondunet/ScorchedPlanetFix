@@ -245,6 +245,47 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
                         if expected in ("unavailable", "incomplete"):
                             self.assertEqual(analyzer.main(["--assert-gpu-timing", "--json", str(path)]), 0)
 
+    def test_gpu_cost_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=5000 fence_wait_valid=1 fence_wait_ticks=20000\n"
+        loop = "GPU_CPU_LOOP frame=120 draws=8 timed_draws=8 qpc_hz=10000000 loop_ticks=40000 replay_ticks=60000\n"
+        cost = "GPU_BYPASS_COST frame=240 qpc_hz=10000000 capture_alloc_ticks=1000 snapshot_ticks=3000 scratch_alloc_ticks=500 scratch_free_ticks=500 capture_free_ticks=1000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + loop + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + metric + single + cost + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]
+        self.assertEqual(r["cpu_loop_timing"]["status"], "validated")
+        self.assertEqual((r["cpu_loop_timing"]["original_cpu_loop_ms"], r["cpu_loop_timing"]["immutable_replay_ms"]), (4.0, 6.0))
+        self.assertEqual(r["pilot_cost"]["status"], "validated")
+        self.assertEqual((r["pilot_cost"]["measured_capture_overhead_ms"], r["pilot_cost"]["measured_gpu_path_ms"], r["pilot_cost"]["replay_over_measured_gpu_path"]), (0.6, 3.6, 1.25))
+        self.assertEqual(r["pilot_cost"]["by_texture_mode"]["1"]["measured_gpu_path_ms"], 3.6)
+        for old, new, key, status in (
+            (loop, "", "cpu_loop_timing", "unavailable"),
+            (loop, loop.replace("timed_draws=8", "timed_draws=7"), "cpu_loop_timing", "failed"),
+            (loop, loop.replace("qpc_hz=10000000 loop_ticks=40000 replay_ticks=60000", "qpc_hz=0 loop_ticks=0 replay_ticks=0"), "cpu_loop_timing", "incomplete"),
+            (loop, loop.replace("frame=120", "frame=121"), "cpu_loop_timing", "incomplete"),
+            (cost, "", "pilot_cost", "unavailable"),
+            (cost, cost + cost, "pilot_cost", "failed"),
+            (cost, cost.replace("qpc_hz=10000000", "qpc_hz=20000000"), "pilot_cost", "failed"),
+            (cost, cost.replace("capture_alloc_ticks=1000 ", ""), "pilot_cost", "failed"),
+            (cost, cost.replace("frame=240", "frame=241"), "pilot_cost", "failed"),
+        ):
+            with self.subTest(key=key, status=status):
+                changed = body.replace(old, new)
+                r = self.parse(changed)["gpu_diagnostics"]
+                self.assertEqual(r[key]["status"], status, r[key])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory, "ScorchedPlanetFix.log")
+                    path.write_text(changed, encoding="utf-8")
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 1)
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-fence", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(body, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 0)
+
     def test_gpu_malformed_bypass_record(self):
         r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
                                                "GPU_BYPASS OK written=5"))["gpu_diagnostics"]

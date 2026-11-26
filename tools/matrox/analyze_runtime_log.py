@@ -147,6 +147,10 @@ class GpuAudit:
         self.metrics_errors = []
         self.oracle = []
         self.oracle_errors = []
+        self.cpu_loops = []
+        self.pilot_costs = []
+        self.loop_errors = []
+        self.cost_errors = []
         self.roi_errors = []
         self.errors = []
 
@@ -169,6 +173,19 @@ class GpuAudit:
                 self.oracle_errors.append(line[:240])
             else:
                 self.oracle.append(f)
+        elif line.startswith("GPU_CPU_LOOP "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "draws", "timed_draws", "qpc_hz", "loop_ticks", "replay_ticks")):
+                self.loop_errors.append("incomplete GPU_CPU_LOOP")
+            else:
+                self.cpu_loops.append(f)
+        elif line.startswith("GPU_BYPASS_COST "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "qpc_hz", "capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks",
+                                        "scratch_free_ticks", "capture_free_ticks")):
+                self.cost_errors.append("incomplete GPU_BYPASS_COST")
+            else:
+                self.pilot_costs.append(f)
         elif line.startswith("GPU_BYPASS_METRICS "):
             f = fields(line)
             if any(k not in f for k in ("frame", "mode", "decoded_bytes", "upload_bytes", "qpc_hz", "dispatch_ticks", "publish_ticks")):
@@ -377,6 +394,86 @@ class GpuAudit:
                 "by_texture_mode": {str(mode): aggregate([r for r in pairs if r[3] == mode])
                                     for mode in (0, 1, 2)}}
 
+    def loop_timing_report(self):
+        errors = list(self.loop_errors)
+        timed = []
+        for r in self.cpu_loops:
+            hz, draws, count = r["qpc_hz"], r["draws"], r["timed_draws"]
+            ticks = (r["loop_ticks"], r["replay_ticks"])
+            if not (1 <= draws <= 32 and 0 <= count <= draws and
+                    ((hz == 0 and not any(ticks)) or
+                     (100000 <= hz <= 1000000000 and count == draws and all(0 <= t < 4294967295 for t in ticks)))):
+                errors.append(f"invalid CPU loop timing at {r['frame']}")
+            elif hz:
+                timed.append(r)
+        expected = sorted((r["frame"], r["draws"]) for r in self.records["GPU_CPU_REPLAY"])
+        observed = sorted((r["frame"], r["draws"]) for r in self.cpu_loops)
+        # Multiple manual waves in one frame can have equal identities;
+        # compare the complete multiset, never overwrite a record by key.
+        missing = expected != observed or len(timed) != len(self.cpu_loops)
+        status = ("failed" if errors else "unavailable" if not self.cpu_loops else
+                  "incomplete" if missing else "validated")
+        loop_ms = sum(r["loop_ticks"] * 1000 / r["qpc_hz"] for r in timed)
+        replay_ms = sum(r["replay_ticks"] * 1000 / r["qpc_hz"] for r in timed)
+        return {"status": status, "waves": len(timed), "draws": sum(r["draws"] for r in timed),
+                "untimed_waves": len(self.cpu_loops) - len(timed), "matched_waves": expected == observed,
+                "original_cpu_loop_ms": round(loop_ms, 3) if timed else None,
+                "immutable_replay_ms": round(replay_ms, 3) if timed else None,
+                "replay_over_loop": round(replay_ms / loop_ms, 3) if loop_ms > 0 else None,
+                "errors": errors}
+
+    def pilot_cost_report(self):
+        errors = list(self.cost_errors)
+        phase_keys = ("capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks", "scratch_free_ticks", "capture_free_ticks")
+        metrics = {r["frame"]: r for r in self.metrics}
+        oracle = {r["frame"]: r for r in self.oracle}
+        observed = [r["frame"] for r in self.pilot_costs]
+        expected = [r["frame"] for r in self.bypass_roi_publish]
+        if len(set(observed)) != len(observed):
+            errors.append("duplicate pilot cost frames")
+        if len(metrics) != len(self.metrics) or len(oracle) != len(self.oracle):
+            errors.append("duplicate pilot timing frames")
+        timed = []
+        for r in self.pilot_costs:
+            frame, hz = r["frame"], r["qpc_hz"]
+            ticks = [r[k] for k in phase_keys]
+            if not ((hz == 0 and not any(ticks)) or
+                    (100000 <= hz <= 1000000000 and all(0 <= t < 4294967295 for t in ticks))):
+                errors.append(f"invalid pilot cost timing at {frame}")
+                continue
+            m, o = metrics.get(frame), oracle.get(frame)
+            if not m or not o:
+                errors.append(f"unmatched pilot cost timing at {frame}")
+                continue
+            if not hz or not m["qpc_hz"] or not o["qpc_hz"]:
+                continue
+            if hz != m["qpc_hz"] or hz != o["qpc_hz"]:
+                errors.append(f"mismatched pilot cost frequency at {frame}")
+                continue
+            timed.append((r, m, o))
+        matched = sorted(observed) == sorted(expected)
+        status = ("failed" if errors else "unavailable" if not self.pilot_costs else
+                  "incomplete" if not matched or len(timed) != len(expected) else "validated")
+        def aggregate(rows):
+            phase_ms = {k.removesuffix("_ticks") + "_ms": sum(r[k] * 1000 / r["qpc_hz"] for r, m, o in rows)
+                        for k in phase_keys}
+            overhead = sum(phase_ms.values())
+            dispatch = sum(m["dispatch_ticks"] * 1000 / m["qpc_hz"] for r, m, o in rows)
+            publish = sum(m["publish_ticks"] * 1000 / m["qpc_hz"] for r, m, o in rows)
+            replay = sum(o["cpu_ticks"] * 1000 / o["qpc_hz"] for r, m, o in rows)
+            gpu = overhead + dispatch + publish
+            return {"samples": len(rows),
+                    **{k: round(v, 3) if rows else None for k, v in phase_ms.items()},
+                    "measured_capture_overhead_ms": round(overhead, 3) if rows else None,
+                    "measured_gpu_path_ms": round(gpu, 3) if rows else None,
+                    "cpu_replay_ms": round(replay, 3) if rows else None,
+                    "replay_over_measured_gpu_path": round(replay / gpu, 3) if replay > 0 and gpu > 0 else None}
+        return {"status": status, **aggregate(timed), "matched_frames": matched,
+                "missing_samples": len(expected) - len(timed),
+                "by_texture_mode": {str(mode): aggregate([t for t in timed if t[1]["mode"] == mode])
+                                    for mode in (0, 1, 2)},
+                "errors": errors}
+
     def report(self, clean):
         errors = list(self.errors)
         missing = []
@@ -400,7 +497,8 @@ class GpuAudit:
         totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
-                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report()}
+                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report(),
+                  "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -632,6 +730,8 @@ def main(argv=None) -> int:
                         help="Require all pilot gates and timed CPU/GPU pairs for every publication")
     parser.add_argument("--assert-gpu-fence", action="store_true",
                         help="Require all pilot/timing gates and a valid submission-fence interval for every publication")
+    parser.add_argument("--assert-gpu-cost", action="store_true",
+                        help="Require all fence gates and complete CPU-loop/capture-overhead timing")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -665,11 +765,14 @@ def main(argv=None) -> int:
     if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
         return 1
-    if (args.assert_gpu_timing or args.assert_gpu_fence) and any(r["gpu_diagnostics"]["status"] != "validated" or
+    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost) and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
                                       r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
         return 1
-    if args.assert_gpu_fence and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
+    if (args.assert_gpu_fence or args.assert_gpu_cost) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_cost and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
+                                       for k in ("cpu_loop_timing", "pilot_cost")) for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1
