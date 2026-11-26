@@ -67,8 +67,9 @@ static VkResult msi_vk_shadow_compare(MsiVkShadowSession *s,const MsiGpuDrawBatc
 /* Lazy optional R32 output: keep R16 diagnostic initialization independent.
  * Shared work is safe because both paths are synchronous and share a pool.
  * An ambiguous wait poisons the entire session; close retires on that pool. */
-static VkResult msi_vk_shadow_tagged(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
-    uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault){
+static VkResult msi_vk_shadow_tagged_impl(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
+    uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault,
+    unsigned *region_pixels){
     if(!s||!s->ready||s->ctx.unusable||s->tagged.unusable||s->work.pending||!b||!scratch)
         return VK_ERROR_INITIALIZATION_FAILED;
     if(!s->tagged.pipe){
@@ -85,8 +86,16 @@ static VkResult msi_vk_shadow_tagged(MsiVkShadowSession *s,const MsiGpuDrawBatch
         r=msi_vk_batch_pipeline_create(&s->tagged,vs,vs_bytes,fs,fs_bytes,0);
         if(r!=VK_SUCCESS){if(s->tagged.unusable)s->ready=0;return r;}
     }
-    VkResult r=msi_vk_batch_render(&s->tagged,&s->work,b,640u,400u,NULL,scratch,fault);
+    MsiGpuRect roi;
+    if(region_pixels&&!msi_vk_tagged_region(b,&roi))return VK_ERROR_INITIALIZATION_FAILED;
+    VkResult r=region_pixels?msi_vk_batch_render_tagged_roi(&s->tagged,&s->work,b,scratch,fault):
+        msi_vk_batch_render(&s->tagged,&s->work,b,640u,400u,NULL,scratch,fault);
     if(s->tagged.unusable)s->ready=0;
+    if(r==VK_SUCCESS&&region_pixels)*region_pixels=(roi.x1-roi.x0)*(roi.y1-roi.y0);
     return r;
+}
+static VkResult msi_vk_shadow_tagged(MsiVkShadowSession *s,const MsiGpuDrawBatch *b,
+    uint32_t *scratch,const uint32_t *vs,size_t vs_bytes,const uint32_t *fs,size_t fs_bytes,unsigned fault){
+    return msi_vk_shadow_tagged_impl(s,b,scratch,vs,vs_bytes,fs,fs_bytes,fault,NULL);
 }
 #endif

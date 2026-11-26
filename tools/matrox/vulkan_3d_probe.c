@@ -669,6 +669,11 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     NEED(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0)==VK_ERROR_INITIALIZATION_FAILED);
     for(size_t j=0;j<n;j++)NEED(cropped[j]==0xabcdef01u);
     ordered->draws[0].bounds=saved;
+    /* Underreported bookkeeping bounds must not mask real GPU writes. */
+    ordered->draws[0].bounds=(MsiGpuRect){8,8,9,9};
+    OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
+    for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
+    ordered->draws[0].bounds=saved;
     /* Boundary touching the viewport and disjoint clipped regions. */
     *one=*ordered;one->count=2;
     one->draws[0].bounds=(MsiGpuRect){0,0,72,72};
@@ -933,10 +938,27 @@ static int replay_capture(void){
         r.perspective,r.bilinear,r.affine_nearest,r.modulated,r.dithered,r.keyed);
     int counts_ok=msi_gpu_compare_counts_ok(&r,CAPTURE_PIXELS);
     if(!counts_ok)fprintf(stderr,"inconsistent replay pixel accounting\n");
+    /* Every valid offline capture also independently compares full tags
+     * with the cropped path (no CPU/GPU tolerance in this comparison). */
+    MsiVkBatchContext tagged={.phys=phys,.dev=dev,.queue=queue,.cp=cp,.mem=mem,.tagged_output=1};
+    MsiVkBatchWork work={0};
+    uint32_t *whole=malloc(CAPTURE_PIXELS*4u),*roi=malloc(CAPTURE_PIXELS*4u);
+    NEED(whole&&roi);
+    OK(msi_vk_batch_pipeline_create(&tagged,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),0));
+    MsiGpuRect region;NEED(msi_vk_tagged_region(b,&region));
+    OK(msi_vk_batch_render(&tagged,&work,b,640,400,NULL,whole,0));
+    OK(msi_vk_batch_render_tagged_roi(&tagged,&work,b,roi,0));
+    unsigned tag_exact=0;
+    for(unsigned j=0;j<CAPTURE_PIXELS;j++)tag_exact+=whole[j]==roi[j];
+    printf("VULKAN_3D_REPLAY_ROI %s frame=%u exact=%u bytes=%u full_bytes=%u\n",
+        tag_exact==CAPTURE_PIXELS?"PASS":"DIFFERENCES",replay_frame,tag_exact,
+        (region.x1-region.x0)*(region.y1-region.y0)*4u,CAPTURE_PIXELS*4u);
+    msi_vk_batch_pipeline_destroy(&tagged);
+    free(whole);free(roi);
     free(p);free(b->snapshots.decoded);b->snapshots.decoded=NULL;
     /* A diagnostic, not a bit-exact certification. Report all categories.
        No arbitrary acceptance of large errors away from geometric edges. */
-    return msi_gpu_compare_pass(&r,CAPTURE_PIXELS);
+    return tag_exact==CAPTURE_PIXELS&&msi_gpu_compare_pass(&r,CAPTURE_PIXELS);
 }
 
 int main(int argc,char **argv){

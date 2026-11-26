@@ -353,15 +353,23 @@ int matrox_vk_shadow_compare(const MsiGpuDrawBatch *batch,const uint16_t *before
     }
     return r;
 }
-int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch){
+static int matrox_vk_shadow_tagged_impl(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels){
     if(!ready||!shadow_ready)return VK_NOT_READY;
-    VkResult r=msi_vk_bridge_tagged(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag));
+    VkResult r=region_pixels?msi_vk_bridge_tagged_roi(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag),region_pixels):
+        msi_vk_bridge_tagged(batch,scratch,world_vert,sizeof(world_vert),world_frag,sizeof(world_frag));
     if(r!=VK_SUCCESS){
         shadow_ready=0;report("VULKAN_TAGGED disabled",(int)r);
         VkResult close_result=msi_vk_bridge_close();
         if(r==VK_ERROR_DEVICE_LOST||close_result!=VK_SUCCESS)ready=0;
     }
     return r;
+}
+int matrox_vk_shadow_tagged(const MsiGpuDrawBatch *batch,uint32_t *scratch){
+    return matrox_vk_shadow_tagged_impl(batch,scratch,NULL);
+}
+int matrox_vk_shadow_tagged_roi(const MsiGpuDrawBatch *batch,uint32_t *scratch,unsigned *region_pixels){
+    if(!region_pixels)return VK_ERROR_INITIALIZATION_FAILED;
+    return matrox_vk_shadow_tagged_impl(batch,scratch,region_pixels);
 }
 #endif
 int matrox_vk_present(const uint16_t *native_pixels,uint32_t pitch){

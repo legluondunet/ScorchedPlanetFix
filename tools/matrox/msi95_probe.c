@@ -1871,6 +1871,30 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
             putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-tag_start);
             msg[n]=0;logtext(msg);
             if(pass){
+                /* Exact full-vs-region comparison on the borrowed device.
+                 * No live writes, no bypass change until owner validation. */
+                uint32_t *roi=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
+                unsigned region_pixels=0,diff=0;
+                DWORD roi_start=GetTickCount();
+                int roi_rc=roi?matrox_vk_shadow_tagged_roi(&best->batch,roi,&region_pixels):-1;
+                if(!roi_rc)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)diff+=roi[j]!=tagged[j];
+                if(roi)VirtualFree(roi,0,MEM_RELEASE);
+                if(roi_rc){
+                    lognum("GPU_TAGGED_ROI ERROR code=",(unsigned)roi_rc,NULL,0);
+                    VirtualFree(tagged,0,MEM_RELEASE);VirtualFree(alternate,0,MEM_RELEASE);
+                    VirtualFree(inverted,0,MEM_RELEASE);VirtualFree(scratch,0,MEM_RELEASE);
+                    return MSI_SHADOW_ERROR;
+                }
+                pass=!diff&&region_pixels>0&&region_pixels<=GPU_CAPTURE_NATIVE_BYTES/2u;
+                n=0;putstr(msg,&n,pass?"GPU_TAGGED_ROI PASS frame=":"GPU_TAGGED_ROI DIFFERENCES frame=");
+                putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                putstr(msg,&n," exact=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES/2u-diff);
+                putstr(msg,&n," bytes=");putunsigned(msg,&n,region_pixels*4u);
+                putstr(msg,&n," full_bytes=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
+                putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-roi_start);
+                msg[n]=0;logtext(msg);
+            }
+            if(pass){
                 int retirement=gpu_capture_retirement_check(best,tagged,&check,inverted,alternate);
                 if(retirement==MSI_SHADOW_ERROR){
                     VirtualFree(tagged,0,MEM_RELEASE);
