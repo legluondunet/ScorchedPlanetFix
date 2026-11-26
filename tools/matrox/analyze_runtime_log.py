@@ -316,6 +316,40 @@ class GpuAudit:
                 **{k: sum(r[k] for r in self.oracle) for k in ("cpu_written", "gpu_written", "both", "exact", "one_lsb", "edge_color", "edge_coverage")},
                 "errors": errors, "missing": missing}
 
+    def paired_timing_report(self):
+        # Only compare the same publication, never aggregate different
+        # frames or silently include untimed samples on one side.
+        oracle, metrics = self.oracle_report(), self.metrics_report()
+        if oracle["status"] != "validated" or metrics["status"] != "validated":
+            return {"status": "unavailable", "samples": 0}
+        a = {r["frame"]: r for r in self.oracle}
+        b = {r["frame"]: r for r in self.metrics}
+        if len(a) != len(self.oracle) or len(b) != len(self.metrics) or a.keys() != b.keys():
+            return {"status": "failed", "samples": 0, "reason": "duplicate or unmatched frames"}
+        pairs = []
+        for frame, r in a.items():
+            m = b[frame]
+            if not r["qpc_hz"] or not m["qpc_hz"]:
+                continue
+            if r["qpc_hz"] != m["qpc_hz"]:
+                return {"status": "failed", "samples": 0, "reason": "mismatched QPC frequency"}
+            hz = r["qpc_hz"]
+            pairs.append((r["cpu_ticks"] * 1000 / hz, m["dispatch_ticks"] * 1000 / hz,
+                          m["publish_ticks"] * 1000 / hz, m["mode"]))
+        def aggregate(rows):
+            cpu = sum(r[0] for r in rows)
+            dispatch = sum(r[1] for r in rows)
+            publish = sum(r[2] for r in rows)
+            return {"samples": len(rows), "cpu_replay_ms": round(cpu, 3),
+                    "gpu_dispatch_ms": round(dispatch, 3), "cpu_publication_ms": round(publish, 3),
+                    "gpu_plus_publication_ms": round(dispatch + publish, 3),
+                    "replay_over_gpu_plus_publication": round(cpu / (dispatch + publish), 3)
+                        if rows and cpu > 0 and dispatch + publish > 0 else None}
+        return {"status": "validated" if pairs else "unavailable",
+                **aggregate(pairs), "untimed_samples": len(a) - len(pairs),
+                "by_texture_mode": {str(mode): aggregate([r for r in pairs if r[3] == mode])
+                                    for mode in (0, 1, 2)}}
+
     def report(self, clean):
         errors = list(self.errors)
         missing = []
@@ -339,7 +373,7 @@ class GpuAudit:
         totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
-                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report()}
+                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -567,6 +601,8 @@ def main(argv=None) -> int:
                         help="Require validated GPU diagnostics, ROI publication and matching pilot metrics")
     parser.add_argument("--assert-gpu-oracle", action="store_true",
                         help="Require validated GPU diagnostics, ROI, metrics and single-triangle CPU oracle")
+    parser.add_argument("--assert-gpu-timing", action="store_true",
+                        help="Require all pilot gates and timed CPU/GPU pairs for every publication")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -599,6 +635,10 @@ def main(argv=None) -> int:
         return 1
     if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
+        return 1
+    if args.assert_gpu_timing and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                      any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
+                                      r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1

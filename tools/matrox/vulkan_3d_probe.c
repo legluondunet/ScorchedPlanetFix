@@ -930,6 +930,15 @@ static void test_packed_publication(const MsiGpuDrawBatch *batch){
         before[j]=live[j]=ref[j]=(j&1u)&&full[j]<=65535u?(uint16_t)full[j]:0xdead;
         under[j]=ref_under[j]=3;
     }
+    /* Real shader output compared against the immutable CPU replay,
+     * rather than only against another invocation of the same shader. */
+    MsiGpuPilotOracle oracle;
+    NEED(msi_gpu_cpu_replay(one,640,400,before,ref,ref_under));
+    NEED(msi_gpu_pilot_oracle(&oracle,one,ref,ref_under,packed+1,count,actual));
+    NEED(oracle.exact&&oracle.cpu_written&&oracle.gpu_written);
+    printf("VULKAN_3D_PILOT_ORACLE_PASS exact=%u one=%u edge_coverage=%u edge_color=%u\n",
+        oracle.exact,oracle.one,oracle.edge_coverage,oracle.edge_color);
+    for(size_t j=0;j<n;j++){ref[j]=before[j];ref_under[j]=3;}
     MsiGpuBypass a,b;
     NEED(msi_gpu_bypass_tagged_commit(&a,640,400,one,ref,ref_under,before,full));
     NEED(a.written>a.changed&&a.changed>0);
