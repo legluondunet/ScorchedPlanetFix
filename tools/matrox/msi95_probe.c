@@ -1962,13 +1962,21 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
             putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-tag_start);
             msg[n]=0;logtext(msg);
             if(pass){
-                /* Exact full-vs-region comparison on the borrowed device.
-                 * No live writes, no bypass change until owner validation. */
-                uint32_t *roi=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
-                unsigned region_pixels=0,diff=0;
+                /* Same exact full-frame gate, but qualify the packed
+                 * multi-draw submission and fence against the real CPU
+                 * wave already timed above. CPU has already rendered;
+                 * this does not defer a draw or expose a guest pointer. */
+                MsiGpuRect region={0};
+                unsigned region_pixels=0,diff=UINT32_MAX;
+                if(msi_gpu_native_tagged_region(&best->batch,&region))
+                    region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
+                uint32_t *roi=region_pixels?(uint32_t*)alloc(region_pixels*4u):0;
                 DWORD roi_start=GetTickCount();
-                int roi_rc=roi?matrox_vk_shadow_tagged_roi(&best->batch,roi,&region_pixels):-1;
-                if(!roi_rc)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)diff+=roi[j]!=tagged[j];
+                uint32_t fence_ticks=UINT32_MAX;
+                MSI_INT64 batch_begin=gpu_cost_now();
+                int roi_rc=roi?matrox_vk_shadow_tagged_packed(&best->batch,roi,region_pixels,&region,&fence_ticks):-1;
+                DWORD batch_ticks=gpu_cost_elapsed(batch_begin);
+                if(!roi_rc)diff=msi_gpu_packed_native_diff(&best->batch,tagged,roi,region_pixels,region);
                 if(roi)VirtualFree(roi,0,MEM_RELEASE);
                 if(roi_rc){
                     lognum("GPU_TAGGED_ROI ERROR code=",(unsigned)roi_rc,NULL,0);
@@ -1979,11 +1987,25 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
                 pass=!diff&&region_pixels>0&&region_pixels<=GPU_CAPTURE_NATIVE_BYTES/2u;
                 n=0;putstr(msg,&n,pass?"GPU_TAGGED_ROI PASS frame=":"GPU_TAGGED_ROI DIFFERENCES frame=");
                 putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
-                putstr(msg,&n," exact=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES/2u-diff);
+                putstr(msg,&n," exact=");putunsigned(msg,&n,diff<=GPU_CAPTURE_NATIVE_BYTES/2u?GPU_CAPTURE_NATIVE_BYTES/2u-diff:0);
                 putstr(msg,&n," bytes=");putunsigned(msg,&n,region_pixels*4u);
                 putstr(msg,&n," full_bytes=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
                 putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-roi_start);
                 msg[n]=0;logtext(msg);
+                if(pass){
+                    unsigned valid=g_cap_frequency&&best->loop_draws==best->batch.count&&
+                        !best->loop_untimed&&batch_ticks!=UINT32_MAX&&
+                        fence_ticks!=UINT32_MAX&&fence_ticks<=batch_ticks;
+                    n=0;putstr(msg,&n,"GPU_BATCH_COST frame=");putunsigned(msg,&n,g_frames);
+                    putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                    putstr(msg,&n," textures=");putunsigned(msg,&n,best->batch.snapshots.count);
+                    putstr(msg,&n," decoded_bytes=");putunsigned(msg,&n,(unsigned)best->batch.snapshots.decoded_used*4u);
+                    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,valid?g_cap_frequency:0);
+                    putstr(msg,&n," cpu_loop_ticks=");putunsigned(msg,&n,valid?best->loop_ticks:0);
+                    putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,valid?batch_ticks:0);
+                    putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,valid?fence_ticks:0);
+                    msg[n]=0;logtext(msg);
+                }
             }
             if(pass){
                 int retirement=gpu_capture_retirement_check(best,tagged,&check,inverted,alternate);

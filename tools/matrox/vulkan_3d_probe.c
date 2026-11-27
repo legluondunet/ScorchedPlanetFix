@@ -749,6 +749,29 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     OK(msi_vk_batch_render_tagged_roi(&tagged,&work,ordered,cropped,0));
     for(size_t j=0;j<n;j++)NEED(cropped[j]==out[j]);
     ordered->draws[0].bounds=saved;
+    /* Real multi-draw packed submission: exact across the full native
+     * frame, independent of the expanded ROI path. Guard capacity and
+     * injected readback failure, then a second successful reuse. */
+    MsiGpuRect batch_roi={0},batch_actual={0};
+    NEED(msi_gpu_native_tagged_region(ordered,&batch_roi));
+    size_t batch_count=(size_t)(batch_roi.x1-batch_roi.x0)*(batch_roi.y1-batch_roi.y0);
+    uint32_t *batch_packed=malloc((batch_count+2u)*4u);NEED(batch_packed&&batch_count>0&&batch_count<n);
+    for(size_t j=0;j<batch_count+2u;j++)batch_packed[j]=0xabcdef01u;
+    NEED(msi_vk_batch_render_tagged_packed(&tagged,&work,ordered,batch_packed+1,batch_count-1,&batch_actual,0)==VK_ERROR_INITIALIZATION_FAILED);
+    NEED(msi_vk_batch_render_tagged_packed(&tagged,&work,ordered,batch_packed+1,batch_count,&batch_actual,6)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    for(size_t j=0;j<batch_count+2u;j++)NEED(batch_packed[j]==0xabcdef01u);
+    NEED(!batch_actual.x0&&!batch_actual.x1);
+    for(unsigned i=0;i<2;i++){
+        OK(msi_vk_batch_render_tagged_packed(&tagged,&work,ordered,batch_packed+1,batch_count,&batch_actual,0));
+        NEED(msi_gpu_packed_native_diff(ordered,out,batch_packed+1,batch_count,batch_actual)==0);
+        NEED(batch_packed[0]==0xabcdef01u&&batch_packed[batch_count+1]==0xabcdef01u);
+    }
+    NEED(msi_gpu_packed_native_diff(ordered,out,batch_packed+1,batch_count-1,batch_actual)==UINT32_MAX);
+    uint32_t old=batch_packed[1];batch_packed[1]=65537u;
+    NEED(msi_gpu_packed_native_diff(ordered,out,batch_packed+1,batch_count,batch_actual)==1u);
+    batch_packed[1]=old;
+    free(batch_packed);
+    puts("VULKAN_3D_PACKED_BATCH_PASS draws=4 exact=256000 fault=1 reuse=1 guards=1");
     /* Boundary touching the viewport and disjoint clipped regions. */
     *one=*ordered;one->count=2;
     one->draws[0].bounds=(MsiGpuRect){0,0,72,72};

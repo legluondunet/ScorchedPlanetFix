@@ -65,6 +65,26 @@ static inline int msi_gpu_bypass_tagged_commit(MsiGpuBypass *r,unsigned w,unsign
     }
     r->written=written;r->changed=changed;return 1;
 }
+/* Compare a packed multi-draw region with the independent full-frame
+ * tagged reference. Outside the region the implicit tag is no-write.
+ * Reject malformed dimensions/capacity before reading any output. */
+static inline unsigned msi_gpu_packed_native_diff(const MsiGpuDrawBatch *b,
+    const uint32_t *full,const uint32_t *packed,size_t count,MsiGpuRect roi){
+    MsiGpuRect expected;
+    if(!full||!packed||!msi_gpu_native_tagged_region(b,&expected)||
+       roi.x0!=expected.x0||roi.y0!=expected.y0||roi.x1!=expected.x1||roi.y1!=expected.y1)
+        return UINT32_MAX;
+    unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    if(count!=(size_t)rw*rh)return UINT32_MAX;
+    unsigned diff=0;
+    for(unsigned y=0;y<400u;y++)for(unsigned x=0;x<640u;x++){
+        uint32_t a=full[(size_t)y*640u+x];
+        uint32_t z=x>=roi.x0&&x<roi.x1&&y>=roi.y0&&y<roi.y1?
+            packed[(size_t)(y-roi.y0)*rw+x-roi.x0]:65536u;
+        diff+=a!=z||a>65536u||z>65536u;
+    }
+    return diff;
+}
 /* Packed native ROI publication for the synchronous pilot. Preserve the
  * entire live/baseline comparison, reject invalid/outside-bound tags even
  * in the guard ring, and mutate only after both checks succeed. */
