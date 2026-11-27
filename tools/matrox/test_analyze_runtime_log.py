@@ -269,6 +269,40 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         self.assertEqual(r["pilot_cost"]["snapshot_split"]["status"], "validated")
         self.assertEqual((r["pilot_cost"]["snapshot_split"]["prepare_ms"], r["pilot_cost"]["snapshot_split"]["baseline_copy_ms"]), (0.2, 0.1))
         self.assertEqual(r["pilot_storage"]["status"], "validated")
+        self.assertEqual(r["batch_cost"]["status"], "unavailable")
+        batch_cost = "GPU_BATCH_COST frame=120 draws=8 textures=2 decoded_bytes=131072 qpc_hz=10000000 cpu_loop_ticks=40000 dispatch_ticks=12500 fence_wait_ticks=7500\n"
+        qualified = full.replace(loop, loop + batch_cost)
+        b = self.parse(qualified)["gpu_diagnostics"]["batch_cost"]
+        self.assertEqual(b["status"], "validated", b)
+        self.assertEqual((b["waves"], b["draws"], b["cpu_loop_ms"], b["gpu_dispatch_ms"],
+                          b["fence_wait_ms"], b["cpu_over_dispatch"], b["gpu_faster_waves"]),
+                         (1, 8, 4.0, 1.25, 0.75, 3.2, 1))
+        self.assertEqual(b["by_draw_count"]["8-15"]["dispatch_ms_per_draw"], 0.15625)
+        self.assertIsNone(b["by_draw_count"]["24-32"]["gpu_dispatch_ms"])
+        self.assertEqual(b["fence_share_pct"], 60.0)
+        for changed, expected in (
+            (full, "unavailable"),
+            (qualified.replace("cpu_loop_ticks=40000", "cpu_loop_ticks=39999"), "failed"),
+            (qualified.replace("textures=2 decoded_bytes", "textures=9 decoded_bytes"), "failed"),
+            (qualified.replace("fence_wait_ticks=7500", "fence_wait_ticks=12501"), "failed"),
+            (qualified.replace(" decoded_bytes=131072", ""), "failed"),
+            (qualified.replace(batch_cost, batch_cost + batch_cost), "incomplete"),
+            (qualified.replace("GPU_BATCH_COST frame=120", "GPU_BATCH_COST frame=121"), "incomplete"),
+            (qualified.replace(batch_cost, batch_cost.replace("qpc_hz=10000000 cpu_loop_ticks=40000 dispatch_ticks=12500 fence_wait_ticks=7500",
+                                                              "qpc_hz=0 cpu_loop_ticks=0 dispatch_ticks=0 fence_wait_ticks=0")), "incomplete"),
+        ):
+            self.assertEqual(self.parse(changed)["gpu_diagnostics"]["batch_cost"]["status"], expected)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(qualified, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 0)
         for changed in (body, full.replace("baseline_copy_ticks=1000", "baseline_copy_ticks=1001"),
                         full.replace(" prepare_ticks=2000", ""), full.replace("live=0", "live=1"),
                         full.replace("releases=1", "releases=0"), full.replace(f"reuses={sampled-1}", f"reuses={sampled}"),

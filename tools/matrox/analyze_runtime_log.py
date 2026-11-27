@@ -149,6 +149,8 @@ class GpuAudit:
         self.oracle_errors = []
         self.cpu_loops = []
         self.pilot_costs = []
+        self.batch_costs = []
+        self.batch_cost_errors = []
         self.storage = {}
         self.storage_errors = []
         self.loop_errors = []
@@ -181,6 +183,14 @@ class GpuAudit:
                 self.loop_errors.append("incomplete GPU_CPU_LOOP")
             else:
                 self.cpu_loops.append(f)
+        elif line.startswith("GPU_BATCH_COST "):
+            f = fields(line)
+            required = ("frame", "draws", "textures", "decoded_bytes", "qpc_hz",
+                        "cpu_loop_ticks", "dispatch_ticks", "fence_wait_ticks")
+            if not all(k in f for k in required):
+                self.batch_cost_errors.append("incomplete GPU_BATCH_COST")
+            else:
+                self.batch_costs.append(f)
         elif line.startswith("GPU_BYPASS_COST "):
             f = fields(line)
             if not all(k in f for k in ("frame", "qpc_hz", "capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks",
@@ -501,6 +511,59 @@ class GpuAudit:
                                     for mode in (0, 1, 2)},
                 "errors": errors}
 
+    def batch_cost_report(self):
+        errors = list(self.batch_cost_errors)
+        timed = []
+        def identity(r):
+            return (r["frame"], r["draws"])
+        expected = sorted(map(identity, self.roi))
+        observed = sorted(map(identity, self.batch_costs))
+        loop_timed = sorted((*identity(r), r["qpc_hz"], r["loop_ticks"])
+                            for r in self.cpu_loops if r["qpc_hz"])
+        for r in self.batch_costs:
+            hz, draws, textures, decoded = (r[k] for k in ("qpc_hz", "draws", "textures", "decoded_bytes"))
+            cpu, gpu, fence = (r[k] for k in ("cpu_loop_ticks", "dispatch_ticks", "fence_wait_ticks"))
+            if not (8 <= draws <= 32 and 1 <= textures <= draws and
+                    4 * textures <= decoded <= 8388608 and decoded % 4 == 0 and
+                    ((hz == 0 and cpu == gpu == fence == 0) or
+                     (100000 <= hz <= 1000000000 and 0 <= cpu < UINT32_MAX and
+                      0 <= fence <= gpu < UINT32_MAX))):
+                errors.append(f"invalid batch timing at {r['frame']}")
+            elif hz:
+                timed.append(r)
+        # Compare multisets: repeated manual captures can share a frame/draw
+        # identity, and must not overwrite one another in a dict.
+        paired = sorted((*identity(r), r["qpc_hz"], r["cpu_loop_ticks"]) for r in timed)
+        if observed == expected and len(timed) == len(expected) and paired != loop_timed:
+            errors.append("batch CPU time/frequency disagrees with matched original loop records")
+        complete = bool(expected) and expected == observed and paired == loop_timed and len(timed) == len(expected)
+        status = ("failed" if errors else "unavailable" if not self.batch_costs else
+                  "validated" if complete and self.loop_timing_report()["status"] == "validated" and
+                  self.roi_report()["status"] == "validated" else "incomplete")
+        def aggregate(rows):
+            cpu = sum(r["cpu_loop_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            gpu = sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            fence = sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            draws = sum(r["draws"] for r in rows)
+            return {"waves": len(rows), "draws": draws, "textures": sum(r["textures"] for r in rows),
+                    "decoded_bytes": sum(r["decoded_bytes"] for r in rows),
+                    "cpu_loop_ms": round(cpu, 3) if rows else None,
+                    "gpu_dispatch_ms": round(gpu, 3) if rows else None,
+                    "fence_wait_ms": round(fence, 3) if rows else None,
+                    "dispatch_excluding_wait_ms": round(gpu - fence, 3) if rows else None,
+                    "fence_share_pct": round(100 * fence / gpu, 2) if gpu else None,
+                    "cpu_over_dispatch": round(cpu / gpu, 3) if cpu > 0 and gpu > 0 else None,
+                    "cpu_ms_per_draw": round(cpu / draws, 6) if draws else None,
+                    "dispatch_ms_per_draw": round(gpu / draws, 6) if draws else None,
+                    "gpu_faster_waves": sum(r["dispatch_ticks"] < r["cpu_loop_ticks"] for r in rows),
+                    "equal_waves": sum(r["dispatch_ticks"] == r["cpu_loop_ticks"] for r in rows)}
+        return {"status": status, **aggregate(timed), "matched_waves": expected == observed,
+                "matched_cpu_timing": paired == loop_timed and bool(paired),
+                "untimed_waves": len(self.batch_costs) - len(timed),
+                "by_draw_count": {f"{lo}-{hi}": aggregate([r for r in timed if lo <= r["draws"] <= hi])
+                                  for lo, hi in ((8, 15), (16, 23), (24, 32))},
+                "errors": errors}
+
     def storage_report(self):
         errors = list(self.storage_errors)
         f = self.storage
@@ -541,7 +604,7 @@ class GpuAudit:
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
                   "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report(),
                   "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report(),
-                  "pilot_storage": self.storage_report()}
+                  "pilot_storage": self.storage_report(), "batch_cost": self.batch_cost_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -777,6 +840,8 @@ def main(argv=None) -> int:
                         help="Require all fence gates and complete CPU-loop/capture-overhead timing")
     parser.add_argument("--assert-gpu-storage", action="store_true",
                         help="Require all cost gates, complete snapshot split and one retired pilot pool")
+    parser.add_argument("--assert-gpu-batch", action="store_true",
+                        help="Require all storage gates and complete matched packed-batch timings")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -810,17 +875,19 @@ def main(argv=None) -> int:
     if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
         return 1
-    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage) and any(r["gpu_diagnostics"]["status"] != "validated" or
+    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
                                       r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
         return 1
-    if (args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
+    if (args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
         return 1
-    if (args.assert_gpu_cost or args.assert_gpu_storage) and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
+    if (args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
                                        for k in ("cpu_loop_timing", "pilot_cost")) for r in reports):
         return 1
-    if args.assert_gpu_storage and any(r["gpu_diagnostics"]["pilot_storage"]["status"] != "validated" or
+    if (args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["pilot_storage"]["status"] != "validated" or
                                        r["gpu_diagnostics"]["pilot_cost"]["snapshot_split"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_batch and any(r["gpu_diagnostics"]["batch_cost"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1
