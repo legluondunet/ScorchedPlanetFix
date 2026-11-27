@@ -117,6 +117,654 @@ class OpacityAudit:
         return self.latest or {"status": "unavailable", "errors": []}
 
 
+
+class GpuAudit:
+    """Check diagnostic evidence only; never infer exclusive guest ownership."""
+    STAGES = ("GPU_CPU_REPLAY", "GPU_SHADOW", "GPU_TAGGED_BATCH", "GPU_RETIREMENT", "GPU_COVERAGE")
+    SUMMARY = ("GPU_SHADOW_AUTO", "GPU_BYPASS", "GPU_DEFER_AUDIT", "GPU_DEFER_STRICT",
+               "GPU_DUAL_VIEW", "GPU_DUAL_VIEW_RELEASE", "SESSION_VULKAN")
+    REQUIRED = {
+        "GPU_CPU_REPLAY": ("frame", "draws", "exact", "mask_diff", "written"),
+        "GPU_SHADOW": ("frame", "draws", "active", "exact", "one_lsb", "edge", "unexplained", "outside_bounds"),
+        "GPU_TAGGED_BATCH": ("frame", "draws", "written", "untouched", "color_diff", "coverage_diff", "invalid",
+                             "homogeneous", "provenance_checked", "provenance_diff"),
+        "GPU_RETIREMENT": ("frame", "draws", "gpu_tested", "gpu_written", "cpu_written", "errors"),
+        "GPU_COVERAGE": ("frame", "cpu_written", "gpu_written", "unexplained", "outside", "invalid"),
+    }
+
+    def __init__(self):
+        self.init_count = 0
+        self.requested = None
+        self.active = None
+        self.limits = {}
+        self.summaries = {name: {} for name in self.SUMMARY}
+        self.records = {name: [] for name in self.STAGES}
+        self.bypass = []
+        self.roi = []
+        self.bypass_roi = []
+        self.bypass_roi_publish = []
+        self.metrics = []
+        self.metrics_errors = []
+        self.oracle = []
+        self.oracle_errors = []
+        self.cpu_loops = []
+        self.pilot_costs = []
+        self.batch_costs = []
+        self.batch_cost_errors = []
+        self.batch_paths = []
+        self.batch_path_errors = []
+        self.storage = {}
+        self.storage_errors = []
+        self.loop_errors = []
+        self.cost_errors = []
+        self.roi_errors = []
+        self.errors = []
+
+    def feed(self, line):
+        if line.startswith("msiInit width="):
+            self.init_count += 1
+        elif line.startswith("PREVIEW_RENDERER requested="):
+            self.requested = line.partition("requested=")[2].split()[0]
+        elif line.startswith("PREVIEW_RENDERER active="):
+            self.active = line.partition("active=")[2].split()[0]
+        elif line.startswith("GPU_SHADOW_AUTO enabled "):
+            self.limits["passes"] = fields(line).get("max_passes")
+        elif line.startswith("GPU_BYPASS pilot "):
+            self.limits["bypass"] = fields(line).get("max_triangles")
+        elif line.startswith("GPU_BYPASS_ORACLE "):
+            f = fields(line)
+            required = ("frame", "cpu_written", "gpu_written", "both", "exact", "one_lsb", "edge_color",
+                        "cpu_only", "gpu_only", "edge_coverage", "unexplained", "outside", "invalid", "qpc_hz", "cpu_ticks")
+            if line.split(" ", 2)[1] != "PASS" or any(k not in f for k in required):
+                self.oracle_errors.append(line[:240])
+            else:
+                self.oracle.append(f)
+        elif line.startswith("GPU_CPU_LOOP "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "draws", "timed_draws", "qpc_hz", "loop_ticks", "replay_ticks")):
+                self.loop_errors.append("incomplete GPU_CPU_LOOP")
+            else:
+                self.cpu_loops.append(f)
+        elif line.startswith("GPU_BATCH_COST "):
+            f = fields(line)
+            required = ("frame", "draws", "textures", "decoded_bytes", "qpc_hz",
+                        "cpu_loop_ticks", "dispatch_ticks", "fence_wait_ticks")
+            if not all(k in f for k in required):
+                self.batch_cost_errors.append("incomplete GPU_BATCH_COST")
+            else:
+                self.batch_costs.append(f)
+        elif line.startswith("GPU_BATCH_PATH "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "draws", "tested", "errors", "qpc_hz", "prepare_ticks", "publish_ticks")):
+                self.batch_path_errors.append("incomplete GPU_BATCH_PATH")
+            else:
+                self.batch_paths.append(f)
+        elif line.startswith("GPU_BYPASS_COST "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "qpc_hz", "capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks",
+                                        "scratch_free_ticks", "capture_free_ticks")):
+                self.cost_errors.append("incomplete GPU_BYPASS_COST")
+            else:
+                self.pilot_costs.append(f)
+        elif line.startswith("GPU_PILOT_STORAGE "):
+            f = fields(line)
+            if set(f) not in ({"allocations", "reuses"}, {"releases", "live"}) or self.storage.keys() & f.keys():
+                self.storage_errors.append("invalid or duplicate GPU_PILOT_STORAGE record")
+            else:
+                self.storage.update(f)
+        elif line.startswith("GPU_BYPASS_METRICS "):
+            f = fields(line)
+            if any(k not in f for k in ("frame", "mode", "decoded_bytes", "upload_bytes", "qpc_hz", "dispatch_ticks", "publish_ticks")):
+                self.metrics_errors.append("incomplete GPU_BYPASS_METRICS")
+            else:
+                self.metrics.append(f)
+        elif line.startswith("GPU_BYPASS_ROI_PUBLISH "):
+            f = fields(line)
+            if line.split(" ", 2)[1] != "PASS" or any(k not in f for k in ("frame", "draws", "written", "bytes", "full_bytes")):
+                self.roi_errors.append(line[:200])
+            else:
+                self.bypass_roi_publish.append(f)
+        elif line.startswith(("GPU_TAGGED_ROI ", "GPU_BYPASS_ROI ")):
+            outcome = line.split(" ", 2)[1]
+            f = fields(line)
+            if outcome != "PASS" or any(k not in f for k in ("frame", "draws", "exact", "bytes", "full_bytes")):
+                self.roi_errors.append(line[:200])
+            else:
+                (self.bypass_roi if line.startswith("GPU_BYPASS_ROI ") else self.roi).append(f)
+        elif line.startswith("GPU_BYPASS OK "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "written")) or not f.get("written"):
+                self.errors.append("GPU_BYPASS: incomplete or empty OK record")
+            else:
+                self.bypass.append(f)
+        elif line.startswith(("GPU_BYPASS FALLBACK ", "GPU_DUAL_VIEW MISMATCH ")):
+            self.errors.append(line[:200])
+        else:
+            prefix, _, tail = line.partition(" ")
+            if prefix in self.STAGES:
+                outcome = tail.split(" ", 1)[0]
+                if outcome != "PASS":
+                    self.errors.append(line[:200])
+                    return
+                f = fields(line)
+                if any(k not in f for k in self.REQUIRED[prefix]):
+                    self.errors.append(f"{prefix}: incomplete PASS")
+                    return
+                f["scope"] = tail.partition("scope=")[2].split(" ", 1)[0] or None
+                self.records[prefix].append(f)
+            elif prefix in self.SUMMARY and "=" in tail:
+                f = fields(line)
+                # Per-triangle timing has its own changed= record; only
+                # the cumulative written=/changed= line is a summary.
+                if prefix == "GPU_BYPASS" and "elapsed_ms" in f:
+                    return
+                if self.summaries[prefix].keys() & f.keys():
+                    self.errors.append(f"{prefix}: duplicate summary keys")
+                self.summaries[prefix].update(f)
+
+    def roi_report(self):
+        errors = list(self.roi_errors)
+        missing = []
+        for r in self.roi + self.bypass_roi:
+            if not (r["exact"] == 256000 and r["full_bytes"] == 1024000 and
+                    0 < r["bytes"] <= r["full_bytes"] and r["bytes"] % 4 == 0 and
+                    1 <= r["draws"] <= 32):
+                errors.append(f"invalid ROI evidence at {r['frame']}")
+        pairs = sorted((r["frame"], r["draws"]) for r in self.roi)
+        reference = sorted((r["frame"], r["draws"]) for r in self.records["GPU_TAGGED_BATCH"])
+        if pairs != reference:
+            missing.append("unmatched full-vs-cropped tagged records")
+        if not pairs:
+            missing.append("no ROI comparison")
+        if self.bypass_roi and self.bypass_roi_publish:
+            errors.append("mixed single-triangle ROI comparison and publication modes")
+        for r in self.bypass_roi_publish:
+            if not (r["draws"] == 1 and r["full_bytes"] == 1024000 and
+                    0 < r["bytes"] <= r["full_bytes"] and r["bytes"] % 4 == 0 and
+                    0 < r["written"] <= r["bytes"] // 4):
+                errors.append(f"invalid ROI publication at {r['frame']}")
+        if self.bypass_roi_publish:
+            if sorted((r["frame"], r["written"]) for r in self.bypass_roi_publish) != sorted((r["frame"], r["written"]) for r in self.bypass):
+                missing.append("unmatched single-triangle ROI publication records")
+        elif sorted((r["frame"], r["draws"]) for r in self.bypass_roi) != sorted((r["frame"], 1) for r in self.bypass):
+            missing.append("unmatched single-triangle ROI records")
+        if not self.bypass_roi and not self.bypass_roi_publish:
+            missing.append("no single-triangle ROI evidence")
+        byte_count = sum(r["bytes"] for r in self.roi)
+        full_count = sum(r["full_bytes"] for r in self.roi)
+        return {"status": "failed" if errors else "incomplete" if missing else "validated",
+                "passes": len(self.roi), "exact_pixels": sum(r["exact"] for r in self.roi),
+                "single_triangle_passes": len(self.bypass_roi),
+                "single_triangle_publications": len(self.bypass_roi_publish),
+                "single_triangle_publication_written": sum(r["written"] for r in self.bypass_roi_publish),
+                "single_triangle_mode": "publication" if self.bypass_roi_publish else "comparison" if self.bypass_roi else None,
+                "single_triangle_bytes": sum(r["bytes"] for r in self.bypass_roi + self.bypass_roi_publish),
+                "single_triangle_full_bytes": sum(r["full_bytes"] for r in self.bypass_roi + self.bypass_roi_publish),
+                "bytes": byte_count, "full_bytes": full_count,
+                "reduction_percent": round(100 * (1 - byte_count / full_count), 3)
+                    if full_count and not errors else None,
+                "errors": errors, "missing": missing}
+
+    def metrics_report(self):
+        errors = list(self.metrics_errors)
+        missing = []
+        modes = {0: 0, 1: 0, 2: 0}
+        timed = []
+        fence_timed = []
+        fence_fields_seen = False
+        for r in self.metrics:
+            mode, size, upload = r["mode"], r["decoded_bytes"], r["upload_bytes"]
+            hz, dispatch, publish = r["qpc_hz"], r["dispatch_ticks"], r["publish_ticks"]
+            if not (mode in modes and 0 < size <= 8388608 and size % 4 == 0 and
+                    (mode == 0 or size <= 65536) and upload == (0 if mode == 1 else size)):
+                errors.append(f"invalid texture metrics at {r['frame']}")
+            else:
+                modes[mode] += 1
+            if (hz == 0 and (dispatch or publish)) or (hz != 0 and not (
+                    100000 <= hz <= 1000000000 and dispatch <= 4294967295 and publish <= 4294967295)):
+                errors.append(f"invalid QPC metrics at {r['frame']}")
+            elif hz:
+                timed.append(r)
+            if "fence_wait_valid" in r or "fence_wait_ticks" in r:
+                fence_fields_seen = True
+                valid, wait = r.get("fence_wait_valid"), r.get("fence_wait_ticks")
+                if not ((valid == 0 and wait == 0) or
+                        (valid == 1 and hz and wait is not None and 0 <= wait <= dispatch)):
+                    errors.append(f"invalid fence wait metrics at {r['frame']}")
+                elif valid:
+                    fence_timed.append(r)
+        if sorted(r["frame"] for r in self.metrics) != sorted(r["frame"] for r in self.bypass_roi_publish):
+            missing.append("unmatched pilot publication metrics")
+        status = "failed" if errors else "unavailable" if not self.metrics else "incomplete" if missing else "validated"
+        fence_status = ("failed" if errors else "unavailable" if not fence_fields_seen else
+                        "incomplete" if missing or len(fence_timed) != len(self.metrics) else "validated")
+        def fence_totals(rows):
+            wait_ms = sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            dispatch_ms = sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            return {"samples": len(rows),
+                    "wait_ms": round(wait_ms, 3) if rows else None,
+                    "dispatch_excluding_wait_ms": round(dispatch_ms - wait_ms, 3) if rows else None,
+                    "wait_share_pct": round(wait_ms * 100 / dispatch_ms, 3) if dispatch_ms > 0 else None}
+        fence = {"status": fence_status, **fence_totals(fence_timed),
+                 "missing_samples": len(self.metrics) - len(fence_timed),
+                 "by_texture_mode": {str(mode): fence_totals([r for r in fence_timed if r["mode"] == mode])
+                                     for mode in (0, 1, 2)}}
+        return {"status": status, "records": len(self.metrics), "hits": modes[1], "misses": modes[2],
+                "uncached": modes[0], "decoded_bytes": sum(r["decoded_bytes"] for r in self.metrics),
+                "upload_bytes": sum(r["upload_bytes"] for r in self.metrics),
+                "timed_samples": len(timed),
+                "dispatch_ms": round(sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "publish_ms": round(sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                "fence": fence,
+                "fence_timed_samples": len(fence_timed),
+                "fence_wait_ms": round(sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
+                "dispatch_excluding_fence_ms": round(sum((r["dispatch_ticks"] - r["fence_wait_ticks"]) * 1000 / r["qpc_hz"] for r in fence_timed), 3) if fence_timed else None,
+                "errors": errors, "missing": missing}
+
+    def oracle_report(self):
+        errors = list(self.oracle_errors)
+        missing = []
+        for r in self.oracle:
+            if not (0 < r["cpu_written"] <= 256000 and 0 < r["gpu_written"] <= 256000 and
+                    r["cpu_written"] == r["both"] + r["cpu_only"] and
+                    r["gpu_written"] == r["both"] + r["gpu_only"] and
+                    r["both"] == r["exact"] + r["one_lsb"] + r["edge_color"] and
+                    r["cpu_only"] + r["gpu_only"] == r["edge_coverage"] and
+                    r["both"] + r["cpu_only"] + r["gpu_only"] <= 256000 and
+                    not (r["unexplained"] or r["outside"] or r["invalid"])):
+                errors.append(f"invalid pilot oracle counts at {r['frame']}")
+            if not ((r["qpc_hz"] == 0 and r["cpu_ticks"] == 0) or
+                    (100000 <= r["qpc_hz"] <= 1000000000 and r["cpu_ticks"] <= 4294967295)):
+                errors.append(f"invalid pilot oracle timing at {r['frame']}")
+        if sorted((r["frame"], r["gpu_written"]) for r in self.oracle) != sorted(
+                (r["frame"], r["written"]) for r in self.bypass_roi_publish):
+            missing.append("unmatched pilot oracle/publication evidence")
+        timed = [r for r in self.oracle if r["qpc_hz"]]
+        status = "failed" if errors else "unavailable" if not self.oracle else "incomplete" if missing else "validated"
+        return {"status": status, "records": len(self.oracle), "timed_samples": len(timed),
+                "cpu_replay_ms": round(sum(r["cpu_ticks"] * 1000 / r["qpc_hz"] for r in timed), 3) if timed else None,
+                **{k: sum(r[k] for r in self.oracle) for k in ("cpu_written", "gpu_written", "both", "exact", "one_lsb", "edge_color", "edge_coverage")},
+                "errors": errors, "missing": missing}
+
+    def paired_timing_report(self):
+        # Only compare the same publication, never aggregate different
+        # frames or silently include untimed samples on one side.
+        oracle, metrics = self.oracle_report(), self.metrics_report()
+        if oracle["status"] != "validated" or metrics["status"] != "validated":
+            return {"status": "unavailable", "samples": 0}
+        a = {r["frame"]: r for r in self.oracle}
+        b = {r["frame"]: r for r in self.metrics}
+        if len(a) != len(self.oracle) or len(b) != len(self.metrics) or a.keys() != b.keys():
+            return {"status": "failed", "samples": 0, "reason": "duplicate or unmatched frames"}
+        pairs = []
+        for frame, r in a.items():
+            m = b[frame]
+            if not r["qpc_hz"] or not m["qpc_hz"]:
+                continue
+            if r["qpc_hz"] != m["qpc_hz"]:
+                return {"status": "failed", "samples": 0, "reason": "mismatched QPC frequency"}
+            hz = r["qpc_hz"]
+            pairs.append((r["cpu_ticks"] * 1000 / hz, m["dispatch_ticks"] * 1000 / hz,
+                          m["publish_ticks"] * 1000 / hz, m["mode"]))
+        def aggregate(rows):
+            cpu = sum(r[0] for r in rows)
+            dispatch = sum(r[1] for r in rows)
+            publish = sum(r[2] for r in rows)
+            return {"samples": len(rows), "cpu_replay_ms": round(cpu, 3),
+                    "gpu_dispatch_ms": round(dispatch, 3), "cpu_publication_ms": round(publish, 3),
+                    "gpu_plus_publication_ms": round(dispatch + publish, 3),
+                    "replay_over_gpu_plus_publication": round(cpu / (dispatch + publish), 3)
+                        if rows and cpu > 0 and dispatch + publish > 0 else None}
+        return {"status": "validated" if pairs else "unavailable",
+                **aggregate(pairs), "untimed_samples": len(a) - len(pairs),
+                "by_texture_mode": {str(mode): aggregate([r for r in pairs if r[3] == mode])
+                                    for mode in (0, 1, 2)}}
+
+    def loop_timing_report(self):
+        errors = list(self.loop_errors)
+        timed = []
+        for r in self.cpu_loops:
+            hz, draws, count = r["qpc_hz"], r["draws"], r["timed_draws"]
+            ticks = (r["loop_ticks"], r["replay_ticks"])
+            if not (1 <= draws <= 32 and 0 <= count <= draws and
+                    ((hz == 0 and not any(ticks)) or
+                     (100000 <= hz <= 1000000000 and count == draws and all(0 <= t < 4294967295 for t in ticks)))):
+                errors.append(f"invalid CPU loop timing at {r['frame']}")
+            elif hz:
+                timed.append(r)
+        expected = sorted((r["frame"], r["draws"]) for r in self.records["GPU_CPU_REPLAY"])
+        observed = sorted((r["frame"], r["draws"]) for r in self.cpu_loops)
+        # Multiple manual waves in one frame can have equal identities;
+        # compare the complete multiset, never overwrite a record by key.
+        missing = expected != observed or len(timed) != len(self.cpu_loops)
+        status = ("failed" if errors else "unavailable" if not self.cpu_loops else
+                  "incomplete" if missing else "validated")
+        loop_ms = sum(r["loop_ticks"] * 1000 / r["qpc_hz"] for r in timed)
+        replay_ms = sum(r["replay_ticks"] * 1000 / r["qpc_hz"] for r in timed)
+        return {"status": status, "waves": len(timed), "draws": sum(r["draws"] for r in timed),
+                "untimed_waves": len(self.cpu_loops) - len(timed), "matched_waves": expected == observed,
+                "original_cpu_loop_ms": round(loop_ms, 3) if timed else None,
+                "immutable_replay_ms": round(replay_ms, 3) if timed else None,
+                "replay_over_loop": round(replay_ms / loop_ms, 3) if loop_ms > 0 else None,
+                "errors": errors}
+
+    def pilot_cost_report(self):
+        errors = list(self.cost_errors)
+        phase_keys = ("capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks", "scratch_free_ticks", "capture_free_ticks")
+        metrics = {r["frame"]: r for r in self.metrics}
+        oracle = {r["frame"]: r for r in self.oracle}
+        observed = [r["frame"] for r in self.pilot_costs]
+        expected = [r["frame"] for r in self.bypass_roi_publish]
+        if len(set(observed)) != len(observed):
+            errors.append("duplicate pilot cost frames")
+        if len(metrics) != len(self.metrics) or len(oracle) != len(self.oracle):
+            errors.append("duplicate pilot timing frames")
+        timed = []
+        split_errors = []
+        split_seen = False
+        split_timed = []
+        for r in self.pilot_costs:
+            frame, hz = r["frame"], r["qpc_hz"]
+            ticks = [r[k] for k in phase_keys]
+            if not ((hz == 0 and not any(ticks)) or
+                    (100000 <= hz <= 1000000000 and all(0 <= t < 4294967295 for t in ticks))):
+                errors.append(f"invalid pilot cost timing at {frame}")
+                continue
+            split_present = "prepare_ticks" in r or "baseline_copy_ticks" in r
+            if split_present:
+                split_seen = True
+                prepare, copy = r.get("prepare_ticks"), r.get("baseline_copy_ticks")
+                if not (prepare is not None and copy is not None and
+                        0 <= prepare <= r["snapshot_ticks"] and copy == r["snapshot_ticks"] - prepare):
+                    split_errors.append(f"invalid snapshot split at {frame}")
+                    split_present = False
+            m, o = metrics.get(frame), oracle.get(frame)
+            if not m or not o:
+                errors.append(f"unmatched pilot cost timing at {frame}")
+                continue
+            if not hz or not m["qpc_hz"] or not o["qpc_hz"]:
+                continue
+            if hz != m["qpc_hz"] or hz != o["qpc_hz"]:
+                errors.append(f"mismatched pilot cost frequency at {frame}")
+                continue
+            timed.append((r, m, o))
+            if split_present:
+                split_timed.append(r)
+        matched = sorted(observed) == sorted(expected)
+        status = ("failed" if errors else "unavailable" if not self.pilot_costs else
+                  "incomplete" if not matched or len(timed) != len(expected) else "validated")
+        def aggregate(rows):
+            phase_ms = {k.removesuffix("_ticks") + "_ms": sum(r[k] * 1000 / r["qpc_hz"] for r, m, o in rows)
+                        for k in phase_keys}
+            overhead = sum(phase_ms.values())
+            dispatch = sum(m["dispatch_ticks"] * 1000 / m["qpc_hz"] for r, m, o in rows)
+            publish = sum(m["publish_ticks"] * 1000 / m["qpc_hz"] for r, m, o in rows)
+            replay = sum(o["cpu_ticks"] * 1000 / o["qpc_hz"] for r, m, o in rows)
+            gpu = overhead + dispatch + publish
+            return {"samples": len(rows),
+                    **{k: round(v, 3) if rows else None for k, v in phase_ms.items()},
+                    "measured_capture_overhead_ms": round(overhead, 3) if rows else None,
+                    "measured_gpu_path_ms": round(gpu, 3) if rows else None,
+                    "cpu_replay_ms": round(replay, 3) if rows else None,
+                    "replay_over_measured_gpu_path": round(replay / gpu, 3) if replay > 0 and gpu > 0 else None}
+        split = {"status": "failed" if split_errors else "unavailable" if not split_seen else
+                 "validated" if status == "validated" and len(split_timed) == len(expected) else "incomplete",
+                 "samples": len(split_timed),
+                 "prepare_ms": round(sum(r["prepare_ticks"] * 1000 / r["qpc_hz"] for r in split_timed), 3) if split_timed else None,
+                 "baseline_copy_ms": round(sum(r["baseline_copy_ticks"] * 1000 / r["qpc_hz"] for r in split_timed), 3) if split_timed else None,
+                 "errors": split_errors}
+        return {"status": status, **aggregate(timed), "matched_frames": matched, "snapshot_split": split,
+                "missing_samples": len(expected) - len(timed),
+                "by_texture_mode": {str(mode): aggregate([t for t in timed if t[1]["mode"] == mode])
+                                    for mode in (0, 1, 2)},
+                "errors": errors}
+
+    def batch_cost_report(self):
+        errors = list(self.batch_cost_errors)
+        timed = []
+        def identity(r):
+            return (r["frame"], r["draws"])
+        expected = sorted(map(identity, self.roi))
+        observed = sorted(map(identity, self.batch_costs))
+        loop_timed = sorted((*identity(r), r["qpc_hz"], r["loop_ticks"])
+                            for r in self.cpu_loops if r["qpc_hz"])
+        for r in self.batch_costs:
+            hz, draws, textures, decoded = (r[k] for k in ("qpc_hz", "draws", "textures", "decoded_bytes"))
+            cpu, gpu, fence = (r[k] for k in ("cpu_loop_ticks", "dispatch_ticks", "fence_wait_ticks"))
+            if not (8 <= draws <= 32 and 1 <= textures <= draws and
+                    4 * textures <= decoded <= 8388608 and decoded % 4 == 0 and
+                    ((hz == 0 and cpu == gpu == fence == 0) or
+                     (100000 <= hz <= 1000000000 and 0 <= cpu < UINT32_MAX and
+                      0 <= fence <= gpu < UINT32_MAX))):
+                errors.append(f"invalid batch timing at {r['frame']}")
+            elif hz:
+                timed.append(r)
+        # Compare multisets: repeated manual captures can share a frame/draw
+        # identity, and must not overwrite one another in a dict.
+        paired = sorted((*identity(r), r["qpc_hz"], r["cpu_loop_ticks"]) for r in timed)
+        if observed == expected and len(timed) == len(expected) and paired != loop_timed:
+            errors.append("batch CPU time/frequency disagrees with matched original loop records")
+        complete = bool(expected) and expected == observed and paired == loop_timed and len(timed) == len(expected)
+        status = ("failed" if errors else "unavailable" if not self.batch_costs else
+                  "validated" if complete and self.loop_timing_report()["status"] == "validated" and
+                  self.roi_report()["status"] == "validated" else "incomplete")
+        def aggregate(rows):
+            cpu = sum(r["cpu_loop_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            gpu = sum(r["dispatch_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            fence = sum(r["fence_wait_ticks"] * 1000 / r["qpc_hz"] for r in rows)
+            draws = sum(r["draws"] for r in rows)
+            return {"waves": len(rows), "draws": draws, "textures": sum(r["textures"] for r in rows),
+                    "decoded_bytes": sum(r["decoded_bytes"] for r in rows),
+                    "cpu_loop_ms": round(cpu, 3) if rows else None,
+                    "gpu_dispatch_ms": round(gpu, 3) if rows else None,
+                    "fence_wait_ms": round(fence, 3) if rows else None,
+                    "dispatch_excluding_wait_ms": round(gpu - fence, 3) if rows else None,
+                    "fence_share_pct": round(100 * fence / gpu, 2) if gpu else None,
+                    "cpu_over_dispatch": round(cpu / gpu, 3) if cpu > 0 and gpu > 0 else None,
+                    "cpu_ms_per_draw": round(cpu / draws, 6) if draws else None,
+                    "dispatch_ms_per_draw": round(gpu / draws, 6) if draws else None,
+                    "gpu_faster_waves": sum(r["dispatch_ticks"] < r["cpu_loop_ticks"] for r in rows),
+                    "equal_waves": sum(r["dispatch_ticks"] == r["cpu_loop_ticks"] for r in rows)}
+        return {"status": status, **aggregate(timed), "matched_waves": expected == observed,
+                "matched_cpu_timing": paired == loop_timed and bool(paired),
+                "untimed_waves": len(self.batch_costs) - len(timed),
+                "by_draw_count": {f"{lo}-{hi}": aggregate([r for r in timed if lo <= r["draws"] <= hi])
+                                  for lo, hi in ((8, 15), (16, 23), (24, 32))},
+                "errors": errors}
+
+    def batch_path_report(self):
+        errors = list(self.batch_path_errors)
+        from collections import defaultdict, deque
+        def identity(r):
+            return (r["frame"], r["draws"], r["qpc_hz"])
+        by_id = defaultdict(deque)
+        for r in self.batch_costs:
+            by_id[identity(r)].append(r)
+        rows = []
+        for r in self.batch_paths:
+            hz, prep, pub = (r[k] for k in ("qpc_hz", "prepare_ticks", "publish_ticks"))
+            if not (8 <= r["draws"] <= 32 and r["tested"] in (0, 1) and r["errors"] == 0 and
+                    ((hz == 0 and prep == pub == 0) or
+                     (r["tested"] == 1 and 100000 <= hz <= 1000000000 and
+                      0 <= prep < UINT32_MAX and 0 <= pub < UINT32_MAX))):
+                errors.append(f"invalid packed batch path at {r['frame']}")
+                continue
+            candidates = by_id[identity(r)]
+            if not candidates:
+                if hz:
+                    errors.append(f"unmatched packed batch path at {r['frame']}")
+                continue
+            b = candidates.popleft()
+            if hz:
+                rows.append((r, b))
+        complete = bool(self.batch_costs) and len(rows) == len(self.batch_costs) == len(self.batch_paths)
+        status = ("failed" if errors else "unavailable" if not self.batch_paths else
+                  "validated" if complete and self.batch_cost_report()["status"] == "validated" else "incomplete")
+        def aggregate(rows):
+            cpu = sum(b["cpu_loop_ticks"] * 1000 / b["qpc_hz"] for r, b in rows)
+            dispatch = sum(b["dispatch_ticks"] * 1000 / b["qpc_hz"] for r, b in rows)
+            prepare = sum(r["prepare_ticks"] * 1000 / r["qpc_hz"] for r, b in rows)
+            publish = sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r, b in rows)
+            total = dispatch + prepare + publish
+            return {"waves": len(rows), "draws": sum(r["draws"] for r, b in rows),
+                    "cpu_loop_ms": round(cpu, 3) if rows else None,
+                    "dispatch_ms": round(dispatch, 3) if rows else None,
+                    "prepare_ms": round(prepare, 3) if rows else None,
+                    "private_publish_ms": round(publish, 3) if rows else None,
+                    "measured_path_ms": round(total, 3) if rows else None,
+                    "cpu_over_measured_path": round(cpu / total, 3) if cpu and total else None,
+                    "faster_waves": sum(b["cpu_loop_ticks"] > b["dispatch_ticks"] + r["prepare_ticks"] + r["publish_ticks"] for r, b in rows)}
+        return {"status": status, **aggregate(rows),
+                "by_draw_count": {f"{lo}-{hi}": aggregate([(r,b) for r,b in rows if lo <= r["draws"] <= hi])
+                                  for lo,hi in ((8,15),(16,23),(24,32))},
+                "errors": errors}
+
+    def storage_report(self):
+        errors = list(self.storage_errors)
+        f = self.storage
+        required = ("allocations", "reuses", "releases", "live")
+        summary = self.summaries["GPU_BYPASS"]
+        present = all(k in f for k in required)
+        if present:
+            if f["allocations"] != 1 or f["releases"] != f["allocations"] or f["live"] != 0:
+                errors.append("invalid pilot pool lifetime")
+            if "sampled_frames" in summary and f["allocations"] + f["reuses"] != summary["sampled_frames"]:
+                errors.append("pilot pool acquisition count disagrees with sampled frames")
+        status = ("failed" if errors else "unavailable" if not f else
+                  "incomplete" if not present or "sampled_frames" not in summary else "validated")
+        return {"status": status, **f, "errors": errors}
+
+    def report(self, clean):
+        errors = list(self.errors)
+        missing = []
+        totals = {}
+        def require(name, keys):
+            f = self.summaries[name]
+            absent = [key for key in keys if key not in f]
+            if absent:
+                missing.append(f"{name}: missing {','.join(absent)}")
+                return None
+            return f
+
+        def check(ok, message):
+            if not ok:
+                errors.append(message)
+
+        for name, rows in self.records.items():
+            totals[name] = {"passes": len(rows), "draws": sum(r.get("draws", 0) for r in rows)}
+        totals["GPU_CPU_REPLAY"]["exact_pixels"] = sum(r["exact"] for r in self.records["GPU_CPU_REPLAY"])
+        totals["GPU_RETIREMENT"]["gpu_tested"] = sum(r["gpu_tested"] for r in self.records["GPU_RETIREMENT"])
+        totals["GPU_RETIREMENT"]["cpu_written"] = sum(r["cpu_written"] for r in self.records["GPU_RETIREMENT"])
+        result = {"status": "unavailable", "requested": self.requested, "active": self.active,
+                  "limits": self.limits, "summaries": self.summaries, "totals": totals,
+                  "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report(),
+                  "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report(),
+                  "pilot_storage": self.storage_report(), "batch_cost": self.batch_cost_report(),
+                  "batch_path": self.batch_path_report()}
+        if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
+            return result
+        if self.init_count != 1:
+            missing.append("one complete MSI init required")
+        if not clean:
+            missing.append("clean session required")
+        if self.active != "vulkan":
+            missing.append("active Vulkan presentation required")
+
+        auto = require("GPU_SHADOW_AUTO", ("sampled", "empty", "passed", "differences", "errors",
+                                           "skipped", "disabled", "counts_ok"))
+        bypass = require("GPU_BYPASS", ("sampled_frames", "empty", "attempted", "passed",
+                                         "failed", "disabled", "written", "changed"))
+        vk = require("SESSION_VULKAN", ("frames", "skipped", "recreates"))
+        if auto:
+            check(auto["sampled"] == sum(auto[k] for k in ("empty", "passed", "differences", "errors", "skipped"))
+                  and auto["counts_ok"] == 1, "automatic sampler accounting mismatch")
+            check(not any(auto[k] for k in ("differences", "errors", "disabled")), "automatic sampler failed")
+            if not self.limits.get("passes") or auto["passed"] != self.limits["passes"]:
+                missing.append("automatic pass limit not reached")
+        if bypass:
+            check(bypass["attempted"] == bypass["passed"] + bypass["failed"] and
+                  bypass["sampled_frames"] == bypass["empty"] + bypass["attempted"],
+                  "single-triangle pilot accounting mismatch")
+            check(not bypass["failed"] and not bypass["disabled"], "single-triangle pilot failed")
+            check(bypass["changed"] <= bypass["written"] and
+                  len(self.bypass) == bypass["passed"] and
+                  sum(r.get("written", 0) for r in self.bypass) == bypass["written"],
+                  "single-triangle pilot record mismatch")
+            if not self.limits.get("bypass") or bypass["passed"] != self.limits["bypass"]:
+                missing.append("single-triangle pilot limit not reached")
+        if vk:
+            if not vk["frames"]:
+                missing.append("no Vulkan presentation")
+            # Recreates/skips are informational; no assertion that every
+            # window transition must be free of legitimate recreates.
+
+        # Require matching per-frame stage records, not just total counts.
+        # One manual F12 comparison can share neither the auto nor pilot scope.
+        shadow = self.records["GPU_SHADOW"]
+        frames = sorted(r["frame"] for r in shadow)
+        for name in self.STAGES:
+            if sorted(r["frame"] for r in self.records[name]) != frames:
+                missing.append(f"{name}: unmatched stage records")
+        if auto:
+            check(sum(r["scope"] in ("auto", "pilot") for r in shadow) == auto["passed"],
+                  "automatic sample count differs from shadow records")
+        if not shadow:
+            missing.append("no full shadow comparison")
+        for r in self.records["GPU_CPU_REPLAY"]:
+            check(r["exact"] == 256000 and r["mask_diff"] == 0 and r["written"] > 0,
+                  f"CPU replay mismatch at {r['frame']}")
+        for r in shadow:
+            check(r["active"] == r["exact"] + r["one_lsb"] + r["edge"] and
+                  not r["unexplained"] and not r["outside_bounds"],
+                  f"shadow mismatch at {r['frame']}")
+        for r in self.records["GPU_TAGGED_BATCH"]:
+            check(r["written"] + r["untouched"] == 256000 and r["written"] > 0 and
+                  not any(r[k] for k in ("color_diff", "coverage_diff", "invalid", "provenance_diff")),
+                  f"tagged batch mismatch at {r['frame']}")
+        for r in self.records["GPU_RETIREMENT"]:
+            check(r["gpu_tested"] in (0, 1) and not r["errors"] and r["cpu_written"] > 0,
+                  f"retirement mismatch at {r['frame']}")
+        for r in self.records["GPU_COVERAGE"]:
+            check(not any(r[k] for k in ("unexplained", "outside", "invalid")),
+                  f"coverage mismatch at {r['frame']}")
+        if not totals["GPU_RETIREMENT"]["gpu_tested"]:
+            missing.append("no homogeneous GPU retirement exercise")
+        # Cross-check matching draw counts and write counts for full samples.
+        if all(sorted(r["frame"] for r in self.records[n]) == frames for n in self.STAGES):
+            ordered = [sorted(self.records[n], key=lambda r: r["frame"]) for n in self.STAGES]
+            for cpu, sh, tag, ret, cov in zip(*ordered):
+                check(cpu["draws"] == sh["draws"] == tag["draws"] == ret["draws"] and
+                      cpu["written"] == ret["cpu_written"] == cov["cpu_written"] and
+                      tag["written"] == cov["gpu_written"] and
+                      (not ret["gpu_tested"] or ret["gpu_written"] == tag["written"]),
+                      f"cross-stage counts mismatch at {cpu['frame']}")
+
+        for name in ("GPU_DEFER_AUDIT", "GPU_DEFER_STRICT"):
+            audit = require(name, ("eligible", "mapped", "invalidated", "unknown", "groups",
+                                   "group_draws", "multi_groups", "multi_draws", "max_group", "counts_ok"))
+            if audit:
+                check(audit["counts_ok"] == 1 and
+                      audit["eligible"] == audit["mapped"] + audit["invalidated"] + audit["unknown"] and
+                      audit["invalidated"] == audit["group_draws"] and
+                      audit["multi_groups"] <= audit["groups"] <= audit["group_draws"] and
+                      audit["multi_draws"] <= audit["group_draws"] and audit["max_group"] <= 32,
+                      f"{name}: accounting mismatch")
+        dual = require("GPU_DUAL_VIEW", ("mapped", "guard", "checks", "mismatch", "thread_checks", "foreign"))
+        release = require("GPU_DUAL_VIEW_RELEASE", ("success",))
+        if dual:
+            check(dual["guard"] == 0 and dual["mismatch"] == 0, "shared mapping mismatch or unexpected protection")
+            if dual["mapped"] != 1 or not dual["checks"] or not dual["thread_checks"]:
+                missing.append("shared mapping not exercised")
+            # Foreign API calls invalidate a same-thread-only pilot assumption,
+            # not the correctness of the current immediate renderer.
+            if dual["foreign"]:
+                missing.append("foreign API calls observed")
+        if release:
+            check(release["success"] == 1, "shared mapping release failed")
+        result["status"] = "failed" if errors else "incomplete" if missing else "validated"
+        return result
+
+
 def parse_log(path: Path) -> dict:
     result = {
         "file": str(path), "status": "incomplete", "errors": [],
@@ -136,11 +784,13 @@ def parse_log(path: Path) -> dict:
         "game_global_nonnull_changes_observed": 0, "last_game_global": None,
     }
     opacity = OpacityAudit()
+    gpu = GpuAudit()
     try:
         with path.open("r", encoding="utf-8", errors="replace") as log:
             for raw in log:
                 line = raw.strip()
                 opacity.feed(line)
+                gpu.feed(line)
                 if line.startswith("SYS-OS: runtime="):
                     result["runtime_platform"] = line.partition("runtime=")[2]
                 elif line.startswith("SYS-WINE: version="):
@@ -209,6 +859,7 @@ def parse_log(path: Path) -> dict:
                             result["av_sites"].append(site)
     except (OSError, UnicodeError) as e:
         result["opacity_audit"] = {"status": "unavailable", "errors": []}
+        result["gpu_diagnostics"] = gpu.report(False)
         result["status"] = "unreadable"
         result["errors"].append(str(e))
         return result
@@ -223,6 +874,7 @@ def parse_log(path: Path) -> dict:
             result["status"] = "clean_exit"
         else:
             result["status"] = "exit_with_live_heaps"
+    result["gpu_diagnostics"] = gpu.report(result["status"] == "clean_exit")
     return result
 
 def main(argv=None) -> int:
@@ -230,7 +882,29 @@ def main(argv=None) -> int:
     parser.add_argument("logs", type=Path, nargs="+")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--assert-clean", action="store_true")
+    parser.add_argument("--assert-gpu-roi", action="store_true",
+                        help="Require complete current GPU diagnostics and exact full-vs-ROI comparison")
+    parser.add_argument("--assert-gpu-metrics", action="store_true",
+                        help="Require validated GPU diagnostics, ROI publication and matching pilot metrics")
+    parser.add_argument("--assert-gpu-oracle", action="store_true",
+                        help="Require validated GPU diagnostics, ROI, metrics and single-triangle CPU oracle")
+    parser.add_argument("--assert-gpu-timing", action="store_true",
+                        help="Require all pilot gates and timed CPU/GPU pairs for every publication")
+    parser.add_argument("--assert-gpu-fence", action="store_true",
+                        help="Require all pilot/timing gates and a valid submission-fence interval for every publication")
+    parser.add_argument("--assert-gpu-cost", action="store_true",
+                        help="Require all fence gates and complete CPU-loop/capture-overhead timing")
+    parser.add_argument("--assert-gpu-storage", action="store_true",
+                        help="Require all cost gates, complete snapshot split and one retired pilot pool")
+    parser.add_argument("--assert-gpu-batch", action="store_true",
+                        help="Require all storage gates and complete matched packed-batch timings")
+    parser.add_argument("--assert-gpu-batch-path", action="store_true",
+                        help="Require all batch gates and matched private publication/preparation timings")
+    parser.add_argument("--assert-gpu-diagnostics", action="store_true",
+                        help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
+    if args.assert_gpu_batch_path:
+        args.assert_gpu_batch = True
     reports = [parse_log(p) for p in args.logs]
     if args.json:
         print(json.dumps(reports, ensure_ascii=False, indent=2))
@@ -245,9 +919,40 @@ def main(argv=None) -> int:
                   f"global_null_changes(observed)={r['game_global_null_changes_observed']} "
                 f"space_evaluations={r['space_char_evaluations']} "
                 f"space_suppressed={r['space_char_suppressed']} "
-                f"opacity={r['opacity_audit']['status']}")
+                f"opacity={r['opacity_audit']['status']} "
+                f"gpu_diagnostics={r['gpu_diagnostics']['status']} "
+                f"roi={r['gpu_diagnostics']['roi']['status']} "
+                f"metrics={r['gpu_diagnostics']['metrics']['status']}")
             for error in r["errors"]:
                 print(f"  ERROR: {error}", file=sys.stderr)
+    if args.assert_gpu_roi and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                   r["gpu_diagnostics"]["roi"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_metrics and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["roi"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["metrics"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                      any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
+        return 1
+    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["status"] != "validated" or
+                                      any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
+                                      r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
+        return 1
+    if (args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
+        return 1
+    if (args.assert_gpu_cost or args.assert_gpu_storage or args.assert_gpu_batch) and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
+                                       for k in ("cpu_loop_timing", "pilot_cost")) for r in reports):
+        return 1
+    if (args.assert_gpu_storage or args.assert_gpu_batch) and any(r["gpu_diagnostics"]["pilot_storage"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["pilot_cost"]["snapshot_split"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_batch and any(r["gpu_diagnostics"]["batch_cost"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_batch_path and any(r["gpu_diagnostics"]["batch_path"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
+        return 1
     if args.assert_clean and any(r["status"] != "clean_exit" for r in reports):
         return 1
     return 2 if any(r["status"] == "unreadable" for r in reports) else 0

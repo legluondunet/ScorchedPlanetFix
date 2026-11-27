@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic test cases only: no game content or user's real logs in repo."""
 import importlib.util
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +19,373 @@ class RuntimeLogTests(unittest.TestCase):
             path = Path(directory, "ScorchedPlanetFix.log")
             path.write_text(body, encoding="utf-8")
             return analyzer.parse_log(path)
+
+    GPU_SESSION = """msiInit width=640
+PREVIEW_RENDERER requested=vulkan (experimental)
+PREVIEW_RENDERER active=vulkan (CPU raster)
+GPU_SHADOW_AUTO enabled sample=1/120 max_passes=1
+GPU_BYPASS pilot max_triangles=1
+GPU_CPU_REPLAY PASS frame=120 draws=8 exact=256000 mask_diff=0 written=100
+GPU_SHADOW PASS frame=120 draws=8 active=90 exact=88 one_lsb=1 edge=1 unexplained=0 outside_bounds=0 scope=auto
+GPU_TAGGED_BATCH PASS frame=120 draws=8 written=99 untouched=255901 color_diff=0 coverage_diff=0 invalid=0 homogeneous=1 provenance_checked=99 provenance_diff=0
+GPU_RETIREMENT PASS frame=120 draws=8 gpu_tested=1 gpu_written=99 cpu_written=100 errors=0
+GPU_COVERAGE PASS frame=120 cpu_written=100 gpu_written=99 unexplained=0 outside=0 invalid=0
+GPU_BYPASS OK frame=240 written=5
+GPU_BYPASS changed= 4 elapsed_ms= 1
+GPU_DEFER_AUDIT eligible= 10 mapped= 2
+GPU_DEFER_AUDIT invalidated= 8 unknown= 0
+GPU_DEFER_AUDIT groups= 2 group_draws= 8
+GPU_DEFER_AUDIT multi_groups= 2 multi_draws= 8
+GPU_DEFER_AUDIT max_group= 4 counts_ok= 1
+GPU_DEFER_STRICT eligible= 9 mapped= 2
+GPU_DEFER_STRICT invalidated= 7 unknown= 0
+GPU_DEFER_STRICT groups= 3 group_draws= 7
+GPU_DEFER_STRICT multi_groups= 2 multi_draws= 6
+GPU_DEFER_STRICT max_group= 3 counts_ok= 1
+GPU_DUAL_VIEW mapped=1 guard=0
+GPU_DUAL_VIEW checks= 4 mismatch= 0
+GPU_DUAL_VIEW thread_checks= 55 foreign= 0
+GPU_DUAL_VIEW_RELEASE success= 1
+GPU_SHADOW_AUTO sampled= 2 empty= 1
+GPU_SHADOW_AUTO passed= 1 differences= 0
+GPU_SHADOW_AUTO errors= 0 skipped= 0
+GPU_SHADOW_AUTO disabled= 0 counts_ok= 1
+GPU_BYPASS sampled_frames= 1 empty= 0
+GPU_BYPASS attempted= 1 passed= 1
+GPU_BYPASS failed= 0 disabled= 0
+GPU_BYPASS written= 5 changed= 4
+SESSION_VULKAN frames= 300 skipped= 0
+SESSION_VULKAN present_ms= 2 recreates= 0
+msiExit total_frames= 300 triangles= 1200
+MSI_HEAP_TRACKER exit_live= 0 peak_live= 5
+SHUTDOWN_COMPLETE elapsed_ms= 2
+"""
+    def test_gpu_full_diagnostic_gate(self):
+        r = self.parse(self.GPU_SESSION)["gpu_diagnostics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["totals"]["GPU_CPU_REPLAY"]["exact_pixels"], 256000)
+        self.assertEqual(r["totals"]["GPU_RETIREMENT"]["gpu_tested"], 1)
+
+    def test_gpu_gate_rejects_contradictory_and_missing_evidence(self):
+        for before, after, expected in (
+            ("mask_diff=0", "mask_diff=1", "failed"),
+            ("cpu_written=100 errors=0", "cpu_written=101 errors=0", "failed"),
+            ("GPU_RETIREMENT PASS", "GPU_RETIREMENT ERROR", "failed"),
+            ("GPU_DUAL_VIEW_RELEASE success= 1", "", "incomplete"),
+            ("foreign= 0", "foreign= 1", "incomplete"),
+            ("max_passes=1", "max_passes=24", "incomplete"),
+            ("GPU_DUAL_VIEW mapped=1", "GPU_DUAL_VIEW mapped=0", "incomplete"),
+            ("GROUP_NOT_PRESENT", "GROUP_NOT_PRESENT", "validated"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(self.GPU_SESSION.replace(before, after))["gpu_diagnostics"]
+                self.assertEqual(r["status"], expected, r)
+
+    def test_gpu_roi_gate(self):
+        line = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI PASS frame=240 draws=1 exact=256000 bytes=80000 full_bytes=1024000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", line + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["roi"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["passes"], 1)
+        self.assertEqual(r["bytes"], 23760)
+        self.assertEqual(r["reduction_percent"], 97.68)
+        self.assertEqual(r["single_triangle_passes"], 1)
+        self.assertEqual(r["single_triangle_bytes"], 80000)
+        for before, after, expected in (
+            ("exact=256000 bytes=", "exact=255999 bytes=", "failed"),
+            ("bytes=23760", "bytes=23761", "failed"),
+            ("GPU_TAGGED_ROI PASS", "GPU_TAGGED_ROI ERROR", "failed"),
+            ("GPU_TAGGED_ROI PASS frame=120", "GPU_TAGGED_ROI PASS frame=121", "incomplete"),
+            (line, "", "incomplete"),
+            (single, "", "incomplete"),
+            ("GPU_BYPASS_ROI PASS frame=240", "GPU_BYPASS_ROI PASS frame=241", "incomplete"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
+                self.assertEqual(r["status"], expected, r)
+
+    def test_gpu_roi_publication_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["roi"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["single_triangle_mode"], "publication")
+        self.assertEqual(r["single_triangle_passes"], 0)
+        self.assertEqual(r["single_triangle_publications"], 1)
+        self.assertEqual(r["single_triangle_publication_written"], 5)
+        self.assertEqual(r["single_triangle_bytes"], 80000)
+        for before, after, expected in (
+            ("written=5 bytes=", "written=20001 bytes=", "failed"),
+            ("bytes=80000", "bytes=80001", "failed"),
+            ("draws=1 written=", "draws=2 written=", "failed"),
+            ("written=5 bytes=", "written=4 bytes=", "incomplete"),
+            ("frame=240 draws=1", "frame=241 draws=1", "incomplete"),
+            ("GPU_BYPASS_ROI_PUBLISH PASS", "GPU_BYPASS_ROI_PUBLISH ERROR", "failed"),
+            (single, "", "incomplete"),
+            (single, single + "GPU_BYPASS_ROI PASS frame=240 draws=1 exact=256000 bytes=80000 full_bytes=1024000\n", "failed"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["roi"]
+                self.assertEqual(r["status"], expected, r)
+
+    def test_gpu_pilot_metrics(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=1500\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", single + metric + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["metrics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["hits"], r["misses"], r["upload_bytes"], r["timed_samples"]), (1, 0, 0, 1))
+        self.assertEqual((r["dispatch_ms"], r["publish_ms"]), (2.5, 0.15))
+        for mode in (0, 2):
+            r = self.parse(body.replace("mode=1 decoded_bytes=65536 upload_bytes=0", f"mode={mode} decoded_bytes=65536 upload_bytes=65536"))["gpu_diagnostics"]["metrics"]
+            self.assertEqual(r["status"], "validated", r)
+            self.assertEqual(r["upload_bytes"], 65536)
+            self.assertEqual(r["misses" if mode == 2 else "uncached"], 1)
+        for before, after, expected in (
+            ("mode=1", "mode=3", "failed"),
+            ("upload_bytes=0", "upload_bytes=4", "failed"),
+            ("decoded_bytes=65536", "decoded_bytes=65540", "failed"),
+            ("qpc_hz=10000000", "qpc_hz=0", "failed"),
+            ("publish_ticks=1500", "", "failed"),
+            ("METRICS frame=240", "METRICS frame=241", "incomplete"),
+            (metric, metric + metric, "incomplete"),
+            (metric, "", "unavailable"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["metrics"]
+                self.assertEqual(r["status"], expected, r)
+        r = self.parse(body.replace("qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=1500",
+                                    "qpc_hz=0 dispatch_ticks=0 publish_ticks=0"))["gpu_diagnostics"]["metrics"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual(r["timed_samples"], 0)
+        self.assertIsNone(r["dispatch_ms"])
+        # Optional newer fields do not invalidate historical logs.
+        for suffix, expected in (
+            (" fence_wait_valid=1 fence_wait_ticks=20000", "validated"),
+            (" fence_wait_valid=0 fence_wait_ticks=0", "validated"),
+            (" fence_wait_valid=1 fence_wait_ticks=25001", "failed"),
+            (" fence_wait_valid=1", "failed"),
+            (" fence_wait_ticks=1", "failed"),
+            (" fence_wait_valid=2 fence_wait_ticks=0", "failed"),
+            (" fence_wait_valid=0 fence_wait_ticks=1", "failed"),
+        ):
+            with self.subTest(suffix=suffix):
+                r = self.parse(body.replace(metric, metric.rstrip("\n") + suffix + "\n"))["gpu_diagnostics"]["metrics"]
+                self.assertEqual(r["status"], expected, r)
+                if suffix.endswith("ticks=20000"):
+                    self.assertEqual((r["fence_timed_samples"], r["fence_wait_ms"], r["dispatch_excluding_fence_ms"]), (1, 2.0, 0.5))
+
+    def test_gpu_pilot_oracle(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["oracle"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["exact"], r["edge_coverage"], r["cpu_replay_ms"]), (4, 1, 4.5))
+        for before, after, expected in (
+            ("ORACLE PASS", "ORACLE DIFFERENCES", "failed"),
+            ("unexplained=0 outside=0 invalid=0", "unexplained=1 outside=0 invalid=0", "failed"),
+            ("both=5 exact=4", "both=5 exact=3", "failed"),
+            ("edge_coverage=1", "edge_coverage=0", "failed"),
+            ("qpc_hz=10000000 cpu_ticks=45000", "qpc_hz=0 cpu_ticks=45000", "failed"),
+            ("ORACLE PASS frame=240", "ORACLE PASS frame=241", "incomplete"),
+            (oracle, "", "unavailable"),
+        ):
+            with self.subTest(before=before):
+                r = self.parse(body.replace(before, after))["gpu_diagnostics"]["oracle"]
+                self.assertEqual(r["status"], expected, r)
+
+    def test_gpu_paired_timing(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=5000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + metric + single + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]["paired_timing"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["samples"], r["untimed_samples"], r["cpu_replay_ms"], r["gpu_plus_publication_ms"], r["replay_over_gpu_plus_publication"]), (1, 0, 4.5, 3.0, 1.5))
+        self.assertEqual(r["by_texture_mode"]["1"]["samples"], 1)
+        self.assertIsNone(r["by_texture_mode"]["0"]["replay_over_gpu_plus_publication"])
+        r = self.parse(body.replace("qpc_hz=10000000 cpu_ticks=45000", "qpc_hz=20000000 cpu_ticks=45000"))["gpu_diagnostics"]["paired_timing"]
+        self.assertEqual(r["status"], "failed")
+        r = self.parse(body.replace("qpc_hz=10000000 cpu_ticks=45000", "qpc_hz=0 cpu_ticks=0"))["gpu_diagnostics"]["paired_timing"]
+        self.assertEqual(r["status"], "unavailable")
+        self.assertEqual(r["samples"], 0)
+
+    def test_gpu_fence_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=5000"
+        for suffix, expected, code in (
+            (" fence_wait_valid=1 fence_wait_ticks=20000", "validated", 0),
+            (" fence_wait_valid=1 fence_wait_ticks=0", "validated", 0),
+            (" fence_wait_valid=0 fence_wait_ticks=0", "incomplete", 1),
+            ("", "unavailable", 1),
+            (" fence_wait_valid=1 fence_wait_ticks=25001", "failed", 1),
+            (" fence_wait_valid=1", "failed", 1),
+        ):
+            with self.subTest(suffix=suffix):
+                body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + metric + suffix + "\n" + single + "GPU_BYPASS OK")
+                r = self.parse(body)["gpu_diagnostics"]["metrics"]["fence"]
+                self.assertEqual(r["status"], expected, r)
+                if suffix.endswith("ticks=20000"):
+                    self.assertEqual((r["samples"], r["missing_samples"], r["wait_ms"], r["dispatch_excluding_wait_ms"], r["wait_share_pct"]), (1, 0, 2.0, 0.5, 80.0))
+                    self.assertEqual(r["by_texture_mode"]["1"]["wait_ms"], 2.0)
+                    self.assertIsNone(r["by_texture_mode"]["2"]["wait_share_pct"])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory, "ScorchedPlanetFix.log")
+                    path.write_text(body, encoding="utf-8")
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-fence", "--json", str(path)]), code)
+                        if expected in ("unavailable", "incomplete"):
+                            self.assertEqual(analyzer.main(["--assert-gpu-timing", "--json", str(path)]), 0)
+
+    def test_gpu_cost_gate(self):
+        batch = "GPU_TAGGED_ROI PASS frame=120 draws=8 exact=256000 bytes=23760 full_bytes=1024000\n"
+        single = "GPU_BYPASS_ROI_PUBLISH PASS frame=240 draws=1 written=5 bytes=80000 full_bytes=1024000\n"
+        oracle = "GPU_BYPASS_ORACLE PASS frame=240 cpu_written=6 gpu_written=5 both=5 exact=4 one_lsb=1 edge_color=0 cpu_only=1 gpu_only=0 edge_coverage=1 unexplained=0 outside=0 invalid=0 qpc_hz=10000000 cpu_ticks=45000\n"
+        metric = "GPU_BYPASS_METRICS frame=240 mode=1 decoded_bytes=65536 upload_bytes=0 qpc_hz=10000000 dispatch_ticks=25000 publish_ticks=5000 fence_wait_valid=1 fence_wait_ticks=20000\n"
+        loop = "GPU_CPU_LOOP frame=120 draws=8 timed_draws=8 qpc_hz=10000000 loop_ticks=40000 replay_ticks=60000\n"
+        cost = "GPU_BYPASS_COST frame=240 qpc_hz=10000000 capture_alloc_ticks=1000 snapshot_ticks=3000 scratch_alloc_ticks=500 scratch_free_ticks=500 capture_free_ticks=1000\n"
+        body = self.GPU_SESSION.replace("GPU_RETIREMENT PASS", batch + loop + "GPU_RETIREMENT PASS").replace("GPU_BYPASS OK", oracle + metric + single + cost + "GPU_BYPASS OK")
+        r = self.parse(body)["gpu_diagnostics"]
+        self.assertEqual(r["cpu_loop_timing"]["status"], "validated")
+        self.assertEqual((r["cpu_loop_timing"]["original_cpu_loop_ms"], r["cpu_loop_timing"]["immutable_replay_ms"]), (4.0, 6.0))
+        self.assertEqual(r["pilot_cost"]["status"], "validated")
+        self.assertEqual((r["pilot_cost"]["measured_capture_overhead_ms"], r["pilot_cost"]["measured_gpu_path_ms"], r["pilot_cost"]["replay_over_measured_gpu_path"]), (0.6, 3.6, 1.25))
+        self.assertEqual(r["pilot_cost"]["by_texture_mode"]["1"]["measured_gpu_path_ms"], 3.6)
+        self.assertEqual(r["pilot_cost"]["snapshot_split"]["status"], "unavailable")
+        self.assertEqual(r["pilot_storage"]["status"], "unavailable")
+        sampled = r["summaries"]["GPU_BYPASS"]["sampled_frames"]
+        split_cost = cost.rstrip() + " prepare_ticks=2000 baseline_copy_ticks=1000\n"
+        storage = f"GPU_PILOT_STORAGE allocations=1 reuses={sampled-1}\nGPU_PILOT_STORAGE releases=1 live=0\n"
+        full = body.replace(cost, split_cost) + storage
+        r = self.parse(full)["gpu_diagnostics"]
+        self.assertEqual(r["pilot_cost"]["snapshot_split"]["status"], "validated")
+        self.assertEqual((r["pilot_cost"]["snapshot_split"]["prepare_ms"], r["pilot_cost"]["snapshot_split"]["baseline_copy_ms"]), (0.2, 0.1))
+        self.assertEqual(r["pilot_storage"]["status"], "validated")
+        self.assertEqual(r["batch_cost"]["status"], "unavailable")
+        batch_cost = "GPU_BATCH_COST frame=120 draws=8 textures=2 decoded_bytes=131072 qpc_hz=10000000 cpu_loop_ticks=40000 dispatch_ticks=12500 fence_wait_ticks=7500\n"
+        qualified = full.replace(loop, loop + batch_cost)
+        b = self.parse(qualified)["gpu_diagnostics"]["batch_cost"]
+        self.assertEqual(b["status"], "validated", b)
+        self.assertEqual((b["waves"], b["draws"], b["cpu_loop_ms"], b["gpu_dispatch_ms"],
+                          b["fence_wait_ms"], b["cpu_over_dispatch"], b["gpu_faster_waves"]),
+                         (1, 8, 4.0, 1.25, 0.75, 3.2, 1))
+        self.assertEqual(b["by_draw_count"]["8-15"]["dispatch_ms_per_draw"], 0.15625)
+        self.assertIsNone(b["by_draw_count"]["24-32"]["gpu_dispatch_ms"])
+        self.assertEqual(b["fence_share_pct"], 60.0)
+        self.assertEqual(self.parse(qualified)["gpu_diagnostics"]["batch_path"]["status"], "unavailable")
+        path_cost = "GPU_BATCH_PATH frame=120 draws=8 tested=1 errors=0 qpc_hz=10000000 prepare_ticks=3000 publish_ticks=2000\n"
+        measured = qualified.replace(batch_cost, batch_cost + path_cost)
+        r = self.parse(measured)["gpu_diagnostics"]["batch_path"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["prepare_ms"], r["private_publish_ms"], r["measured_path_ms"], r["faster_waves"]), (0.3, 0.2, 1.75, 1))
+        for changed, expected in (
+            (qualified, "unavailable"),
+            (measured.replace("tested=1 errors=0", "tested=1 errors=1"), "failed"),
+            (measured.replace("publish_ticks=2000", "publish_ticks=4294967295"), "failed"),
+            (measured.replace("GPU_BATCH_PATH frame=120", "GPU_BATCH_PATH frame=121"), "failed"),
+            (measured.replace("prepare_ticks=3000 ", ""), "failed"),
+            (measured.replace(path_cost, path_cost + path_cost), "failed"),
+            (measured.replace(path_cost, path_cost.replace("tested=1 errors=0 qpc_hz=10000000 prepare_ticks=3000 publish_ticks=2000",
+                                                           "tested=0 errors=0 qpc_hz=0 prepare_ticks=0 publish_ticks=0")), "incomplete"),
+        ):
+            self.assertEqual(self.parse(changed)["gpu_diagnostics"]["batch_path"]["status"], expected)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch-path", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(measured, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch-path", "--json", str(path)]), 0)
+        for changed, expected in (
+            (full, "unavailable"),
+            (qualified.replace("cpu_loop_ticks=40000", "cpu_loop_ticks=39999"), "failed"),
+            (qualified.replace("textures=2 decoded_bytes", "textures=9 decoded_bytes"), "failed"),
+            (qualified.replace("fence_wait_ticks=7500", "fence_wait_ticks=12501"), "failed"),
+            (qualified.replace(" decoded_bytes=131072", ""), "failed"),
+            (qualified.replace(batch_cost, batch_cost + batch_cost), "incomplete"),
+            (qualified.replace("GPU_BATCH_COST frame=120", "GPU_BATCH_COST frame=121"), "incomplete"),
+            (qualified.replace(batch_cost, batch_cost.replace("qpc_hz=10000000 cpu_loop_ticks=40000 dispatch_ticks=12500 fence_wait_ticks=7500",
+                                                              "qpc_hz=0 cpu_loop_ticks=0 dispatch_ticks=0 fence_wait_ticks=0")), "incomplete"),
+        ):
+            self.assertEqual(self.parse(changed)["gpu_diagnostics"]["batch_cost"]["status"], expected)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(qualified, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 0)
+        for changed in (body, full.replace("baseline_copy_ticks=1000", "baseline_copy_ticks=1001"),
+                        full.replace(" prepare_ticks=2000", ""), full.replace("live=0", "live=1"),
+                        full.replace("releases=1", "releases=0"), full.replace(f"reuses={sampled-1}", f"reuses={sampled}"),
+                        full + storage):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(full, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 0)
+        for old, new, key, status in (
+            (loop, "", "cpu_loop_timing", "unavailable"),
+            (loop, loop.replace("timed_draws=8", "timed_draws=7"), "cpu_loop_timing", "failed"),
+            (loop, loop.replace("qpc_hz=10000000 loop_ticks=40000 replay_ticks=60000", "qpc_hz=0 loop_ticks=0 replay_ticks=0"), "cpu_loop_timing", "incomplete"),
+            (loop, loop.replace("frame=120", "frame=121"), "cpu_loop_timing", "incomplete"),
+            (cost, "", "pilot_cost", "unavailable"),
+            (cost, cost + cost, "pilot_cost", "failed"),
+            (cost, cost.replace("qpc_hz=10000000", "qpc_hz=20000000"), "pilot_cost", "failed"),
+            (cost, cost.replace("capture_alloc_ticks=1000 ", ""), "pilot_cost", "failed"),
+            (cost, cost.replace("frame=240", "frame=241"), "pilot_cost", "failed"),
+        ):
+            with self.subTest(key=key, status=status):
+                changed = body.replace(old, new)
+                r = self.parse(changed)["gpu_diagnostics"]
+                self.assertEqual(r[key]["status"], status, r[key])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory, "ScorchedPlanetFix.log")
+                    path.write_text(changed, encoding="utf-8")
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 1)
+                        self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-fence", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(body, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 0)
+
+    def test_gpu_malformed_bypass_record(self):
+        r = self.parse(self.GPU_SESSION.replace("GPU_BYPASS OK frame=240 written=5",
+                                               "GPU_BYPASS OK written=5"))["gpu_diagnostics"]
+        self.assertEqual(r["status"], "failed", r)
+        self.assertEqual(r["roi"]["status"], "incomplete")
+        self.assertTrue(any("incomplete" in e for e in r["errors"]))
+
+    def test_gpu_legacy_and_truncation(self):
+        self.assertEqual(self.parse("msiInit width=640\n")["gpu_diagnostics"]["status"], "unavailable")
+        r = self.parse(self.GPU_SESSION.split("GPU_DEFER_AUDIT")[0])["gpu_diagnostics"]
+        self.assertNotEqual(r["status"], "validated")
+        old = "\n".join(line for line in self.GPU_SESSION.splitlines() if not line.startswith(("GPU_DUAL_VIEW", "GPU_DEFER_STRICT")))
+        self.assertEqual(self.parse(old)["gpu_diagnostics"]["status"], "incomplete")
 
     def test_clean_exit_with_normal_null_global(self):
         r = self.parse("""msiInit width=640 height=400 planes=16 zbuffer=0 debug=0

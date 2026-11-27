@@ -1,0 +1,173 @@
+name: Matrox Vulkan 3D shader validation
+on:
+  pull_request:
+    branches: [feature/matrox-vulkan-presentation]
+    paths:
+      - 'tools/matrox/shaders/**'
+      - 'tools/matrox/vulkan_3d_probe.c'
+      - 'tools/matrox/msi_vk_batch_replay.h'
+      - 'tools/matrox/msi_vk_shadow_session.h'
+      - 'tools/matrox/msi_vk_shadow_bridge.c'
+      - 'tools/matrox/msi_vk_shadow_bridge.h'
+      - 'tools/matrox/world_spv_embedded.h'
+      - 'tools/matrox/msi_gpu_texel.h'
+      - 'tools/matrox/msi_gpu_texel_test.c'
+      - 'tools/matrox/msi_gpu_batch.h'
+      - 'tools/matrox/msi_gpu_shadow_state.h'
+      - 'tools/matrox/msi_gpu_batch_test.c'
+      - 'tools/matrox/msi_gpu_snapshot.h'
+      - 'tools/matrox/msi_gpu_pilot_storage.h'
+      - 'tools/matrox/msi_gpu_snapshot_test.c'
+      - 'tools/matrox/msi_gpu_draw_batch.h'
+      - 'tools/matrox/msi_gpu_compare.h'
+      - 'tools/matrox/msi_gpu_compare_test.c'
+      - 'tools/matrox/msi_gpu_publish.h'
+      - 'tools/matrox/msi_gpu_publish_test.c'
+      - 'tools/matrox/msi_gpu_coverage.h'
+      - 'tools/matrox/msi_gpu_coverage_test.c'
+      - 'tools/matrox/msi_gpu_bypass.h'
+      - 'tools/matrox/msi_gpu_bypass_test.c'
+      - 'tools/matrox/msi_gpu_cpu_replay.h'
+      - 'tools/matrox/msi_gpu_defer_audit.h'
+      - 'tools/matrox/msi_gpu_defer_audit_test.c'
+      - 'tools/matrox/msi_gpu_deferred_finish.h'
+      - 'tools/matrox/msi_gpu_defer_admit.h'
+      - 'tools/matrox/msi_gpu_defer_admit_test.c'
+      - 'tools/matrox/msi_gpu_shadow_sampler.h'
+      - 'tools/matrox/msi_gpu_shadow_sampler_test.c'
+      - 'tools/matrox/msi_gpu_draw_batch_test.c'
+      - 'tools/matrox/make_gpu_replay_fixture.py'
+      - 'tools/matrox/diagnose_gpu_capture.py'
+      - 'tools/matrox/embed_world_spv.py'
+      - 'tools/matrox/gen_world_vk_dispatch.py'
+      - '.github/workflows/matrox-vulkan-3d.yml'
+permissions:
+  contents: read
+jobs:
+  shader-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build-only GLSL and SPIR-V validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends glslang-tools spirv-tools libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers gcc-mingw-w64-i686-posix
+          glslangValidator --version
+      - name: Compile and validate both shaders
+        run: |
+          set -eu
+          mkdir -p /tmp/matrox-spv
+          glslangValidator -V --target-env vulkan1.0 tools/matrox/shaders/opaque_world.vert -o /tmp/matrox-spv/world.vert.spv
+          glslangValidator -V --target-env vulkan1.0 tools/matrox/shaders/opaque_world.frag -o /tmp/matrox-spv/world.frag.spv
+          spirv-val --target-env vulkan1.0 /tmp/matrox-spv/world.vert.spv
+          spirv-val --target-env vulkan1.0 /tmp/matrox-spv/world.frag.spv
+          glslangValidator -V --target-env vulkan1.0 -l tools/matrox/shaders/opaque_world.vert tools/matrox/shaders/opaque_world.frag -o /tmp/matrox-spv/linked.spv
+          echo "Vulkan shader compile/interface validation passed; running offscreen readback next"
+      - name: Render offscreen and compare RGB565 pixels with CPU oracle
+        run: |
+          set -eu
+          python3 tools/matrox/embed_world_spv.py /tmp/matrox-spv/world.vert.spv /tmp/matrox-spv/world.frag.spv /tmp/matrox-spv/world_spv.h
+          cmp /tmp/matrox-spv/world_spv.h tools/matrox/world_spv_embedded.h
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_texel_test.c -o /tmp/matrox-spv/texture-test
+          /tmp/matrox-spv/texture-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_batch_test.c -o /tmp/matrox-spv/batch-test
+          /tmp/matrox-spv/batch-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_snapshot_test.c -o /tmp/matrox-spv/snapshot-test
+          /tmp/matrox-spv/snapshot-test | tee /tmp/matrox-spv/snapshot.log
+          grep -F 'MSI_GPU_PILOT_STORAGE_PASS faults=4 reuse=12 copy=512000 guards=1' /tmp/matrox-spv/snapshot.log
+          grep -F 'MSI_GPU_EXACT_COMPARE_PASS comparisons=34320' /tmp/matrox-spv/snapshot.log
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_compare_test.c -o /tmp/matrox-spv/compare-test
+          /tmp/matrox-spv/compare-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_publish_test.c -o /tmp/matrox-spv/publish-test
+          /tmp/matrox-spv/publish-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_coverage_test.c -o /tmp/matrox-spv/coverage-test
+          /tmp/matrox-spv/coverage-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_bypass_test.c -o /tmp/matrox-spv/bypass-test
+          /tmp/matrox-spv/bypass-test | tee /tmp/matrox-spv/bypass-test.log
+          grep -q 'MSI_GPU_PILOT_ORACLE_PASS color=1 edge=1 outside=1 invalid=1' /tmp/matrox-spv/bypass-test.log
+          grep -F 'MSI_GPU_PACKED_UNION_PASS cases=8 exact=2048000 holes=8' /tmp/matrox-spv/bypass-test.log
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_defer_audit_test.c -o /tmp/matrox-spv/defer-audit-test
+          /tmp/matrox-spv/defer-audit-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_defer_admit_test.c -o /tmp/matrox-spv/defer-admit-test
+          /tmp/matrox-spv/defer-admit-test
+          cc -std=c11 -O2 -Wall -Wextra -Werror tools/matrox/msi_gpu_shadow_sampler_test.c -o /tmp/matrox-spv/shadow-sampler-test
+          /tmp/matrox-spv/shadow-sampler-test
+          cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_draw_batch_test.c -o /tmp/matrox-spv/draw-batch-test
+          /tmp/matrox-spv/draw-batch-test
+          cc -std=c11 -O2 -Wall -Wextra -I/tmp/matrox-spv tools/matrox/vulkan_3d_probe.c tools/matrox/msi_vk_shadow_bridge.c -o /tmp/matrox-spv/world-probe -lvulkan -lm
+          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe > /tmp/matrox-spv/probe.log 2>&1 || { cat /tmp/matrox-spv/probe.log; exit 1; }
+          cat /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_OFFSCREEN_PASS cases=56' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_BATCH_RECOVERY_PASS injected=6' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_OUTPUT_PASS' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_BRIDGE_PASS reopen=2' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_ROI_BRIDGE_PASS reopen=2 exact=256000' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_BATCH_COMMIT_PASS draws=4' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TAGGED_ROI_PASS exact=256000' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PACKED_BATCH_PASS draws=4 exact=256000 fault=1 reuse=1 guards=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PACKED_BATCH_COMMIT_PASS exact=256000 faults=3' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_ROI_CACHE_PASS init_faults=3 reuse=1 pre_submit_fault=1 pending_retired=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_UPLOAD_CACHE_PASS init_faults=2 growth_fault=1 grow=1 reuse=1 pending_retired=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_COMMAND_CACHE_PASS descriptor_faults=2 command_faults=2 reuse=1 pending_retired=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PACKED_PUBLICATION_PASS exact=256000 stale_outside=1 guard=1 capacity=1 fault=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PACKED_FENCE_PASS faults=2 reuse=1 timeout_retired=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PILOT_ORACLE_PASS exact=' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_TEXTURE_CACHE_PASS hits=2 misses=5 collision=1 shape=1 eviction=1 faults=3 pending_retired=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_MAPPED_CACHE_PASS stage=1 vertices=1 readback=1 texture=1 map_faults=4 growth_fault=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_HOST_MEMORY_PASS preferred=1 fallback=1 filtered=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_DEFERRED_FINISH_PASS gpu=1 cpu=2 blocked=2' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_PIPELINE_RECOVERY_PASS injected=8' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_BATCH_WAIT_RECOVERY_PASS simulated=2' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_SHADOW_SESSION_PASS open_failures=9 reopen=1' /tmp/matrox-spv/probe.log
+          grep -q 'VULKAN_3D_SHADOW_BRIDGE_PASS missing_dispatch=1 reopen=1' /tmp/matrox-spv/probe.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/probe.log; then exit 1; fi
+          python3 tools/matrox/make_gpu_replay_fixture.py /tmp/matrox-spv/replay.bin
+          python3 tools/matrox/diagnose_gpu_capture.py /tmp/matrox-spv/replay.bin --require-exact > /tmp/matrox-spv/cpu-replay.log
+          cat /tmp/matrox-spv/cpu-replay.log
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/replay.log 2>&1 || { cat /tmp/matrox-spv/replay.log; exit 1; }
+          cat /tmp/matrox-spv/replay.log
+          grep -q 'VULKAN_3D_REPLAY_PASS' /tmp/matrox-spv/replay.log
+          grep -q 'MSI_GPU_CPU_REPLAY PASS exact=256000' /tmp/matrox-spv/replay.log
+          grep -q 'VULKAN_3D_REPLAY_ROI PASS frame=1 exact=256000' /tmp/matrox-spv/replay.log
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay-world.bin > /tmp/matrox-spv/replay-world.log 2>&1 || { cat /tmp/matrox-spv/replay-world.log; exit 1; }
+          cat /tmp/matrox-spv/replay-world.log
+          grep -q 'MSI_GPU_CPU_REPLAY PASS exact=256000' /tmp/matrox-spv/replay-world.log
+          grep -q 'VULKAN_3D_REPLAY_ROI PASS frame=2 exact=256000' /tmp/matrox-spv/replay-world.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/replay-world.log; then exit 1; fi
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/replay.log; then exit 1; fi
+          if /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bad; then echo "accepted truncated capture"; exit 1; fi
+          # Multiple valid inputs in a single Vulkan device session.
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/multi.log 2>&1
+          cat /tmp/matrox-spv/multi.log
+          grep -q 'VULKAN_3D_REPLAY_SUMMARY total=2 passed=2 differences=0 invalid=0' /tmp/matrox-spv/multi.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/multi.log; then exit 1; fi
+          # Invalid input must not abort remaining valid input or be counted as a pass.
+          rc=0
+          VK_ICD_FILENAMES="$icd" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation /tmp/matrox-spv/world-probe /tmp/matrox-spv/replay.bin /tmp/matrox-spv/replay.bad /tmp/matrox-spv/replay.bin > /tmp/matrox-spv/mixed.log 2>&1 || rc=$?
+          cat /tmp/matrox-spv/mixed.log
+          test "$rc" -eq 2
+          grep -q 'VULKAN_3D_REPLAY_SUMMARY total=3 passed=2 differences=0 invalid=1' /tmp/matrox-spv/mixed.log
+          if grep -E 'Validation Error|VUID-' /tmp/matrox-spv/mixed.log; then exit 1; fi
+      - name: Cross-compile standalone Win32 x86 GPU verification executable
+        run: |
+          set -eu
+          python3 tools/matrox/gen_world_vk_dispatch.py tools/matrox/vulkan_3d_probe.c /tmp/matrox-spv/world_vk_dispatch.h tools/matrox/msi_vk_batch_replay.h tools/matrox/msi_vk_shadow_session.h
+          mkdir -p /tmp/matrox-vkinclude
+          cp -r /usr/include/vulkan /tmp/matrox-vkinclude/
+          if test -d /usr/include/vk_video; then cp -r /usr/include/vk_video /tmp/matrox-vkinclude/; fi
+          i686-w64-mingw32-gcc-posix -std=c11 -O2 -D_WIN32_WINNT=0x0602 -static-libgcc -I/tmp/matrox-spv -I/tmp/matrox-vkinclude tools/matrox/vulkan_3d_probe.c tools/matrox/msi_vk_shadow_bridge.c -o /tmp/matrox-spv/MatroxVulkan3DProbe.exe -lm
+          i686-w64-mingw32-strip /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          file /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          python3 -c 'import pathlib,struct; b=pathlib.Path("/tmp/matrox-spv/MatroxVulkan3DProbe.exe").read_bytes(); p=struct.unpack_from("<I",b,60)[0]; assert b[:2]==b"MZ" and b[p:p+4]==b"PE\0\0" and struct.unpack_from("<H",b,p+4)[0]==0x14c and struct.unpack_from("<H",b,p+24)[0]==0x10b; print("PE32 x86 machine verified")'
+          i686-w64-mingw32-objdump -p /tmp/matrox-spv/MatroxVulkan3DProbe.exe | grep 'DLL Name:'
+      - name: Upload one small standalone hardware proof
+        if: contains(github.event.pull_request.labels.*.name, 'hardware-test')
+        uses: actions/upload-artifact@v4
+        with:
+          name: MatroxVulkan3DProbe-x86
+          path: /tmp/matrox-spv/MatroxVulkan3DProbe.exe
+          retention-days: 3
+          if-no-files-found: error

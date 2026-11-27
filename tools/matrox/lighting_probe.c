@@ -18,6 +18,9 @@ __declspec(dllimport) BOOL __stdcall WriteFile(HANDLE,const void*,DWORD,DWORD*,v
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
 __declspec(dllimport) BOOL __stdcall FlushFileBuffers(HANDLE);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
+__declspec(dllimport) DWORD __stdcall GetEnvironmentVariableA(const char*,char*,DWORD);
+__declspec(dllimport) HANDLE __stdcall FindWindowA(const char*,const char*);
+__declspec(dllimport) LONG __stdcall SendMessageA(HANDLE,unsigned,DWORD,LONG);
 __declspec(dllimport) BOOL __stdcall DeleteFileA(const char*);
 __declspec(dllimport) void __stdcall ExitProcess(unsigned);
 __declspec(dllimport) LONG __stdcall DefWindowProcA(HANDLE,unsigned,DWORD,LONG);
@@ -249,6 +252,59 @@ void __cdecl probe_main(void){
     rc=13;trace_text("CALL independent dither matrix\r\n");
     if(!dither_matrix(info,tex,lut))goto done;
     trace_text("OK independent dither matrix\r\n");
+    /* Opt-in CI smoke only, never exercise on the original Win95 DLL.
+       F12 uses the real preview window procedure, not a private export. */
+    {
+        char enabled[4];
+        if(GetEnvironmentVariableA("MATROX_MSI_GPU_CAPTURE_SMOKE",enabled,sizeof(enabled))==1u&&enabled[0]=='1'){
+            /* Direct alias and remap contract: retain the original guest
+             * pointers, invalidate both as RWSPMYS1 does, then rebind and
+             * verify a renderer clear through the retained guest alias.
+             * This is opt-in only, not run on original Matrox hardware. */
+            rc=14;
+            volatile BYTE *color=info->color.mem,*depth=info->depth.mem;
+            if(!color||!depth)goto done;
+            color[0]=0x42;color[1]=0x24;
+            info->color.mem=(volatile BYTE*)0xdeadbeefu;
+            info->depth.mem=(volatile BYTE*)0xdeadbeefu;
+            if(!set(0)||info->color.mem!=color||info->depth.mem!=depth||color[0]!=0x42||color[1]!=0x24)goto done;
+            if(!start(1,0,0,0,0,0)||color[0]||color[1]||!end(0,0,1))goto done;
+            trace_text("MSI95_GUEST_ALIAS_REMAP_PASS\r\n");
+            HANDLE window=FindWindowA("MSI95_Class",0);if(!window)goto done;
+            SendMessageA(window,0x100u,0x7bu,0);SendMessageA(window,0x101u,0x7bu,0);
+            if(!start(1,0,0,0,0,0))goto done;
+            p.texture.enable=1;p.texture.mem=p.texture.heap=tex;
+            p.texture.lut.mem=p.texture.lut.heap=lut;
+            p.texture.modulate=0;p.texture.transparency=1;p.texture.key=0;p.texture.mask=0xffff;
+            p.color.dither=0;
+            if(!set(&p))goto done;
+            /* First eligible wave changes only 256 pixels. It lies inside
+             * the later affine strip, so the reference for the larger
+             * perspective wave is unchanged. The first-wave selector
+             * would incorrectly retain this smaller wave. */
+            for(unsigned j=0;j<16;j++){
+                float x=(float)(8+38*j);
+                vertex(v+0,x,60.f,.0625f,255.f);vertex(v+1,x+4.f,60.f,.0625f,255.f);
+                vertex(v+2,x+4.f,64.f,.0625f,255.f);vertex(v+3,x,64.f,.0625f,255.f);
+                v[1].invw=2.f;v[2].invw=2.f;
+                if(!draw(v+0,v+1,v+2,100)||!draw(v+0,v+2,v+3,100))goto done;
+            }
+            /* Draw enough affine primitives that the old selector would
+             * freeze the wrong wave. This white strip must instead be
+             * retained in the before image, not in the captured commands. */
+            for(unsigned j=0;j<16;j++)
+                if(!rect((float)(8+38*j),60.f,16.f,16.f,.0625f,255.f,255.f))goto done;
+            for(unsigned j=0;j<16;j++){
+                float x=(float)(8+38*j);
+                vertex(v+0,x,20.f,.0625f,255.f);vertex(v+1,x+16.f,20.f,.0625f,255.f);
+                vertex(v+2,x+16.f,36.f,.0625f,255.f);vertex(v+3,x,36.f,.0625f,255.f);
+                v[1].invw=2.f;v[2].invw=2.f;
+                if(!draw(v+0,v+1,v+2,100)||!draw(v+0,v+2,v+3,100))goto done;
+            }
+            if(!end(0,0,1))goto done;
+            trace_text("GPU_CAPTURE_SMOKE_OK\r\n");
+        }
+    }
     rc=12;
     status=blend?"msiSetTextureBlend=present; MODULATE calls succeeded\r\n":"msiSetTextureBlend=absent; flag-only frame generated\r\n";
     report=CreateFileA("msi95_lighting_probe.txt",0x40000000ul,0,0,1,0x80,0);

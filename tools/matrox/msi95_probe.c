@@ -7,6 +7,16 @@
 int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_world_bilinear.h"
 #include "vulkan_present.h"
+#include "msi_gpu_draw_batch.h"
+#include "msi_gpu_shadow_sampler.h"
+#include "msi_gpu_publish.h"
+#include "msi_gpu_coverage.h"
+#include "msi_gpu_cpu_replay.h"
+#include "msi_gpu_defer_audit.h"
+#include "msi_gpu_defer_admit.h"
+#include "msi_gpu_deferred_finish.h"
+#include "msi_gpu_bypass.h"
+#include "msi_gpu_pilot_storage.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -82,6 +92,7 @@ __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
 __declspec(dllimport) BOOL __stdcall WriteFile(HANDLE,const void*,DWORD,DWORD*,void*);
 __declspec(dllimport) DWORD __stdcall GetModuleFileNameA(void*,char*,DWORD);
 __declspec(dllimport) DWORD __stdcall GetFileAttributesA(const char*);
+__declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) DWORD __stdcall GetTickCount(void);
 /* Monotonic Windows performance counter is available on Windows XP+ and Wine.
  * Keep timing at MSI end-of-frame so the original OEM EXE and resources stay
@@ -96,6 +107,10 @@ __declspec(dllimport) HANDLE __stdcall GetModuleHandleA(const char*);
 __declspec(dllimport) void* __stdcall GetProcAddress(HANDLE,const char*);
 __declspec(dllimport) void * __stdcall VirtualAlloc(void*,DWORD,DWORD,DWORD);
 __declspec(dllimport) BOOL __stdcall VirtualFree(void*,DWORD,DWORD);
+__declspec(dllimport) HANDLE __stdcall CreateFileMappingA(HANDLE,void*,DWORD,DWORD,DWORD,const char*);
+__declspec(dllimport) void* __stdcall MapViewOfFile(HANDLE,DWORD,DWORD,DWORD,SIZE_T);
+__declspec(dllimport) BOOL __stdcall UnmapViewOfFile(const void*);
+__declspec(dllimport) DWORD __stdcall GetCurrentThreadId(void);
 __declspec(dllimport) void* __stdcall AddVectoredExceptionHandler(unsigned long, void*);
 __declspec(dllimport) unsigned long __stdcall VirtualQuery(const void*,void*,SIZE_T);
 
@@ -385,6 +400,11 @@ static int g_blue_atlas_valid=0;
 
 static T_msiInfo g_info;
 static void *g_color, *g_depth, *g_texture;
+/* Diagnostic dual view: public guest alias and private engine alias.
+ * They refer to the SAME bytes. Both remain read/write in this stage. */
+static void *g_color_guest;
+static unsigned g_gpu_dual_checks,g_gpu_dual_mismatch,g_gpu_dual_thread_checks,g_gpu_dual_foreign;
+static DWORD g_gpu_dual_owner;
 /* The original game may keep hundreds of texture heaps live across scene
  * transitions. The previous shim's fixed 256-entry array returned NULL for
  * valid 4-page allocations, corrupting the game's scene data. Track actual
@@ -447,6 +467,55 @@ static int g_preview_created = 0;
 static int g_viewport_reported=0;
 static int g_vk_requested=0,g_vk_active=0,g_vk_attempted=0;
 static unsigned g_vk_frames=0,g_vk_skipped=0,g_vk_ms=0,g_vk_recreates=0,g_vk_retry_streak=0;
+/* Read-only candidate profiling: no GPU rasterization or texture copies.
+ * One native frame in 60, only with Vulkan requested and logging enabled.
+ * Logical bounds are conservatively mapped to the synthetic 1440x1080 target. */
+static MsiGpuWave g_gpu_profile_wave;
+/* One contiguous indexed8 opaque wave, manually or sampled in RAM.
+ * Only explicit F12 writes files. Never used for presentation. */
+#define GPU_CAPTURE_NATIVE_BYTES 512000u
+#define GPU_CAPTURE_RAW_BYTES (2u*1024u*1024u)
+#define GPU_CAPTURE_DECODED_COUNT (2u*1024u*1024u)
+/* The one-draw recorder accepts at most 1 MiB of indexed8 texels plus
+ * a 512-byte palette. It does not need the best-wave or CPU-mask buffers. */
+#define GPU_CAPTURE_PILOT_TEXELS MSI_GPU_PILOT_DECODED_COUNT
+#define GPU_CAPTURE_PILOT_RAW_BYTES MSI_GPU_PILOT_RAW_BYTES
+_Static_assert(GPU_CAPTURE_NATIVE_BYTES==MSI_GPU_PILOT_NATIVE_BYTES,"native copy size");
+static MsiGpuPilotStorage g_gpu_pilot_storage;
+static unsigned g_gpu_pilot_allocations,g_gpu_pilot_reuses,g_gpu_pilot_releases;
+typedef struct {
+    MsiGpuDrawBatch batch;
+    BYTE *before,*after,*written;
+    /* Timed original CPU loops only for this owned reference wave. */
+    DWORD loop_ticks,prepare_ticks;
+    unsigned loop_draws,loop_untimed,prepare_draws,prepare_untimed;
+} MsiGpuCaptureSlot;
+static MsiGpuCaptureSlot g_gpu_capture_slots[2];
+static MsiGpuCaptureSlot *g_gpu_capture_current=&g_gpu_capture_slots[0];
+static MsiGpuCaptureSlot *g_gpu_capture_best=&g_gpu_capture_slots[1];
+#define g_gpu_capture_batch (g_gpu_capture_current->batch)
+#define g_gpu_capture_before (g_gpu_capture_current->before)
+#define g_gpu_capture_after (g_gpu_capture_current->after)
+static unsigned g_gpu_capture_active,g_gpu_capture_draw,g_gpu_capture_best_changed,g_gpu_capture_waves;
+static unsigned g_gpu_capture_sample;
+static MsiGpuShadowSampler g_gpu_shadow_auto;
+static struct {unsigned waves,copied,changed,preserved,rejected;} g_gpu_publish;
+static unsigned g_gpu_capture_bypass;
+static DWORD g_gpu_pilot_alloc_ticks,g_gpu_pilot_snapshot_ticks,g_gpu_pilot_prepare_ticks,g_gpu_pilot_copy_ticks;
+static struct {unsigned frames,last_frame,attempted,passed,failed,empty,written,changed,disabled;} g_gpu_bypass;
+_Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
+_Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
+static unsigned g_gpu_profile_enabled,g_gpu_profile_active;
+static MsiGpuDeferAudit g_gpu_defer_audit,g_gpu_defer_strict;
+static unsigned g_gpu_defer_strict_seen,g_gpu_defer_strict_state,g_gpu_defer_strict_early;
+static unsigned g_gpu_defer_strict_numerical,g_gpu_defer_strict_alias;
+static struct {
+    unsigned sampled,eligible,opaque,alpha,keyed,flat,rgb888,other,affine;
+    unsigned waves,opaque_waves,alpha_waves,singletons,max_wave,split;
+    unsigned zplanes,remaps,sentinels,state_calls,heap_calls;
+    unsigned tex4,tex8,tex16,drawn_frames,empty_frames;
+    unsigned frame_candidates;
+} g_gpu_profile;
 static int g_presentation_smooth_enabled=0,g_presentation_smooth_failed=0,g_presentation_smooth_reported=0;
 static int g_borderless_enabled=0;
 static int g_borderless_active=0;
@@ -627,6 +696,7 @@ static LONG __stdcall probe_exception(EXCEPTION_POINTERS_MIN* e){
     { char state[940];DWORD k=0;
       putstr(state,&k,"MSI_BUFFER_STATE color=");puthex(state,&k,(DWORD)g_info.msiColor.pMem);
       putstr(state,&k," backing_color=");puthex(state,&k,(DWORD)g_color);
+      putstr(state,&k," guest_color=");puthex(state,&k,(DWORD)g_color_guest);
       putstr(state,&k," depth=");puthex(state,&k,(DWORD)g_info.msiDepth.pMem);
       putstr(state,&k," backing_depth=");puthex(state,&k,(DWORD)g_depth);
       putstr(state,&k," frames=");putunsigned(state,&k,g_frames);
@@ -771,6 +841,131 @@ static void lognum(const char*name,unsigned a,const char *label2,unsigned b){
   char buf[940];DWORD p=0;putstr(buf,&p,name);putstr(buf,&p," ");putunsigned(buf,&p,a);
   if(label2){putstr(buf,&p," ");putstr(buf,&p,label2);putstr(buf,&p," ");putunsigned(buf,&p,b);}buf[p]=0;logtext(buf);
 }
+/* No rendering side effects: collect hypothetical waves, never submit. */
+static void gpu_profile_flush(void){
+    msi_gpu_defer_barrier(&g_gpu_defer_audit);
+    msi_gpu_defer_barrier(&g_gpu_defer_strict);
+    unsigned count=g_gpu_profile_wave.count;
+    if(!count)return;
+    g_gpu_profile.waves++;
+    if(g_gpu_profile_wave.needs_prior)g_gpu_profile.alpha_waves++;
+    else g_gpu_profile.opaque_waves++;
+    if(count==1u)g_gpu_profile.singletons++;
+    if(count>g_gpu_profile.max_wave)g_gpu_profile.max_wave=count;
+    msi_gpu_wave_reset(&g_gpu_profile_wave);
+}
+static void gpu_dual_thread_observe(void){
+    if(g_gpu_profile_active&&g_color_guest&&g_color_guest!=g_color){
+        g_gpu_dual_thread_checks++;
+        g_gpu_dual_foreign+=GetCurrentThreadId()!=g_gpu_dual_owner;
+    }
+}
+static void gpu_profile_finish(void){
+    if(!g_gpu_profile_active)return;
+    if(g_color_guest&&g_color_guest!=g_color){
+        g_gpu_dual_checks++;
+        if(!msi_gpu_snapshot_equal((const BYTE*)g_color_guest,(const BYTE*)g_color,
+                                    GPU_CAPTURE_NATIVE_BYTES)){
+            g_gpu_dual_mismatch++;
+            logtext("GPU_DUAL_VIEW MISMATCH sampled alias comparison");
+        }
+    }
+    gpu_profile_flush();
+    if(g_gpu_profile.frame_candidates)g_gpu_profile.drawn_frames++;
+    else g_gpu_profile.empty_frames++;
+    g_gpu_profile_active=0;
+}
+static void gpu_profile_candidate(const T_msiVertex *a,const T_msiVertex *b,const T_msiVertex *c,
+    int left,int top,int right,int bottom,
+    int width,int height,int textured,int modulate,int perspective,int bilinear,unsigned planes,unsigned opacity){
+    if(!g_gpu_profile_active||g_zplane_draw_context)return;
+    unsigned pointer_state=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
+        (DWORD)g_info.msiDepth.pMem,(DWORD)g_color_guest,(DWORD)g_depth);
+    int defer_eligible=width==640&&height==400&&textured&&planes==8u&&opacity==100u&&
+        perspective&&bilinear&&!(modulate&&g_rgb888_lighting_enabled)&&
+        !g_state.msiDepth.Enable&&!g_state.msiDepth.Protect&&!g_state.msiColor.Protect&&
+        !g_state.msiTexture.Decal&&!g_endframe_depth&&!g_guest_callback_depth;
+    msi_gpu_defer_candidate(&g_gpu_defer_audit,pointer_state,
+        (unsigned)g_state.msiTexture.Transparency,defer_eligible);
+    /* Strict opportunity: no intervening parameter API, invalid triangle,
+     * aliased vertex record or numerically inadmissible geometry. */
+    g_gpu_defer_strict_seen=1;
+    int strict=defer_eligible;
+    if(strict){
+        const T_msiVertex *in[3]={a,b,c};MsiGpuVertex v[3];
+        unsigned flags=9u|(g_state.msiTexture.Clamp_u?2u:0u)|
+            (g_state.msiTexture.Clamp_v?4u:0u)|(modulate?16u:0u)|
+            (modulate&&g_msi_dither_enabled&&g_state.msiColor.Dither?32u:0u)|
+            (g_state.msiTexture.Transparency?64u:0u);
+        unsigned alias=0;
+        for(unsigned i=0;i<3u;i++){
+            alias|=msi_gpu_defer_overlap((uintptr_t)in[i],sizeof(*in[i]),
+                (uintptr_t)g_color_guest,GPU_CAPTURE_NATIVE_BYTES);
+            v[i].xy[0]=in[i]->x;v[i].xy[1]=in[i]->y;
+            v[i].uv[0]=in[i]->u;v[i].uv[1]=in[i]->v;
+            v[i].iw=in[i]->invW;v[i].m[0]=in[i]->mr;v[i].m[1]=in[i]->mg;v[i].m[2]=in[i]->mb;
+        }
+        if(alias){g_gpu_defer_strict_alias++;strict=0;}
+        else if(!msi_gpu_defer_draw_admissible(v,(MsiGpuRect){(unsigned)left,(unsigned)top,
+                 (unsigned)right,(unsigned)bottom},flags)){
+            g_gpu_defer_strict_numerical++;strict=0;
+        }
+    }
+    msi_gpu_defer_candidate(&g_gpu_defer_strict,pointer_state,
+        (unsigned)g_state.msiTexture.Transparency,strict);
+    if(width!=640||height!=400||opacity>100u){g_gpu_profile.other++;gpu_profile_flush();return;}
+    if(!textured){g_gpu_profile.flat++;gpu_profile_flush();return;}
+    if(modulate&&g_rgb888_lighting_enabled){g_gpu_profile.rgb888++;gpu_profile_flush();return;}
+    if(!perspective&&!bilinear){g_gpu_profile.affine++;gpu_profile_flush();return;}
+    if(planes!=8u||opacity!=100u){g_gpu_profile.other++;gpu_profile_flush();return;}
+    MsiGpuRect rect={(unsigned)left*1440u/640u,(unsigned)top*1080u/400u,
+        ((unsigned)right*1440u+639u)/640u,((unsigned)bottom*1080u+399u)/400u};
+    unsigned prior=opacity<100u;
+    int result=msi_gpu_wave_push(&g_gpu_profile_wave,rect,prior);
+    if(result==MSI_GPU_WAVE_FLUSH){
+        g_gpu_profile.split++;gpu_profile_flush();
+        result=msi_gpu_wave_push(&g_gpu_profile_wave,rect,prior);
+    }
+    if(result!=MSI_GPU_WAVE_ACCEPT){g_gpu_profile.other++;gpu_profile_flush();return;}
+    g_gpu_profile.eligible++;g_gpu_profile.frame_candidates++;
+    if(prior)g_gpu_profile.alpha++;else g_gpu_profile.opaque++;
+    if(g_state.msiTexture.Transparency)g_gpu_profile.keyed++;
+    if(planes==4u)g_gpu_profile.tex4++;else if(planes==8u)g_gpu_profile.tex8++;else g_gpu_profile.tex16++;
+}
+static void gpu_profile_report(void){
+    if(!g_gpu_profile_enabled)return;
+    gpu_profile_finish();
+    lognum("GPU_PROFILE sampled_frames=",g_gpu_profile.sampled,"frames_with_candidates=",g_gpu_profile.drawn_frames);
+    lognum("GPU_PROFILE eligible=",g_gpu_profile.eligible,"empty_frames=",g_gpu_profile.empty_frames);
+    lognum("GPU_PROFILE opaque=",g_gpu_profile.opaque,"alpha=",g_gpu_profile.alpha);
+    lognum("GPU_PROFILE keyed=",g_gpu_profile.keyed,"flat_excluded=",g_gpu_profile.flat);
+    lognum("GPU_PROFILE rgb888_excluded=",g_gpu_profile.rgb888,"other_excluded=",g_gpu_profile.other);
+    lognum("GPU_PROFILE tex4=",g_gpu_profile.tex4,"tex8=",g_gpu_profile.tex8);
+    lognum("GPU_PROFILE tex16=",g_gpu_profile.tex16,"affine_excluded=",g_gpu_profile.affine);
+    lognum("GPU_PROFILE waves=",g_gpu_profile.waves,"singletons=",g_gpu_profile.singletons);
+    lognum("GPU_PROFILE opaque_waves=",g_gpu_profile.opaque_waves,"alpha_waves=",g_gpu_profile.alpha_waves);
+    lognum("GPU_PROFILE max_wave=",g_gpu_profile.max_wave,"planner_splits=",g_gpu_profile.split);
+    lognum("GPU_PROFILE zplane_barriers=",g_gpu_profile.zplanes,"null_remaps=",g_gpu_profile.remaps);
+    lognum("GPU_PROFILE sentinel_barriers=",g_gpu_profile.sentinels,"heap_barriers=",g_gpu_profile.heap_calls);
+    lognum("GPU_PROFILE state_calls=",g_gpu_profile.state_calls,NULL,0);
+    lognum("GPU_DEFER_AUDIT eligible=",g_gpu_defer_audit.eligible,"mapped=",g_gpu_defer_audit.mapped);
+    lognum("GPU_DEFER_AUDIT invalidated=",g_gpu_defer_audit.invalidated,"unknown=",g_gpu_defer_audit.unknown);
+    lognum("GPU_DEFER_AUDIT excluded=",g_gpu_defer_audit.excluded,"groups=",g_gpu_defer_audit.groups);
+    lognum("GPU_DEFER_AUDIT group_draws=",g_gpu_defer_audit.group_draws,"multi_groups=",g_gpu_defer_audit.multi_groups);
+    lognum("GPU_DEFER_AUDIT multi_draws=",g_gpu_defer_audit.multi_draws,"max_group=",g_gpu_defer_audit.max_group);
+    lognum("GPU_DEFER_AUDIT split_key=",g_gpu_defer_audit.split_key,"split_limit=",g_gpu_defer_audit.split_limit);
+    lognum("GPU_DEFER_AUDIT barriers=",g_gpu_defer_audit.barriers,"remaps=",g_gpu_defer_audit.remaps);
+    lognum("GPU_DEFER_AUDIT remaps_invalidated=",g_gpu_defer_audit.remaps_invalidated,"counts_ok=",msi_gpu_defer_counts_ok(&g_gpu_defer_audit));
+    lognum("GPU_DEFER_STRICT eligible=",g_gpu_defer_strict.eligible,"mapped=",g_gpu_defer_strict.mapped);
+    lognum("GPU_DEFER_STRICT invalidated=",g_gpu_defer_strict.invalidated,"unknown=",g_gpu_defer_strict.unknown);
+    lognum("GPU_DEFER_STRICT groups=",g_gpu_defer_strict.groups,"group_draws=",g_gpu_defer_strict.group_draws);
+    lognum("GPU_DEFER_STRICT multi_groups=",g_gpu_defer_strict.multi_groups,"multi_draws=",g_gpu_defer_strict.multi_draws);
+    lognum("GPU_DEFER_STRICT max_group=",g_gpu_defer_strict.max_group,"counts_ok=",msi_gpu_defer_counts_ok(&g_gpu_defer_strict));
+    lognum("GPU_DEFER_STRICT state_barriers=",g_gpu_defer_strict_state,"early_barriers=",g_gpu_defer_strict_early);
+    lognum("GPU_DEFER_STRICT numerical_reject=",g_gpu_defer_strict_numerical,"vertex_alias_reject=",g_gpu_defer_strict_alias);
+    lognum("GPU_DUAL_VIEW checks=",g_gpu_dual_checks,"mismatch=",g_gpu_dual_mismatch);
+    lognum("GPU_DUAL_VIEW thread_checks=",g_gpu_dual_thread_checks,"foreign=",g_gpu_dual_foreign);
+}
 /* Sparse histogram: absent values have zero requests. Emit at F12 and exit
  * only, avoiding additional per-triangle logging or duplicated Z-plane halves. */
 static void log_opacity_histogram(const char *scope){
@@ -832,6 +1027,239 @@ static void loginit(LONG w,LONG h,LONG planes,BOOL z,BOOL dbg){
 }
 static void zero(void*ptr,unsigned n){BYTE*p=(BYTE*)ptr;for(unsigned i=0;i<n;i++)p[i]=0;}
 static void* alloc(unsigned n){return n?VirtualAlloc(NULL,n,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE):NULL;}
+/* Map an anonymous section twice. Only diagnostic native RGB565 sessions
+ * use it; failure before exposing a pointer safely selects legacy allocation.
+ * No VirtualProtect or exception interception here. */
+static void color_allocate(unsigned bytes,int dual){
+    g_color=g_color_guest=NULL;
+    if(dual){
+        HANDLE mapping=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,bytes,NULL);
+        if(mapping){
+            g_color=MapViewOfFile(mapping,6u,0,0,bytes);
+            g_color_guest=MapViewOfFile(mapping,6u,0,0,bytes);
+            CloseHandle(mapping);
+        }
+        int ok=g_color&&g_color_guest&&g_color!=g_color_guest;
+        if(ok){
+            volatile WORD *a=(volatile WORD*)g_color,*b=(volatile WORD*)g_color_guest;
+            unsigned last=bytes/2u-1u;
+            a[0]=0x1234u;b[last]=0x5678u;
+            ok=b[0]==0x1234u&&a[last]==0x5678u;
+            a[0]=0;b[last]=0;
+        }
+        if(ok){logtext("GPU_DUAL_VIEW mapped=1 guard=0");return;}
+        if(g_color_guest&&g_color_guest!=g_color)UnmapViewOfFile(g_color_guest);
+        if(g_color)UnmapViewOfFile(g_color);
+        g_color=g_color_guest=NULL;
+        logtext("GPU_DUAL_VIEW mapped=0 guard=0 fallback=1");
+    }
+    g_color=alloc(bytes);g_color_guest=g_color;
+}
+
+/* A reserved sentinel distinguishes an absent clock from a real zero
+ * interval. Diagnostics only, called on the existing sampled paths. */
+static MSI_INT64 gpu_cost_now(void){
+    MSI_LARGE_INTEGER q;
+    return g_cap_frequency&&QueryPerformanceCounter(&q)&&q.QuadPart>0?q.QuadPart:0;
+}
+static DWORD gpu_cost_interval(MSI_INT64 begin,MSI_INT64 end){
+    return begin&&end>=begin&&end-begin<4294967295LL?(DWORD)(end-begin):UINT32_MAX;
+}
+static DWORD gpu_cost_elapsed(MSI_INT64 begin){
+    return gpu_cost_interval(begin,begin?gpu_cost_now():0);
+}
+static void gpu_capture_clear_loop(MsiGpuCaptureSlot *slot){
+    slot->loop_ticks=slot->loop_draws=slot->loop_untimed=0;
+    slot->prepare_ticks=slot->prepare_draws=slot->prepare_untimed=0;
+}
+static void gpu_pilot_free(void *p){if(p)VirtualFree(p,0,MEM_RELEASE);}
+static void gpu_pilot_storage_destroy(void){
+    if(g_gpu_pilot_storage.before){
+        msi_gpu_pilot_storage_destroy(&g_gpu_pilot_storage,gpu_pilot_free);
+        g_gpu_pilot_releases++;
+    }
+}
+static void gpu_capture_release(void){
+    msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_SKIP);
+    for(unsigned i=0;i<2u;i++){
+        MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
+        /* The sparse pilot borrows its session-owned storage; auto/F12
+         * slots retain their independent original allocation lifetime. */
+        if(slot->before&&slot->before!=g_gpu_pilot_storage.before)VirtualFree(slot->before,0,MEM_RELEASE);
+        if(slot->after)VirtualFree(slot->after,0,MEM_RELEASE);
+        if(slot->written)VirtualFree(slot->written,0,MEM_RELEASE);
+        if(slot->batch.snapshots.raw&&slot->batch.snapshots.raw!=g_gpu_pilot_storage.raw)VirtualFree(slot->batch.snapshots.raw,0,MEM_RELEASE);
+        if(slot->batch.snapshots.decoded&&slot->batch.snapshots.decoded!=g_gpu_pilot_storage.decoded)VirtualFree(slot->batch.snapshots.decoded,0,MEM_RELEASE);
+        slot->before=slot->after=slot->written=NULL;
+        slot->batch.snapshots.raw=NULL;slot->batch.snapshots.decoded=NULL;
+        msi_gpu_draw_batch_reset(&slot->batch);
+        gpu_capture_clear_loop(slot);
+    }
+    g_gpu_pilot_alloc_ticks=g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;
+    g_gpu_capture_current=&g_gpu_capture_slots[0];g_gpu_capture_best=&g_gpu_capture_slots[1];
+    g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=g_gpu_capture_sample=g_gpu_capture_bypass=0;
+    if(g_gpu_bypass.disabled||g_gpu_shadow_auto.disabled||g_gpu_bypass.attempted>=12u||g_gpu_bypass.frames>=36u)
+        gpu_pilot_storage_destroy();
+}
+static void gpu_capture_begin(void){
+    gpu_capture_release();
+    if(!g_vk_requested||!g_log||!g_color||
+       g_info.msiColor.Pitch!=1280||g_info.msiColor.MemSize!=GPU_CAPTURE_NATIVE_BYTES||
+       g_info.msiColor.BytesPerPixel!=2)return;
+    unsigned sample=(unsigned)msi_gpu_shadow_sampler_begin(&g_gpu_shadow_auto,g_frames,
+        g_vk_active,g_manual_capture_active,g_endframe_depth||g_guest_callback_depth);
+    unsigned bypass=!g_manual_capture_active&&!sample&&g_vk_active&&!g_endframe_depth&&!g_guest_callback_depth&&
+        !g_gpu_shadow_auto.disabled&&g_gpu_shadow_auto.passed>=GPU_SHADOW_SAMPLE_LIMIT&&
+        !g_gpu_bypass.disabled&&g_gpu_bypass.attempted<12u&&g_gpu_bypass.frames<36u&&g_frames&&
+        g_frames%GPU_SHADOW_SAMPLE_INTERVAL==0u&&g_gpu_bypass.last_frame!=g_frames;
+    if(!g_manual_capture_active&&!sample&&!bypass)return;
+    if(bypass){g_gpu_bypass.frames++;g_gpu_bypass.last_frame=g_frames;}
+    unsigned slots=bypass?1u:2u;
+    unsigned raw_bytes=bypass?GPU_CAPTURE_PILOT_RAW_BYTES:GPU_CAPTURE_RAW_BYTES;
+    unsigned decoded_count=bypass?GPU_CAPTURE_PILOT_TEXELS:GPU_CAPTURE_DECODED_COUNT;
+    MSI_INT64 alloc_begin=bypass?gpu_cost_now():0;
+    unsigned pool_result=bypass?msi_gpu_pilot_storage_acquire(&g_gpu_pilot_storage,alloc,gpu_pilot_free):0;
+    if(bypass){
+        if(!pool_result){
+            g_gpu_bypass.disabled=1;g_gpu_bypass.empty++;
+            gpu_capture_release();logtext("GPU_CAPTURE pilot storage allocation failed");return;
+        }
+        if(pool_result==1u)g_gpu_pilot_allocations++;
+        else g_gpu_pilot_reuses++;
+    }
+    for(unsigned i=0;i<slots;i++){
+        MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
+        slot->before=bypass?g_gpu_pilot_storage.before:(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        if(!bypass){
+            slot->after=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+            slot->written=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+        }
+        slot->batch.snapshots.raw=bypass?g_gpu_pilot_storage.raw:(BYTE*)alloc(raw_bytes);
+        slot->batch.snapshots.decoded=bypass?g_gpu_pilot_storage.decoded:(uint32_t*)alloc(decoded_count*4u);
+        if(!slot->before||(!bypass&&(!slot->after||!slot->written))||
+           !slot->batch.snapshots.raw||!slot->batch.snapshots.decoded){
+            if(sample)msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_ERROR);
+            if(bypass){g_gpu_bypass.disabled=1;g_gpu_bypass.empty++;}
+            gpu_capture_release();logtext("GPU_CAPTURE allocation failed");
+            return;
+        }
+        slot->batch.snapshots.raw_capacity=raw_bytes;
+        slot->batch.snapshots.decoded_capacity=decoded_count;
+    }
+    if(bypass)g_gpu_pilot_alloc_ticks=gpu_cost_elapsed(alloc_begin);
+    g_gpu_capture_active=1;g_gpu_capture_sample=sample;g_gpu_capture_bypass=bypass;
+}
+static void gpu_capture_copy(BYTE *out,const BYTE *src){
+    msi_gpu_native_copy(out,src);
+}
+static void gpu_capture_barrier(void){
+    if(!g_gpu_capture_active)return;
+    g_gpu_capture_draw=0;
+    if(g_gpu_capture_bypass){
+        msi_gpu_draw_batch_reset(&g_gpu_capture_batch);
+        g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;return;
+    }
+    if(g_gpu_capture_batch.count>=8u){
+        const WORD *before=(const WORD*)g_gpu_capture_before,*after=(const WORD*)g_gpu_capture_after;
+        unsigned changed=0;
+        for(unsigned i=0;i<GPU_CAPTURE_NATIVE_BYTES/2u;i++)changed+=before[i]!=after[i];
+        g_gpu_capture_waves++;
+        /* Retain the wave with greatest net visible change, not the first
+         * nonempty wave. Swap owned slots so no guest pointers or stale
+         * framebuffer data survive; equal scores keep the earlier wave. */
+        if(changed>g_gpu_capture_best_changed){
+            MsiGpuCaptureSlot *old=g_gpu_capture_best;
+            g_gpu_capture_best=g_gpu_capture_current;g_gpu_capture_current=old;
+            g_gpu_capture_best_changed=changed;
+        }
+    }
+    msi_gpu_draw_batch_reset(&g_gpu_capture_batch);
+    gpu_capture_clear_loop(g_gpu_capture_current);
+}
+static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,const T_msiVertex *c,
+    int left,int top,int right,int bottom,int width,int height,
+    int textured,int modulate,int perspective,int bilinear,unsigned planes,unsigned opacity,
+    unsigned tw,unsigned th,unsigned texoff,const BYTE *texture,const BYTE *lut){
+    if(!g_gpu_capture_active)return;
+    if(g_zplane_draw_context||width!=640||height!=400||!textured||planes!=8u||opacity!=100u||
+       !texture||!lut||(!perspective&&!bilinear)||(modulate&&g_rgb888_lighting_enabled)){
+        gpu_capture_barrier();return;
+    }
+    if(g_gpu_capture_bypass&&(!perspective||!bilinear||g_state.msiDepth.Enable||g_state.msiDepth.Protect||
+       g_state.msiColor.Protect||g_state.msiTexture.Decal||g_endframe_depth||g_guest_callback_depth||
+       (unsigned)(right-left)*(unsigned)(bottom-top)<16384u)){
+        gpu_capture_barrier();return;
+    }
+    /* Even a guest write without an observed lock/remap cannot silently
+       contaminate the reference. Compare current native color with the
+       previous accepted draw's exact CPU output before extending the wave. */
+    if(g_gpu_capture_batch.count&&(g_gpu_capture_bypass||
+       !msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES)))
+        gpu_capture_barrier();
+    MSI_INT64 snapshot_begin=gpu_cost_now();
+    MsiGpuVertex vertices[3];
+    const T_msiVertex *in[3]={a,b,c};
+    for(unsigned i=0;i<3;i++){
+        vertices[i].xy[0]=in[i]->x;vertices[i].xy[1]=in[i]->y;
+        vertices[i].uv[0]=in[i]->u;vertices[i].uv[1]=in[i]->v;
+        vertices[i].iw=in[i]->invW;
+        vertices[i].m[0]=in[i]->mr;vertices[i].m[1]=in[i]->mg;vertices[i].m[2]=in[i]->mb;
+    }
+    MsiGpuTexture state={tw,th,8u,(unsigned)g_state.msiTexture.Transparency,
+        (unsigned)g_state.msiTexture.KeyingColor,(unsigned)g_state.msiTexture.KeyingColorMask,
+        (unsigned)g_index_key_enabled,(unsigned)g_world_blue_key_enabled,
+        (unsigned)(g_icon01_opaque_enabled&&texoff==g_icon01_cache_offset)};
+    unsigned flags=(perspective?1u:0u)|(g_state.msiTexture.Clamp_u?2u:0u)|
+        (g_state.msiTexture.Clamp_v?4u:0u)|(bilinear?8u:0u)|(modulate?16u:0u)|
+        (modulate&&g_msi_dither_enabled&&g_state.msiColor.Dither?32u:0u)|(state.transparent?64u:0u);
+    MsiGpuRect rect={(unsigned)left,(unsigned)top,(unsigned)right,(unsigned)bottom};
+    int rc=msi_gpu_draw_batch_push(&g_gpu_capture_batch,vertices,rect,flags,&state,texture,tw*th,lut,512u);
+    if(rc!=MSI_GPU_DRAW_ACCEPT){
+        gpu_capture_barrier();
+        if(rc==MSI_GPU_DRAW_INVALID)return;
+        /* A retry belongs to a new wave; do not charge the old wave's
+         * unsuccessful push or barrier to its accepted draw. */
+        snapshot_begin=gpu_cost_now();
+        rc=msi_gpu_draw_batch_push(&g_gpu_capture_batch,vertices,rect,flags,&state,texture,tw*th,lut,512u);
+        if(rc!=MSI_GPU_DRAW_ACCEPT)return;
+    }
+    MSI_INT64 copy_begin=g_gpu_capture_bypass?gpu_cost_now():0;
+    if(g_gpu_capture_batch.count==1u){
+        gpu_capture_copy(g_gpu_capture_before,(const BYTE*)g_color);
+        if(!g_gpu_capture_bypass)zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
+    }
+    g_gpu_capture_draw=1;
+    if(g_gpu_capture_bypass){
+        MSI_INT64 snapshot_end=gpu_cost_now();
+        g_gpu_pilot_snapshot_ticks=gpu_cost_interval(snapshot_begin,snapshot_end);
+        g_gpu_pilot_prepare_ticks=gpu_cost_interval(snapshot_begin,copy_begin);
+        g_gpu_pilot_copy_ticks=gpu_cost_interval(copy_begin,snapshot_end);
+        if(g_gpu_pilot_prepare_ticks==UINT32_MAX||g_gpu_pilot_copy_ticks==UINT32_MAX||
+           g_gpu_pilot_snapshot_ticks==UINT32_MAX||
+           g_gpu_pilot_prepare_ticks>g_gpu_pilot_snapshot_ticks||
+           g_gpu_pilot_copy_ticks!=g_gpu_pilot_snapshot_ticks-g_gpu_pilot_prepare_ticks)
+            g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;
+    }else{
+        DWORD ticks=gpu_cost_elapsed(snapshot_begin);
+        MsiGpuCaptureSlot *slot=g_gpu_capture_current;
+        slot->prepare_draws++;
+        if(ticks==UINT32_MAX||ticks>=UINT32_MAX-slot->prepare_ticks)slot->prepare_untimed++;
+        else slot->prepare_ticks+=ticks;
+    }
+}
+static int gpu_capture_publish_wave(void);
+static void gpu_capture_draw_complete(void){
+    if(!g_gpu_capture_draw)return;
+    if(g_gpu_capture_bypass){gpu_capture_barrier();return;}
+    g_gpu_capture_draw=0;
+    gpu_capture_copy(g_gpu_capture_after,(const BYTE*)g_color);
+    /* Do not retain a fully discarded or completely overwritten wave. */
+    if(g_gpu_capture_batch.count>=32u){
+        if(gpu_capture_publish_wave())return;
+        gpu_capture_barrier();
+    }
+}
+
 /* GDI presents the original CPU RGB565 framebuffer plus experimental
  * software-rasterized MSI triangles. No exclusive display-mode change. */
 static void vk_report(const char *message,int code){
@@ -842,7 +1270,7 @@ static void vk_report(const char *message,int code){
     buf[n]=0;logtext(buf);
 }
 static void vk_stop(void){
-    if(g_vk_active){matrox_vk_close();g_vk_active=0;}
+    matrox_vk_close();g_vk_active=0;
 }
 static void preview_blit(HDC dc){
     if(!g_initialized || !g_color || !dc || !g_info.msiColor.pMem)return;
@@ -1090,6 +1518,8 @@ static LRESULT __stdcall preview_window_proc(HWND hwnd,UINT msg,WPARAM wparam,LP
         g_last_forwarded_msg=msg;
         g_last_forwarded_frame=g_frames;
         g_last_forwarded_tick=GetTickCount();
+        gpu_dual_thread_observe();
+        if(g_gpu_profile_active){msi_gpu_defer_barrier(&g_gpu_defer_audit);msi_gpu_defer_barrier(&g_gpu_defer_strict);}
         g_guest_callback_depth++;
         result=CallWindowProcA(g_guest_window_proc,hwnd,msg,wparam,lparam);
         sample_game_global_50dcd0("post_callback");
@@ -1229,12 +1659,19 @@ static void preview_present(void){
     }
 }
 static void clean(void){
+    gpu_capture_release();
+    gpu_pilot_storage_destroy();
     vk_stop();
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i])VirtualFree(g_heaps[i],0,MEM_RELEASE);
     if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
     g_heaps=NULL;
     g_heap_count=0;g_heap_capacity=0;g_heap_peak=0;
-    if(g_color)VirtualFree(g_color,0,MEM_RELEASE);
+    if(g_color_guest&&g_color_guest!=g_color){
+        BOOL guest_ok=UnmapViewOfFile(g_color_guest);
+        BOOL engine_ok=UnmapViewOfFile(g_color);
+        lognum("GPU_DUAL_VIEW_RELEASE success=",guest_ok&&engine_ok,NULL,0);
+    }else if(g_color)VirtualFree(g_color,0,MEM_RELEASE);
+    g_color_guest=NULL;
     if(g_depth)VirtualFree(g_depth,0,MEM_RELEASE);
     if(g_texture)VirtualFree(g_texture,0,MEM_RELEASE);
     if(g_ownership)VirtualFree(g_ownership,0,MEM_RELEASE);
@@ -1283,7 +1720,10 @@ static int capture_file_present(const char*filename){
     while(filename[k]&&i+k<1022){path[i+k]=filename[k];k++;}
     if(filename[k])return -1;
     path[i+k]=0;
-    return GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES;
+    if(GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)return 1;
+    DWORD error=GetLastError();
+    if(error==2u||error==3u)return 0; /* FILE_NOT_FOUND / PATH_NOT_FOUND */
+    lognum("MANUAL_CAPTURE file attribute error=",error,NULL,0);return -1;
 }
 static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char*shadow,char*texel,char*audit,char*undithered,char*lighting){
     for(unsigned tries=0;tries<999999u;tries++){
@@ -1307,11 +1747,13 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
         int audit_exists=capture_file_present(audit);
         int nodither_exists=capture_file_present(undithered);
         int lighting_exists=capture_file_present(lighting);
-        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0){
+        char gpu[100];capture_name(gpu,serial,"_gpu.bin");
+        int gpu_exists=capture_file_present(gpu);
+        if(frame_exists<0||coverage_exists<0||atlas_exists<0||world_exists<0||shadow_exists<0||texel_exists<0||audit_exists<0||nodither_exists<0||lighting_exists<0||gpu_exists<0){
             logtext("MANUAL_CAPTURE cannot resolve output directory");
             return FALSE;
         }
-        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists)return TRUE;
+        if(!frame_exists&&!coverage_exists&&!atlas_exists&&!world_exists&&!shadow_exists&&!texel_exists&&!audit_exists&&!nodither_exists&&!lighting_exists&&!gpu_exists)return TRUE;
     }
     logtext("MANUAL_CAPTURE exhausted available file numbers");
     return FALSE;
@@ -1320,6 +1762,569 @@ static int next_capture_pair(char*frame,char*coverage,char*atlas,char*world,char
  * BMP uses top-down BI_BITFIELDS. */
 static void put16le(BYTE *p,unsigned v){p[0]=(BYTE)v;p[1]=(BYTE)(v>>8);}
 static void put32le(BYTE *p,unsigned v){put16le(p,v);put16le(p+2,v>>16);}
+/* M95GPU01: little-endian Win32 fixed records, no native pointers.
+ * header: magic, width,height,draws,textures,decoded_words,frame (32 bytes).
+ * texture records: width,height,decoded word offset. Then draw records
+ * (id,flags,x0,y0,x1,y1), 3 float32 vertices per draw, R32_UINT texels,
+ * and before/after RGB565 native framebuffers. Bounded to <10 MiB. */
+static BOOL gpu_capture_write(HANDLE h,const void *p,DWORD bytes){
+    DWORD written=0;return WriteFile(h,p,bytes,&written,NULL)&&written==bytes;
+}
+/* Exercise the exact retirement helper on a PRIVATE copy of the wave.
+ * No guest access contract assumed here; never publish to live memory.
+ * The simulated failure does not invalidate the real Vulkan device. */
+static int gpu_capture_retirement_check(const MsiGpuCaptureSlot *best,
+    const uint32_t *tagged,const MsiGpuTaggedCheck *check,WORD *private_color,WORD *cpu){
+    const unsigned pixels=GPU_CAPTURE_NATIVE_BYTES/2u;
+    BYTE *under=(BYTE*)alloc(pixels),*mask=(BYTE*)alloc(pixels);
+    if(!under||!mask){
+        if(under)VirtualFree(under,0,MEM_RELEASE);
+        if(mask)VirtualFree(mask,0,MEM_RELEASE);
+        return MSI_SHADOW_ERROR;
+    }
+    const WORD *before=(const WORD*)best->before,*after=(const WORD*)best->after;
+    unsigned eligible=check->homogeneous;
+    for(unsigned k=0;k<best->batch.count;k++)
+        eligible&=(best->batch.draws[k].flags&9u)==9u;
+    unsigned errors=0,gpu_writes=0,cpu_writes=0;
+    DWORD started=GetTickCount();
+    MsiGpuBypass result;
+    if(eligible){
+        for(unsigned j=0;j<pixels;j++){private_color[j]=before[j];under[j]=3u;}
+        int outcome=msi_gpu_deferred_finish(&result,&best->batch,640u,400u,
+            private_color,under,before,1,tagged,cpu,mask);
+        errors+=outcome!=MSI_DEFER_FINISH_GPU;
+        gpu_writes=result.written;
+        errors+=gpu_writes!=check->written;
+        unsigned key=(best->batch.draws[0].flags&64u)?2u:1u;
+        for(unsigned j=0;j<pixels;j++){
+            unsigned write=tagged[j]!=65536u;
+            errors+=private_color[j]!=(write?(WORD)tagged[j]:before[j])||
+                    under[j]!=(write?key:3u);
+        }
+    }
+    for(unsigned j=0;j<pixels;j++){private_color[j]=before[j];under[j]=3u;}
+    int outcome=msi_gpu_deferred_finish(&result,&best->batch,640u,400u,
+        private_color,under,before,0,NULL,cpu,mask);
+    errors+=outcome!=MSI_DEFER_FINISH_CPU;
+    cpu_writes=result.written;
+    unsigned expected_writes=0;
+    for(unsigned j=0;j<pixels;j++){
+        expected_writes+=best->written[j]!=0u;
+        errors+=private_color[j]!=after[j]||
+                under[j]!=(best->written[j]?best->written[j]:3u);
+    }
+    errors+=cpu_writes!=expected_writes;
+    VirtualFree(mask,0,MEM_RELEASE);VirtualFree(under,0,MEM_RELEASE);
+    char msg[300];DWORD n=0;
+    putstr(msg,&n,errors?"GPU_RETIREMENT DIFFERENCES frame=":"GPU_RETIREMENT PASS frame=");
+    putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+    putstr(msg,&n," gpu_tested=");putunsigned(msg,&n,eligible);
+    putstr(msg,&n," gpu_written=");putunsigned(msg,&n,gpu_writes);
+    putstr(msg,&n," cpu_written=");putunsigned(msg,&n,cpu_writes);
+    putstr(msg,&n," errors=");putunsigned(msg,&n,errors);
+    putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+    msg[n]=0;logtext(msg);
+    return errors?MSI_SHADOW_DIFFERENCES:MSI_SHADOW_PASS;
+}
+/* 1 pass, 2 differences, -1 error, 0 skipped. */
+static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned expected_changed,int publish){
+    if(!g_vk_active){logtext("GPU_SHADOW SKIP presentation unavailable");return 0;}
+    if(g_endframe_depth!=(publish?0u:1u)||g_guest_callback_depth){logtext("GPU_SHADOW SKIP nested frame");return 0;}
+    WORD *scratch=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+    if(!scratch){logtext("GPU_SHADOW SKIP scratch allocation failed");return -1;}
+    /* Validate recovery against the original rasterizer, not against
+     * the GPU tolerance. Never touch the live framebuffer during replay. */
+    BYTE *replayed_mask=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+    DWORD replay_started=GetTickCount();
+    if(!replayed_mask){
+        VirtualFree(scratch,0,MEM_RELEASE);logtext("GPU_CPU_REPLAY ERROR allocation");
+        return MSI_SHADOW_ERROR;
+    }
+    MSI_INT64 replay_begin=gpu_cost_now();
+    int replay_ok=msi_gpu_cpu_replay(&best->batch,640u,400u,
+        (const WORD*)best->before,scratch,replayed_mask);
+    DWORD replay_ticks=gpu_cost_elapsed(replay_begin);
+    unsigned exact=0,mask_diff=0,written=0,first=GPU_CAPTURE_NATIVE_BYTES/2u;
+    if(replay_ok)for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++){
+        unsigned same=scratch[j]==((const WORD*)best->after)[j];
+        unsigned same_mask=replayed_mask[j]==best->written[j];
+        exact+=same;mask_diff+=!same_mask;written+=replayed_mask[j]!=0;
+        if((!same||!same_mask)&&first==GPU_CAPTURE_NATIVE_BYTES/2u)first=j;
+    }
+    int replay_pass=replay_ok&&exact==GPU_CAPTURE_NATIVE_BYTES/2u&&!mask_diff&&written;
+    char replay_msg[320];DWORD rn=0;
+    putstr(replay_msg,&rn,replay_pass?"GPU_CPU_REPLAY PASS frame=":"GPU_CPU_REPLAY DIFFERENCES frame=");
+    putunsigned(replay_msg,&rn,g_frames);
+    putstr(replay_msg,&rn," draws=");putunsigned(replay_msg,&rn,best->batch.count);
+    putstr(replay_msg,&rn," exact=");putunsigned(replay_msg,&rn,exact);
+    putstr(replay_msg,&rn," mask_diff=");putunsigned(replay_msg,&rn,mask_diff);
+    putstr(replay_msg,&rn," written=");putunsigned(replay_msg,&rn,written);
+    putstr(replay_msg,&rn," elapsed_ms=");putunsigned(replay_msg,&rn,GetTickCount()-replay_started);
+    replay_msg[rn]=0;logtext(replay_msg);
+    /* Match only the selected real CPU wave; loop timing excludes state
+     * preparation and capture copies, but includes diagnostic mask writes.
+     * Replay time includes private baseline copy/mask clear. */
+    if(replay_pass){
+        unsigned valid=g_cap_frequency&&best->loop_draws==best->batch.count&&
+            !best->loop_untimed&&replay_ticks!=UINT32_MAX;
+        rn=0;putstr(replay_msg,&rn,"GPU_CPU_LOOP frame=");putunsigned(replay_msg,&rn,g_frames);
+        putstr(replay_msg,&rn," draws=");putunsigned(replay_msg,&rn,best->batch.count);
+        putstr(replay_msg,&rn," timed_draws=");putunsigned(replay_msg,&rn,best->loop_draws-best->loop_untimed);
+        putstr(replay_msg,&rn," qpc_hz=");putunsigned(replay_msg,&rn,valid?g_cap_frequency:0);
+        putstr(replay_msg,&rn," loop_ticks=");putunsigned(replay_msg,&rn,valid?best->loop_ticks:0);
+        putstr(replay_msg,&rn," replay_ticks=");putunsigned(replay_msg,&rn,valid?replay_ticks:0);
+        replay_msg[rn]=0;logtext(replay_msg);
+    }
+    if(!replay_pass&&first<GPU_CAPTURE_NATIVE_BYTES/2u){
+        rn=0;putstr(replay_msg,&rn,"GPU_CPU_REPLAY MISMATCH x=");putunsigned(replay_msg,&rn,first%640u);
+        putstr(replay_msg,&rn," y=");putunsigned(replay_msg,&rn,first/640u);
+        putstr(replay_msg,&rn," expected=");puthex(replay_msg,&rn,((const WORD*)best->after)[first]);
+        putstr(replay_msg,&rn," replay=");puthex(replay_msg,&rn,scratch[first]);
+        putstr(replay_msg,&rn," expected_mask=");putunsigned(replay_msg,&rn,best->written[first]);
+        putstr(replay_msg,&rn," replay_mask=");putunsigned(replay_msg,&rn,replayed_mask[first]);
+        replay_msg[rn]=0;logtext(replay_msg);
+    }
+    VirtualFree(replayed_mask,0,MEM_RELEASE);
+    if(!replay_pass){VirtualFree(scratch,0,MEM_RELEASE);return replay_ok?2:MSI_SHADOW_ERROR;}
+    MsiGpuCompare stats;DWORD started=GetTickCount();
+    int rc=matrox_vk_shadow_compare(&best->batch,(const WORD*)best->before,(const WORD*)best->after,scratch,&stats);
+    char msg[400];DWORD n=0;
+    if(rc){
+        VirtualFree(scratch,0,MEM_RELEASE);
+        putstr(msg,&n,"GPU_SHADOW ERROR code=");puthex(msg,&n,(unsigned)rc);
+        putstr(msg,&n,g_gpu_capture_sample?" scope=auto":" scope=F12");msg[n]=0;logtext(msg);return -1;
+    }
+    int pass=msi_gpu_compare_pass(&stats,GPU_CAPTURE_NATIVE_BYTES/2u)&&stats.cpu_changed==expected_changed;
+    putstr(msg,&n,pass?"GPU_SHADOW PASS frame=":"GPU_SHADOW DIFFERENCES frame=");
+    putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+    putstr(msg,&n," active=");putunsigned(msg,&n,stats.active);
+    putstr(msg,&n," exact=");putunsigned(msg,&n,stats.active_exact);
+    putstr(msg,&n," one_lsb=");putunsigned(msg,&n,stats.one);
+    putstr(msg,&n," edge=");putunsigned(msg,&n,stats.edge);
+    putstr(msg,&n," unexplained=");putunsigned(msg,&n,stats.bad);
+    putstr(msg,&n," outside_bounds=");putunsigned(msg,&n,stats.outside);
+    putstr(msg,&n," cpu_only=");putunsigned(msg,&n,stats.cpu_only);
+    putstr(msg,&n," gpu_only=");putunsigned(msg,&n,stats.gpu_only);
+    putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+    putstr(msg,&n,publish?" scope=pilot":g_gpu_capture_sample?" scope=auto":" scope=F12");
+    putstr(msg,&n," textures=");putunsigned(msg,&n,best->batch.snapshots.count);
+    msg[n]=0;logtext(msg);
+    for(unsigned j=0;j<stats.bad&&j<MSI_GPU_COMPARE_EXAMPLES;j++){
+        const MsiGpuCompareExample *e=&stats.examples[j];n=0;
+        putstr(msg,&n,"GPU_SHADOW MISMATCH x=");putunsigned(msg,&n,e->x);
+        putstr(msg,&n," y=");putunsigned(msg,&n,e->y);
+        putstr(msg,&n," cpu=");puthex(msg,&n,e->expected);
+        putstr(msg,&n," gpu=");puthex(msg,&n,e->actual);msg[n]=0;logtext(msg);
+    }
+    if(pass){
+        /* A second replay on inverted initial colors detects actual writes,
+         * even when a written pixel had the same color as its background. */
+        WORD *alternate=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        WORD *inverted=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        if(!alternate||!inverted){
+            if(alternate)VirtualFree(alternate,0,MEM_RELEASE);
+            if(inverted)VirtualFree(inverted,0,MEM_RELEASE);
+            VirtualFree(scratch,0,MEM_RELEASE);
+            logtext("GPU_COVERAGE ERROR allocation");return MSI_SHADOW_ERROR;
+        }
+        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)
+            inverted[j]=(WORD)(((const WORD*)best->before)[j]^65535u);
+        MsiGpuCompare ignored;
+        int coverage_rc=matrox_vk_shadow_compare(&best->batch,inverted,
+            (const WORD*)best->after,alternate,&ignored);
+        if(coverage_rc){
+            VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+            VirtualFree(scratch,0,MEM_RELEASE);
+            lognum("GPU_COVERAGE ERROR code=",(unsigned)coverage_rc,NULL,0);return MSI_SHADOW_ERROR;
+        }
+        MsiGpuCoverage coverage;
+        msi_gpu_coverage(&coverage,&best->batch,640u,400u,best->written,
+            (const WORD*)best->before,(const WORD*)best->after,scratch,alternate);
+        pass=msi_gpu_coverage_pass(&coverage);
+        /* Check the whole real-game batch through the single-pass path
+         * before any live publication. CPU remains authoritative. */
+        if(pass){
+            uint32_t *tagged=(uint32_t*)alloc(GPU_CAPTURE_NATIVE_BYTES*2u);
+            DWORD tag_start=GetTickCount();
+            int tag_rc=tagged?matrox_vk_shadow_tagged(&best->batch,tagged):-1;
+            if(tag_rc){
+                lognum("GPU_TAGGED_BATCH ERROR code=",(unsigned)tag_rc,NULL,0);
+                if(tagged)VirtualFree(tagged,0,MEM_RELEASE);
+                VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+                VirtualFree(scratch,0,MEM_RELEASE);return MSI_SHADOW_ERROR;
+            }
+            MsiGpuTaggedCheck check;
+            msi_gpu_tagged_check(&check,&best->batch,GPU_CAPTURE_NATIVE_BYTES/2u,
+                best->written,scratch,alternate,tagged);
+            pass=msi_gpu_tagged_pass(&check,GPU_CAPTURE_NATIVE_BYTES/2u);
+            n=0;putstr(msg,&n,pass?"GPU_TAGGED_BATCH PASS frame=":"GPU_TAGGED_BATCH DIFFERENCES frame=");
+            putunsigned(msg,&n,g_frames);
+            putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+            putstr(msg,&n," written=");putunsigned(msg,&n,check.written);
+            putstr(msg,&n," untouched=");putunsigned(msg,&n,check.untouched);
+            putstr(msg,&n," color_diff=");putunsigned(msg,&n,check.color_diff);
+            putstr(msg,&n," coverage_diff=");putunsigned(msg,&n,check.coverage_diff);
+            putstr(msg,&n," invalid=");putunsigned(msg,&n,check.invalid);
+            putstr(msg,&n," homogeneous=");putunsigned(msg,&n,check.homogeneous);
+            putstr(msg,&n," provenance_checked=");putunsigned(msg,&n,check.provenance_checked);
+            putstr(msg,&n," provenance_diff=");putunsigned(msg,&n,check.provenance_diff);
+            putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-tag_start);
+            msg[n]=0;logtext(msg);
+            if(pass){
+                /* Same exact full-frame gate, but qualify the packed
+                 * multi-draw submission and fence against the real CPU
+                 * wave already timed above. CPU has already rendered;
+                 * this does not defer a draw or expose a guest pointer. */
+                MsiGpuRect region={0};
+                unsigned region_pixels=0,diff=UINT32_MAX;
+                if(msi_gpu_native_tagged_region(&best->batch,&region))
+                    region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
+                uint32_t *roi=region_pixels?(uint32_t*)alloc(region_pixels*4u):0;
+                DWORD roi_start=GetTickCount();
+                uint32_t fence_ticks=UINT32_MAX;
+                MSI_INT64 batch_begin=gpu_cost_now();
+                int roi_rc=roi?matrox_vk_shadow_tagged_packed(&best->batch,roi,region_pixels,&region,&fence_ticks):-1;
+                DWORD batch_ticks=gpu_cost_elapsed(batch_begin);
+                if(!roi_rc)diff=msi_gpu_packed_native_diff(&best->batch,tagged,roi,region_pixels,region);
+                /* Dry-run the actual packed publication on private storage,
+                 * not g_color. Existing independent retirement follows. */
+                unsigned tested=check.homogeneous,commit_ok=0,commit_errors=0;
+                DWORD commit_ticks=UINT32_MAX;
+                for(unsigned k=0;k<best->batch.count;k++)tested&=(best->batch.draws[k].flags&9u)==9u;
+                if(!roi_rc&&!diff&&tested){
+                    BYTE *under=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+                    if(under){
+                        gpu_capture_copy((BYTE*)inverted,best->before);
+                        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)under[j]=3u;
+                        MsiGpuBypass result;
+                        MSI_INT64 commit_begin=gpu_cost_now();
+                        commit_ok=msi_gpu_packed_batch_commit(&result,&best->batch,inverted,under,
+                            (const WORD*)best->before,roi,region_pixels,region);
+                        commit_ticks=gpu_cost_elapsed(commit_begin);
+                        unsigned key=(best->batch.draws[0].flags&64u)?2u:1u;
+                        commit_errors+=!commit_ok||result.written!=check.written;
+                        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++){
+                            unsigned write=tagged[j]!=65536u;
+                            commit_errors+=inverted[j]!=(write?(WORD)tagged[j]:((const WORD*)best->before)[j])||
+                                under[j]!=(write?key:3u);
+                        }
+                        VirtualFree(under,0,MEM_RELEASE);
+                    }else commit_errors++;
+                }
+                if(roi)VirtualFree(roi,0,MEM_RELEASE);
+                if(roi_rc){
+                    lognum("GPU_TAGGED_ROI ERROR code=",(unsigned)roi_rc,NULL,0);
+                    VirtualFree(tagged,0,MEM_RELEASE);VirtualFree(alternate,0,MEM_RELEASE);
+                    VirtualFree(inverted,0,MEM_RELEASE);VirtualFree(scratch,0,MEM_RELEASE);
+                    return MSI_SHADOW_ERROR;
+                }
+                pass=!diff&&region_pixels>0&&region_pixels<=GPU_CAPTURE_NATIVE_BYTES/2u;
+                n=0;putstr(msg,&n,pass?"GPU_TAGGED_ROI PASS frame=":"GPU_TAGGED_ROI DIFFERENCES frame=");
+                putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                putstr(msg,&n," exact=");putunsigned(msg,&n,diff<=GPU_CAPTURE_NATIVE_BYTES/2u?GPU_CAPTURE_NATIVE_BYTES/2u-diff:0);
+                putstr(msg,&n," bytes=");putunsigned(msg,&n,region_pixels*4u);
+                putstr(msg,&n," full_bytes=");putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
+                putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-roi_start);
+                msg[n]=0;logtext(msg);
+                if(pass){
+                    unsigned valid=g_cap_frequency&&best->loop_draws==best->batch.count&&
+                        !best->loop_untimed&&batch_ticks!=UINT32_MAX&&
+                        fence_ticks!=UINT32_MAX&&fence_ticks<=batch_ticks;
+                    n=0;putstr(msg,&n,"GPU_BATCH_COST frame=");putunsigned(msg,&n,g_frames);
+                    putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                    putstr(msg,&n," textures=");putunsigned(msg,&n,best->batch.snapshots.count);
+                    putstr(msg,&n," decoded_bytes=");putunsigned(msg,&n,(unsigned)best->batch.snapshots.decoded_used*4u);
+                    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,valid?g_cap_frequency:0);
+                    putstr(msg,&n," cpu_loop_ticks=");putunsigned(msg,&n,valid?best->loop_ticks:0);
+                    putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,valid?batch_ticks:0);
+                    putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,valid?fence_ticks:0);
+                    msg[n]=0;logtext(msg);
+                    unsigned path_valid=valid&&tested&&commit_ok&&!commit_errors&&
+                        best->prepare_draws==best->batch.count&&!best->prepare_untimed&&commit_ticks!=UINT32_MAX;
+                    n=0;putstr(msg,&n,"GPU_BATCH_PATH frame=");putunsigned(msg,&n,g_frames);
+                    putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                    putstr(msg,&n," tested=");putunsigned(msg,&n,tested);
+                    putstr(msg,&n," errors=");putunsigned(msg,&n,commit_errors);
+                    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,path_valid?g_cap_frequency:0);
+                    putstr(msg,&n," prepare_ticks=");putunsigned(msg,&n,path_valid?best->prepare_ticks:0);
+                    putstr(msg,&n," publish_ticks=");putunsigned(msg,&n,path_valid?commit_ticks:0);
+                    msg[n]=0;logtext(msg);
+                    if(commit_errors)pass=0;
+                }
+            }
+            if(pass){
+                int retirement=gpu_capture_retirement_check(best,tagged,&check,inverted,alternate);
+                if(retirement==MSI_SHADOW_ERROR){
+                    VirtualFree(tagged,0,MEM_RELEASE);
+                    VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+                    VirtualFree(scratch,0,MEM_RELEASE);return MSI_SHADOW_ERROR;
+                }
+                pass=retirement==MSI_SHADOW_PASS;
+            }
+            VirtualFree(tagged,0,MEM_RELEASE);
+        }
+        VirtualFree(alternate,0,MEM_RELEASE);VirtualFree(inverted,0,MEM_RELEASE);
+        n=0;putstr(msg,&n,msi_gpu_coverage_pass(&coverage)?"GPU_COVERAGE PASS frame=":"GPU_COVERAGE DIFFERENCES frame=");
+        putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," cpu_written=");putunsigned(msg,&n,coverage.cpu_written);
+        putstr(msg,&n," gpu_written=");putunsigned(msg,&n,coverage.gpu_written);
+        putstr(msg,&n," same_color=");putunsigned(msg,&n,coverage.same_color);
+        putstr(msg,&n," cpu_only=");putunsigned(msg,&n,coverage.cpu_only);
+        putstr(msg,&n," gpu_only=");putunsigned(msg,&n,coverage.gpu_only);
+        putstr(msg,&n," edge=");putunsigned(msg,&n,coverage.edge);
+        putstr(msg,&n," unexplained=");putunsigned(msg,&n,coverage.bad);
+        putstr(msg,&n," outside=");putunsigned(msg,&n,coverage.outside);
+        putstr(msg,&n," invalid=");putunsigned(msg,&n,coverage.invalid);
+        msg[n]=0;logtext(msg);
+    }
+    if(publish){
+        MsiGpuPublish result;
+        if(pass&&msi_gpu_publish_verified(&result,(WORD*)g_color,(const WORD*)best->before,
+              (const WORD*)best->after,scratch,GPU_CAPTURE_NATIVE_BYTES/2u,&stats)){
+            g_gpu_publish.waves++;g_gpu_publish.copied+=result.copied;
+            g_gpu_publish.changed+=result.changed;g_gpu_publish.preserved+=result.preserved;
+            n=0;putstr(msg,&n,"GPU_PUBLISH OK frame=");putunsigned(msg,&n,g_frames);
+            putstr(msg,&n," copied=");putunsigned(msg,&n,result.copied);
+            putstr(msg,&n," changed=");putunsigned(msg,&n,result.changed);
+            putstr(msg,&n," preserved=");putunsigned(msg,&n,result.preserved);
+            msg[n]=0;logtext(msg);
+        }else{
+            g_gpu_publish.rejected++;
+            logtext("GPU_PUBLISH REJECT CPU retained");
+        }
+    }
+    VirtualFree(scratch,0,MEM_RELEASE);
+    return pass?1:2;
+}
+/* Only after a completed CPU triangle, at the first sufficiently large full 32-draw wave of
+ * an admitted sparse diagnostic frame. No nested guest callbacks, no F12
+ * provenance, no asynchronous guest write, and never before rasterization. */
+static int gpu_capture_publish_wave(void){
+    if(!g_gpu_capture_sample||!g_vk_active||g_endframe_depth||g_guest_callback_depth||
+       g_capture_ownership||g_zplane_draw_context||g_manual_capture_active)return 0;
+    if(!msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES))return 0;
+    const WORD *before=(const WORD*)g_gpu_capture_before,*after=(const WORD*)g_gpu_capture_after;
+    unsigned changed=0;
+    for(unsigned i=0;i<GPU_CAPTURE_NATIVE_BYTES/2u;i++)changed+=before[i]!=after[i];
+    /* Avoid using all 24 samples on tiny first waves. */
+    if(changed<16384u)return 0;
+    int outcome=gpu_capture_shadow_compare(g_gpu_capture_current,changed,1);
+    msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,outcome);
+    gpu_capture_release();
+    return 1;
+}
+/* A separate immutable replay measures the same admitted triangle on CPU
+ * and qualifies the packed Vulkan result before any live publication.
+ * Timing excludes scratch allocation and comparison. Not an original
+ * rasterizer benchmark: replay deliberately preserves scanline arithmetic. */
+static int gpu_bypass_oracle(const MsiGpuDrawBatch *batch,const WORD *before,
+    const uint32_t *gpu,unsigned count,MsiGpuRect roi){
+    WORD *cpu=(WORD*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+    BYTE *mask=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+    MSI_LARGE_INTEGER a,b;
+    int timed=g_cap_frequency&&QueryPerformanceCounter(&a);
+    int replay=cpu&&mask&&msi_gpu_cpu_replay(batch,640u,400u,before,cpu,mask);
+    timed=timed&&QueryPerformanceCounter(&b);
+    MsiGpuPilotOracle r={0};
+    int pass=replay&&msi_gpu_pilot_oracle(&r,batch,cpu,mask,gpu,count,roi);
+    DWORD hz=0,ticks=0;
+    if(timed&&replay&&b.QuadPart>=a.QuadPart&&b.QuadPart-a.QuadPart<=4294967295LL){
+        hz=g_cap_frequency;ticks=(DWORD)(b.QuadPart-a.QuadPart);
+    }
+    char msg[512];DWORD n=0;
+    putstr(msg,&n,pass?"GPU_BYPASS_ORACLE PASS frame=":replay?"GPU_BYPASS_ORACLE DIFFERENCES frame=":"GPU_BYPASS_ORACLE ERROR frame=");
+    putunsigned(msg,&n,g_frames);
+    putstr(msg,&n," cpu_written=");putunsigned(msg,&n,r.cpu_written);
+    putstr(msg,&n," gpu_written=");putunsigned(msg,&n,r.gpu_written);
+    putstr(msg,&n," both=");putunsigned(msg,&n,r.both);
+    putstr(msg,&n," exact=");putunsigned(msg,&n,r.exact);
+    putstr(msg,&n," one_lsb=");putunsigned(msg,&n,r.one);
+    putstr(msg,&n," edge_color=");putunsigned(msg,&n,r.edge_color);
+    putstr(msg,&n," cpu_only=");putunsigned(msg,&n,r.cpu_only);
+    putstr(msg,&n," gpu_only=");putunsigned(msg,&n,r.gpu_only);
+    putstr(msg,&n," edge_coverage=");putunsigned(msg,&n,r.edge_coverage);
+    putstr(msg,&n," unexplained=");putunsigned(msg,&n,r.bad);
+    putstr(msg,&n," outside=");putunsigned(msg,&n,r.outside);
+    putstr(msg,&n," invalid=");putunsigned(msg,&n,r.invalid);
+    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,hz);
+    putstr(msg,&n," cpu_ticks=");putunsigned(msg,&n,ticks);
+    msg[n]=0;logtext(msg);
+    if(cpu)VirtualFree(cpu,0,MEM_RELEASE);
+    if(mask)VirtualFree(mask,0,MEM_RELEASE);
+    return pass;
+}
+/* Diagnostic-only single-triangle GPU execution, AFTER 24 successful
+ * paired color/coverage samples. No batching/deferred guest writes. */
+static int gpu_bypass_try(void){
+    if(!g_gpu_capture_bypass||!g_gpu_capture_draw||g_gpu_capture_batch.count!=1u||
+       !g_vk_active||g_endframe_depth||g_guest_callback_depth||g_capture_ownership||
+       g_manual_capture_active||g_zplane_draw_context)return 0;
+    const WORD *before=(const WORD*)g_gpu_capture_before;
+    const DWORD capture_alloc_ticks=g_gpu_pilot_alloc_ticks,snapshot_ticks=g_gpu_pilot_snapshot_ticks;
+    const DWORD prepare_ticks=g_gpu_pilot_prepare_ticks,copy_ticks=g_gpu_pilot_copy_ticks;
+    MSI_INT64 scratch_begin=gpu_cost_now();
+    MsiGpuRect region={0};
+    unsigned region_pixels=0;
+    if(msi_gpu_native_tagged_region(&g_gpu_capture_batch,&region))
+        region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
+    uint32_t *gpu=region_pixels&&region_pixels<=MSI_GPU_PILOT_PACKED_COUNT?g_gpu_pilot_storage.packed:0;
+    DWORD scratch_ticks=gpu_cost_elapsed(scratch_begin);
+    MsiGpuBypass result;
+    DWORD started=GetTickCount();
+    g_gpu_bypass.attempted++;
+    /* Publish packed ROI tags without expanding a full-frame scratch.
+     * Still validate the entire unchanged framebuffer, the exact region,
+     * and guard-ring tags before touching any live pixels. */
+    MSI_LARGE_INTEGER q0,q1,q2,q3;
+    int timed=g_cap_frequency&&QueryPerformanceCounter(&q0);
+    uint32_t wait_ticks=UINT32_MAX;
+    int rc=gpu?matrox_vk_shadow_tagged_packed(&g_gpu_capture_batch,gpu,region_pixels,&region,&wait_ticks):-1;
+    timed=timed&&QueryPerformanceCounter(&q1);
+    unsigned texture_mode=rc?3u:matrox_vk_shadow_roi_texture_mode();
+    unsigned decoded_bytes=(unsigned)g_gpu_capture_batch.snapshots.decoded_used*4u;
+    if(!rc&&(!region_pixels||region_pixels>GPU_CAPTURE_NATIVE_BYTES/2u))rc=-2;
+    if(!rc&&!gpu_bypass_oracle(&g_gpu_capture_batch,before,gpu,region_pixels,region))rc=-4;
+    timed=timed&&QueryPerformanceCounter(&q2);
+    int ok=!rc&&msi_gpu_bypass_tagged_roi_commit(&result,&g_gpu_capture_batch,
+        (WORD*)g_color,g_shadow_underlay,before,gpu,region_pixels,region);
+    timed=timed&&QueryPerformanceCounter(&q3);
+    if(!ok&&!rc)rc=-3;
+    if(ok){
+        char msg[256];DWORD n=0;
+        putstr(msg,&n,"GPU_BYPASS_ROI_PUBLISH PASS frame=");
+        putunsigned(msg,&n,g_frames);putstr(msg,&n," draws=1 written=");
+        putunsigned(msg,&n,result.written);putstr(msg,&n," bytes=");
+        putunsigned(msg,&n,region_pixels*4u);putstr(msg,&n," full_bytes=");
+        putunsigned(msg,&n,GPU_CAPTURE_NATIVE_BYTES*2u);
+        putstr(msg,&n," elapsed_ms=");putunsigned(msg,&n,GetTickCount()-started);
+        msg[n]=0;logtext(msg);
+        /* Dispatch is host wall time including allocation/synchronization;
+         * publish is the transactional CPU check/copy. Not GPU timestamps. */
+        DWORD hz=0,dispatch_ticks=0,publish_ticks=0;
+        if(timed&&q1.QuadPart>=q0.QuadPart&&q3.QuadPart>=q2.QuadPart&&
+           q1.QuadPart-q0.QuadPart<=4294967295LL&&q3.QuadPart-q2.QuadPart<=4294967295LL){
+            hz=g_cap_frequency;dispatch_ticks=(DWORD)(q1.QuadPart-q0.QuadPart);
+            publish_ticks=(DWORD)(q3.QuadPart-q2.QuadPart);
+        }
+        /* Observational geometry features for offline CPU/GPU selection.
+         * The unclipped determinant is only an area proxy: cap it to the
+         * native bounding rectangle. Never use it to change admission yet. */
+        const MsiGpuVertex *v=g_gpu_capture_batch.vertices;
+        MsiGpuRect q=g_gpu_capture_batch.draws[0].bounds;
+        unsigned box_pixels=(q.x1-q.x0)*(q.y1-q.y0);
+        float area=0.5f*((v[1].xy[0]-v[0].xy[0])*(v[2].xy[1]-v[0].xy[1])-
+                         (v[1].xy[1]-v[0].xy[1])*(v[2].xy[0]-v[0].xy[0]));
+        if(area<0.f)area=-area;
+        unsigned area_proxy=area>=0.f?(area>=(float)box_pixels?box_pixels:(unsigned)area):0u;
+        n=0;putstr(msg,&n,"GPU_BYPASS_GEOMETRY frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," box_pixels=");putunsigned(msg,&n,box_pixels);
+        putstr(msg,&n," roi_pixels=");putunsigned(msg,&n,region_pixels);
+        putstr(msg,&n," area_proxy=");putunsigned(msg,&n,area_proxy);
+        putstr(msg,&n," flags=");putunsigned(msg,&n,g_gpu_capture_batch.draws[0].flags);
+        msg[n]=0;logtext(msg);
+        n=0;putstr(msg,&n,"GPU_BYPASS_METRICS frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," mode=");putunsigned(msg,&n,texture_mode);
+        putstr(msg,&n," decoded_bytes=");putunsigned(msg,&n,decoded_bytes);
+        putstr(msg,&n," upload_bytes=");putunsigned(msg,&n,texture_mode==1u?0u:decoded_bytes);
+        putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,hz);
+        putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,dispatch_ticks);
+        putstr(msg,&n," publish_ticks=");putunsigned(msg,&n,publish_ticks);
+        unsigned wait_valid=hz&&wait_ticks!=UINT32_MAX&&wait_ticks<=dispatch_ticks;
+        putstr(msg,&n," fence_wait_valid=");putunsigned(msg,&n,wait_valid);
+        putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,wait_valid?wait_ticks:0);
+        msg[n]=0;logtext(msg);
+    }
+    /* Packed host output is borrowed; the bridge has completed its
+     * synchronous readback/copy before returning. Release the entire pool
+     * only at pilot retirement/cleanup, measured in capture_free_ticks. */
+    DWORD scratch_free_ticks=0;
+    if(ok){
+        g_gpu_bypass.passed++;g_gpu_bypass.written+=result.written;
+        g_gpu_bypass.changed+=result.changed;
+        g_drawn_triangles++;g_drawn_pixels+=result.written;
+        lognum("GPU_BYPASS OK frame=",g_frames,"written=",result.written);
+        lognum("GPU_BYPASS changed=",result.changed,"elapsed_ms=",GetTickCount()-started);
+    }else{
+        g_gpu_bypass.failed++;g_gpu_bypass.disabled=1;
+        lognum("GPU_BYPASS FALLBACK frame=",g_frames,"code=",(unsigned)rc);
+    }
+    MSI_INT64 release_begin=gpu_cost_now();
+    gpu_capture_release();
+    DWORD release_ticks=gpu_cost_elapsed(release_begin);
+    if(ok){
+        unsigned valid=g_cap_frequency&&capture_alloc_ticks!=UINT32_MAX&&snapshot_ticks!=UINT32_MAX&&
+            prepare_ticks!=UINT32_MAX&&copy_ticks!=UINT32_MAX&&
+            scratch_ticks!=UINT32_MAX&&scratch_free_ticks!=UINT32_MAX&&release_ticks!=UINT32_MAX;
+        char msg[300];DWORD n=0;
+        putstr(msg,&n,"GPU_BYPASS_COST frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,valid?g_cap_frequency:0);
+        putstr(msg,&n," capture_alloc_ticks=");putunsigned(msg,&n,valid?capture_alloc_ticks:0);
+        putstr(msg,&n," snapshot_ticks=");putunsigned(msg,&n,valid?snapshot_ticks:0);
+        putstr(msg,&n," scratch_alloc_ticks=");putunsigned(msg,&n,valid?scratch_ticks:0);
+        putstr(msg,&n," scratch_free_ticks=");putunsigned(msg,&n,valid?scratch_free_ticks:0);
+        putstr(msg,&n," capture_free_ticks=");putunsigned(msg,&n,valid?release_ticks:0);
+        putstr(msg,&n," prepare_ticks=");putunsigned(msg,&n,valid?prepare_ticks:0);
+        putstr(msg,&n," baseline_copy_ticks=");putunsigned(msg,&n,valid?copy_ticks:0);
+        msg[n]=0;logtext(msg);
+    }
+    return ok;
+}
+static void gpu_capture_auto_finish(void){
+    if(g_gpu_capture_bypass){g_gpu_bypass.empty++;gpu_capture_release();return;}
+    if(!g_gpu_capture_sample)return;
+    gpu_capture_barrier();
+    int outcome=MSI_SHADOW_SKIP;
+    if(g_endframe_depth==1u&&!g_guest_callback_depth&&g_vk_active){
+        outcome=g_gpu_capture_best_changed?gpu_capture_shadow_compare(g_gpu_capture_best,g_gpu_capture_best_changed,0):MSI_SHADOW_EMPTY;
+    }
+    msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,outcome);
+    gpu_capture_release();
+}
+static void gpu_capture_save(void){
+    if(!g_gpu_capture_active)return;
+    gpu_capture_barrier();
+    if(!g_gpu_capture_best_changed){logtext("GPU_CAPTURE no changed contiguous perspective/bilinear indexed8 wave of at least 8 draws");return;}
+    const MsiGpuCaptureSlot *best=g_gpu_capture_best;
+    const MsiGpuDrawBatch *batch=&best->batch;
+    int shadow_result=gpu_capture_shadow_compare(best,g_gpu_capture_best_changed,0);
+    if(shadow_result==MSI_SHADOW_DIFFERENCES||shadow_result==MSI_SHADOW_ERROR)g_gpu_shadow_auto.disabled=1;
+    char name[100],path[1024];
+    capture_name(name,g_manual_capture_sequence,"_gpu.bin");
+    DWORD n=GetModuleFileNameA(g_module,path,1023);
+    if(!n||n>=1023)return;
+    DWORD i=n;while(i>0&&path[i-1]!='\\'&&path[i-1]!='/')i--;
+    DWORD k=0;while(name[k]&&i+k<1022){path[i+k]=name[k];k++;}
+    if(name[k])return;path[i+k]=0;
+    HANDLE h=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE){DWORD error=GetLastError();lognum("GPU_CAPTURE create failed win32_error=",error,NULL,0);return;}
+    BYTE header[32];const char *magic="M95GPU01";
+    for(unsigned j=0;j<8;j++)header[j]=(BYTE)magic[j];
+    put32le(header+8,640);put32le(header+12,400);
+    put32le(header+16,batch->count);
+    put32le(header+20,batch->snapshots.count);
+    put32le(header+24,(unsigned)batch->snapshots.decoded_used);
+    put32le(header+28,g_frames);
+    BOOL ok=gpu_capture_write(h,header,sizeof(header));
+    for(unsigned j=0;j<batch->snapshots.count&&ok;j++){
+        const MsiGpuSnapshot *s=&batch->snapshots.entries[j];
+        BYTE record[12];put32le(record,s->state.width);put32le(record+4,s->state.height);
+        put32le(record+8,(unsigned)s->decoded_offset);
+        ok=gpu_capture_write(h,record,sizeof(record));
+    }
+    if(ok)ok=gpu_capture_write(h,batch->draws,batch->count*sizeof(MsiGpuDraw));
+    if(ok)ok=gpu_capture_write(h,batch->vertices,batch->count*3u*sizeof(MsiGpuVertex));
+    if(ok)ok=gpu_capture_write(h,batch->snapshots.decoded,(DWORD)batch->snapshots.decoded_used*4u);
+    if(ok)ok=gpu_capture_write(h,best->before,GPU_CAPTURE_NATIVE_BYTES);
+    if(ok)ok=gpu_capture_write(h,best->after,GPU_CAPTURE_NATIVE_BYTES);
+    CloseHandle(h);
+    char msg[240];DWORD m=0;putstr(msg,&m,ok?"GPU_CAPTURE OK file=":"GPU_CAPTURE WRITE ERROR file=");
+    putstr(msg,&m,name);putstr(msg,&m," draws=");putunsigned(msg,&m,batch->count);
+    putstr(msg,&m," textures=");putunsigned(msg,&m,batch->snapshots.count);
+    putstr(msg,&m," changed=");putunsigned(msg,&m,g_gpu_capture_best_changed);
+    putstr(msg,&m," waves_examined=");putunsigned(msg,&m,g_gpu_capture_waves);
+    msg[m]=0;logtext(msg);
+}
 static void capture_frame(const char *filename,unsigned bit){
     /* Only explicit F12 can emit BMP files. Automatic debug calls are inert. */
     if(!g_manual_capture_active)return;
@@ -2106,6 +3111,19 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_vk_requested=(n==4u&&setting[0]=='a'&&setting[1]=='u'&&setting[2]=='t'&&setting[3]=='o')||
         (n==6u&&setting[0]=='v'&&setting[1]=='u'&&setting[2]=='l'&&setting[3]=='k'&&setting[4]=='a'&&setting[5]=='n');
     }
+    zero(&g_gpu_profile,sizeof(g_gpu_profile));msi_gpu_wave_reset(&g_gpu_profile_wave);
+    zero(&g_gpu_defer_audit,sizeof(g_gpu_defer_audit));zero(&g_gpu_defer_strict,sizeof(g_gpu_defer_strict));
+    g_gpu_defer_strict_seen=g_gpu_defer_strict_state=g_gpu_defer_strict_early=0;
+    g_gpu_defer_strict_numerical=g_gpu_defer_strict_alias=0;
+    g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
+    zero(&g_gpu_shadow_auto,sizeof(g_gpu_shadow_auto));
+    zero(&g_gpu_publish,sizeof(g_gpu_publish));zero(&g_gpu_bypass,sizeof(g_gpu_bypass));
+    g_gpu_pilot_allocations=g_gpu_pilot_reuses=g_gpu_pilot_releases=0;
+    if(g_gpu_profile_enabled){
+        logtext("GPU_SHADOW_AUTO enabled sample=1/120 max_passes=24 file_output=0 CPU_reference=1 guarded_publish=1");
+        logtext("GPU_BYPASS pilot after=24_passes max_triangles=12 sample=1/120 native_only=1 tagged_passes=1");
+    }
+    if(g_gpu_profile_enabled)logtext("GPU_PROFILE enabled sample=1/60 target=1440x1080 hypothetical_only=1 scope=perspective_or_bilinear_indexed8_opaque");
     logtext(g_vk_requested?"PREVIEW_RENDERER requested=vulkan (experimental; GDI fallback)":"PREVIEW_RENDERER requested=software");
     logtext(g_vk_requested?(g_presentation_smooth_enabled?"PREVIEW_SCALER requested=GPU linear (GDI HALFTONE fallback)":"PREVIEW_SCALER requested=GPU nearest (GDI legacy fallback)"):
         (g_presentation_smooth_enabled?"PREVIEW_SCALER requested=HALFTONE":"PREVIEW_SCALER requested=legacy"));
@@ -2120,7 +3138,10 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     unsigned framesize=pitch*(unsigned)Height;
     unsigned zsize=(unsigned)Width*(unsigned)Height*2u;
     unsigned texsize=16u*1024u*1024u;
-    g_color=alloc(framesize);g_depth=alloc(zsize);g_texture=alloc(texsize);
+    g_gpu_dual_checks=g_gpu_dual_mismatch=g_gpu_dual_thread_checks=g_gpu_dual_foreign=0;
+    g_gpu_dual_owner=g_gpu_profile_enabled?GetCurrentThreadId():0u;
+    color_allocate(framesize,g_gpu_profile_enabled&&Width==640&&Height==400&&Planes==16);
+    g_depth=alloc(zsize);g_texture=alloc(texsize);
     g_ownership_bytes=(unsigned)Width*(unsigned)Height;
     g_ownership=(BYTE*)alloc(g_ownership_bytes);
     g_atlas_provenance=(BYTE*)alloc(g_ownership_bytes);
@@ -2154,7 +3175,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
       g_info.msiColor.rBitShift=16;g_info.msiColor.gBitShift=8;g_info.msiColor.aBitShift=24;}
     else {g_info.msiColor.rDepth=3;g_info.msiColor.gDepth=3;g_info.msiColor.bDepth=2;
       g_info.msiColor.rBitShift=5;g_info.msiColor.gBitShift=2;}
-    g_info.msiColor.Pitch=(LONG)pitch;g_info.msiColor.pMem=(LPBYTE)g_color;g_info.msiColor.MemSize=(LONG)framesize;
+    g_info.msiColor.Pitch=(LONG)pitch;g_info.msiColor.pMem=(LPBYTE)g_color_guest;g_info.msiColor.MemSize=(LONG)framesize;
     g_info.msiDepth.BytesPerPixel=2;g_info.msiDepth.zDepth=16;g_info.msiDepth.Pitch=Width*2;
     g_info.msiDepth.pMem=(LPBYTE)g_depth;g_info.msiDepth.MemSize=(LONG)zsize;
     g_info.msiTexture.pMem=(LPBYTE)g_texture;g_info.msiTexture.MemSize=(LONG)texsize;
@@ -2219,10 +3240,29 @@ BOOL __cdecl msiExit(void){
     ensure_log();lognum("msiExit total_frames=",g_frames,"triangles=",g_triangles);
     lognum("msiExit total_zplanes=",g_zplanes,"parameter_updates=",g_params);
     log_opacity_histogram("exit");
+    gpu_profile_report();
+    if(g_gpu_profile_enabled){
+        msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_SKIP);
+        lognum("GPU_SHADOW_AUTO sampled=",g_gpu_shadow_auto.sampled,"empty=",g_gpu_shadow_auto.empty);
+        lognum("GPU_SHADOW_AUTO passed=",g_gpu_shadow_auto.passed,"differences=",g_gpu_shadow_auto.differences);
+        lognum("GPU_SHADOW_AUTO errors=",g_gpu_shadow_auto.errors,"skipped=",g_gpu_shadow_auto.skipped);
+        lognum("GPU_SHADOW_AUTO disabled=",g_gpu_shadow_auto.disabled,"counts_ok=",msi_gpu_shadow_sampler_counts_ok(&g_gpu_shadow_auto));
+        lognum("GPU_PUBLISH waves=",g_gpu_publish.waves,"copied=",g_gpu_publish.copied);
+        lognum("GPU_PUBLISH changed=",g_gpu_publish.changed,"preserved=",g_gpu_publish.preserved);
+        lognum("GPU_PUBLISH rejected=",g_gpu_publish.rejected,NULL,0);
+        lognum("GPU_BYPASS sampled_frames=",g_gpu_bypass.frames,"empty=",g_gpu_bypass.empty);
+        lognum("GPU_BYPASS attempted=",g_gpu_bypass.attempted,"passed=",g_gpu_bypass.passed);
+        lognum("GPU_BYPASS failed=",g_gpu_bypass.failed,"disabled=",g_gpu_bypass.disabled);
+        lognum("GPU_BYPASS written=",g_gpu_bypass.written,"changed=",g_gpu_bypass.changed);
+    }
     lognum("msiExit focus_isolated_events=",g_focus_filtered_events,"forwarded_messages=",g_guest_messages);
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,"recreates=",g_vk_recreates);}
     clean();
+    if(g_gpu_pilot_allocations||g_gpu_pilot_reuses){
+        lognum("GPU_PILOT_STORAGE allocations=",g_gpu_pilot_allocations,"reuses=",g_gpu_pilot_reuses);
+        lognum("GPU_PILOT_STORAGE releases=",g_gpu_pilot_releases,"live=",g_gpu_pilot_storage.before!=NULL);
+    }
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);
     lognum("SESSION_TIMING gdi_ms=",g_preview_ms,"state_ms=",g_state_ms);
@@ -2253,6 +3293,9 @@ static BOOL grow_heap_tracker(void){
     return TRUE;
 }
 LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
+    gpu_dual_thread_observe();
+    gpu_capture_barrier();
+    if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
     if(Pages<=0||Pages>131072){
         lognum("msiAllocTextureHeap INVALID pages=",(unsigned)Pages,NULL,0);
@@ -2278,6 +3321,9 @@ LPBYTE __cdecl msiAllocTextureHeap(LONG Pages){
     return (LPBYTE)ptr;
 }
 BOOL __cdecl msiFreeTextureHeap(LPBYTE pTextureHeap){
+    gpu_dual_thread_observe();
+    gpu_capture_barrier();
+    if(g_gpu_profile_active){g_gpu_profile.heap_calls++;gpu_profile_flush();}
     ensure_log();
     if(!pTextureHeap)return FALSE;
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i]==pTextureHeap){
@@ -2302,6 +3348,12 @@ BOOL __cdecl msiStartFrame(BOOL ClearRGB,float r,float g,float b,BOOL ClearZ,flo
     g_auto_blue_frame_samples=0;
     /* No automatic debug ownership tracking or BMP capture. */
     g_capture_ownership=g_manual_capture_active;
+    gpu_capture_begin();
+    gpu_profile_finish();
+    if(g_gpu_profile_enabled&&!g_capture_ownership&&g_endframe_depth==0u&&g_frames%60u==0u){
+        g_gpu_profile_active=1;g_gpu_profile.sampled++;g_gpu_profile.frame_candidates=0;
+        gpu_dual_thread_observe();
+    }
     if(g_capture_ownership){
         if(g_ownership)zero(g_ownership,g_ownership_bytes);
         if(g_atlas_provenance)zero(g_atlas_provenance,g_ownership_bytes);
@@ -2380,6 +3432,8 @@ static void frame_limit(void){
 BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
     (void)Dump;(void)Frame;(void)Wait;
     if(!g_initialized){logtext("msiEndFrame called BEFORE successful msiInit");return FALSE;}
+    gpu_dual_thread_observe();
+    if(g_endframe_depth==0u)gpu_profile_finish();
     g_endframe_depth++;
     g_frames++;
     /* No numbered frame snapshots: F12 is the only screenshot trigger. */
@@ -2395,6 +3449,7 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             capture_final_source_audit(audit);
             capture_undithered_reference(nodither);
             capture_final_light_inputs(lighting);
+            gpu_capture_save();
             log_opacity_histogram("F12");
             {char line[320];DWORD n=0;
              putstr(line,&n,"MANUAL_CAPTURE shadow=");putstr(line,&n,shadow);
@@ -2413,7 +3468,8 @@ BOOL __cdecl msiEndFrame(BOOL Dump,LONG Frame,BOOL Wait){
             message[n]=0;logtext(message);
         }
         g_manual_capture_active=0;
-    }
+        gpu_capture_release();
+    }else gpu_capture_auto_finish();
     g_capture_ownership=0;
     sample_game_global_50dcd0("pre_frame_present");
     preview_present();
@@ -2523,7 +3579,21 @@ static BOOL readable_parameters(const T_msiParameters *p){
 }
 static BOOL msiSetParameters_impl(T_msiParameters *p){
     if(!g_initialized){logtext("msiSetParameters called BEFORE successful msiInit");return FALSE;}
+    gpu_dual_thread_observe();
     g_params++;
+    if(!p||p==(T_msiParameters*)0xffffffffu)gpu_capture_barrier();
+    if(g_gpu_profile_active){
+        g_gpu_defer_strict_state+=g_gpu_defer_strict.pending!=0;
+        msi_gpu_defer_barrier(&g_gpu_defer_strict);
+        if(!p){
+            g_gpu_defer_audit.remaps++;
+            g_gpu_defer_audit.remaps_invalidated+=msi_gpu_defer_pointer((DWORD)g_info.msiColor.pMem,
+                (DWORD)g_info.msiDepth.pMem,(DWORD)g_color_guest,(DWORD)g_depth)==MSI_DEFER_INVALIDATED;
+            g_gpu_profile.remaps++;gpu_profile_flush();
+        }
+        else if(p==(T_msiParameters*)0xffffffffu){g_gpu_profile.sentinels++;gpu_profile_flush();}
+        else g_gpu_profile.state_calls++;
+    }
     /* No automatic buffer BMPs; only deliberate F12 pairs are saved. */
     if(p==(T_msiParameters*)0xffffffffu){
         if(g_params<=20 || g_params%200==0)
@@ -2537,13 +3607,13 @@ static BOOL msiSetParameters_impl(T_msiParameters *p){
          * at 0x00418F2B (rep stosd) after a few frames. */
         DWORD before_color=(DWORD)g_info.msiColor.pMem;
         DWORD before_depth=(DWORD)g_info.msiDepth.pMem;
-        g_info.msiColor.pMem=(LPBYTE)g_color;
+        g_info.msiColor.pMem=(LPBYTE)g_color_guest;
         g_info.msiDepth.pMem=(LPBYTE)g_depth;
-        if(g_params<=25 || ((before_color!=(DWORD)g_color || before_depth!=(DWORD)g_depth) && g_params%200==0)){
+        if(g_params<=25 || ((before_color!=(DWORD)g_color_guest || before_depth!=(DWORD)g_depth) && g_params%200==0)){
             char buf[940]; DWORD n=0;
             putstr(buf,&n,"msiSetParameters NULL REMAP call=");putunsigned(buf,&n,g_params);
             putstr(buf,&n," color ");puthex(buf,&n,before_color);
-            putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_color);
+            putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_color_guest);
             putstr(buf,&n," depth ");puthex(buf,&n,before_depth);
             putstr(buf,&n," -> ");puthex(buf,&n,(DWORD)g_depth);
             buf[n]=0; logtext(buf);
@@ -3127,6 +4197,11 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
         bilinear_palette_ready=1;
         g_world_bilinear_palette_triangles++;
     }
+    gpu_profile_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity);
+    gpu_capture_candidate(a,b,c,left,top,right,bottom,width,height,textured,modulate,perspective,bilinear_triangle,planes,opacity,texW,texH,texOffset,texture,lut);
+    if(gpu_bypass_try())return; /* No CPU pixel loop for the committed triangle. */
+    MsiGpuCaptureSlot *timing_slot=g_gpu_capture_draw&&!g_gpu_capture_bypass?g_gpu_capture_current:NULL;
+    MSI_INT64 loop_begin=timing_slot?gpu_cost_now():0;
     float inv=1.0f/den;
     WORD *dst=(WORD*)g_color;
     unsigned pixelCount=0;
@@ -3566,6 +4641,8 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
                 }
             }
             dst[y*width+x]=(WORD)color;
+            if(g_gpu_capture_draw&&!g_gpu_capture_bypass)
+                g_gpu_capture_current->written[j]=(BYTE)(g_state.msiTexture.Transparency?2u:1u);
             if(g_capture_ownership && g_final_light_inputs){
                 BYTE *out=g_final_light_inputs+5u*j;
                 if(!g_zplane_draw_context && textured && g_final_source_audit){
@@ -3662,16 +4739,30 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
             if(sparseAtlas)g_sparse_atlas_drawn_pixels++;
         }
     }
+    if(timing_slot){
+        DWORD ticks=gpu_cost_elapsed(loop_begin);
+        timing_slot->loop_draws++;
+        if(ticks==UINT32_MAX||ticks>=UINT32_MAX-timing_slot->loop_ticks)
+            timing_slot->loop_untimed++;
+        else timing_slot->loop_ticks+=ticks;
+    }
     if(pixelCount>0)g_drawn_triangles++;
     g_drawn_pixels+=pixelCount;
 }
 static void rasterize_triangle(const T_msiVertex*a,const T_msiVertex*b,const T_msiVertex*c,BYTE opacity){
     DWORD t=GetTickCount();
+    g_gpu_defer_strict_seen=0;
     rasterize_triangle_body(a,b,c,opacity);
+    if(g_gpu_profile_active&&!g_zplane_draw_context&&!g_gpu_defer_strict_seen){
+        g_gpu_defer_strict_early+=g_gpu_defer_strict.pending!=0;
+        msi_gpu_defer_barrier(&g_gpu_defer_strict);
+    }
+    gpu_capture_draw_complete();
     g_raster_ms+=GetTickCount()-t;
 }
 BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE opacity){
     if(!g_initialized)return FALSE;
+    gpu_dual_thread_observe();
     g_triangles++;
     count_opacity(g_triangle_opacity,opacity);
     g_last_triangle_frame=g_frames;
@@ -3713,7 +4804,13 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
     }
     if(vertices_ok)
         rasterize_triangle(a,b,c,opacity);
-    else g_rejected_triangles++;
+    else {
+        g_rejected_triangles++;
+        if(g_gpu_profile_active){
+            g_gpu_defer_strict_early+=g_gpu_defer_strict.pending!=0;
+            msi_gpu_defer_barrier(&g_gpu_defer_strict);
+        }
+    }
     return TRUE;
 }
 /* MSI95 SDK: a Z-plane is a screen-aligned rectangle whose (u,v,uWidth,vHeight)
@@ -3725,7 +4822,10 @@ BOOL __cdecl msiRenderTriangle(T_msiVertex*a,T_msiVertex*b,T_msiVertex*c,BYTE op
  * driver can supply transient records during level changes. */
 BOOL __cdecl msiRenderZPlane(T_msiZPlane*p,BYTE opacity){
     if(!g_initialized)return FALSE;
+    gpu_dual_thread_observe();
     g_zplanes++;
+    gpu_capture_barrier();
+    if(g_gpu_profile_active){g_gpu_profile.zplanes++;gpu_profile_flush();}
     count_opacity(g_zplane_opacity,opacity);
     if(g_state_valid && g_state.msiColor.Dither)g_fx_dither_zplanes++;
     if(g_state_valid && g_state.msiTexture.Modulate)g_fx_modulate_zplanes++;
