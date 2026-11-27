@@ -54,7 +54,23 @@ static void pilot_storage_test(void){
     msi_gpu_pilot_storage_destroy(&s,pilot_free);CHECK(!live_allocs);
     puts("MSI_GPU_PILOT_STORAGE_PASS faults=4 reuse=12 copy=512000 guards=1");
 }
+static void exact_compare_test(void){
+    uint8_t a[80],b[80];
+    unsigned comparisons=0;
+    for(unsigned ao=0;ao<4;ao++)for(unsigned bo=0;bo<4;bo++)
+        for(unsigned n=0;n<=64;n++){
+            memset(a,0x33,sizeof(a));memset(b,0x55,sizeof(b));
+            for(unsigned k=0;k<n;k++)a[ao+k]=b[bo+k]=(uint8_t)(k*19u);
+            CHECK(msi_gpu_snapshot_equal(a+ao,b+bo,n));comparisons++;
+            for(unsigned k=0;k<n;k++){
+                b[bo+k]^=0x80u;CHECK(!msi_gpu_snapshot_equal(a+ao,b+bo,n));comparisons++;
+                b[bo+k]^=0x80u;
+            }
+        }
+    printf("MSI_GPU_EXACT_COMPARE_PASS comparisons=%u\n",comparisons);
+}
 int main(void){
+    exact_compare_test();
     pilot_storage_test();
     cache.raw=raw;cache.raw_capacity=sizeof(raw);cache.decoded=decoded;cache.decoded_capacity=sizeof(decoded)/sizeof(decoded[0]);
     MsiGpuTexture s={8,8,8,1,0,0xffff,1,0,0};
@@ -76,6 +92,12 @@ int main(void){
     uint32_t hash=msi_gpu_snapshot_hash(lut,512,msi_gpu_snapshot_hash(src,64,2166136261u));
     cache.entries[0].hash=hash;cache.entries[0].state=s;
     CHECK(intern(&s,src,MSI_GPU_SNAPSHOT_HIT)==f);
+    /* Exact hits must not depend on the cached hash metadata. Original
+     * FNV hash for newly interned bytes remains unchanged. */
+    CHECK(cache.entries[f].hash==hash);
+    cache.entries[f].hash^=1u;
+    CHECK(intern(&s,src,MSI_GPU_SNAPSHOT_HIT)==f);
+    cache.entries[f].hash=hash;
     msi_gpu_snapshot_reset(&cache);s.transparent=1;s.key=0;
     for(unsigned i=0;i<128;i++){palette(3,i+1);CHECK(intern(&s,src,MSI_GPU_SNAPSHOT_NEW)==i);}
     CHECK(cache.count==128);size_t ru=cache.raw_used,du=cache.decoded_used;

@@ -33,7 +33,50 @@ static void test_pilot_oracle(void){
     assert(!msi_gpu_pilot_oracle(&r,&b,cpu,mask,tags,144,roi)&&r.bad==1);
     puts("MSI_GPU_PILOT_ORACLE_PASS color=1 edge=1 outside=1 invalid=1");
 }
+static void test_packed_union(void){
+    enum {N=640*400};
+    static uint16_t before[N],live[N],reference[N];
+    static uint8_t under[N],ref_under[N];
+    static uint32_t full[N],packed[N];
+    MsiGpuDrawBatch b={0};MsiGpuBypass a,z;
+    for(unsigned trial=0;trial<8;trial++){
+        b.count=trial?32u:2u;
+        for(unsigned k=0;k<b.count;k++){
+            unsigned x=(k*137u+trial*19u)%600u,y=(k*71u+trial*29u)%360u;
+            if(!trial){x=k?450u:30u;y=30u;}
+            MsiGpuRect q={x,y,x+1u+(k*7u+trial)%40u,y+1u+(k*3u+trial)%40u};
+            b.draws[k].bounds=q;b.draws[k].flags=73;
+            MsiGpuVertex *v=&b.vertices[3u*k];
+            v[0].xy[0]=(float)q.x0;v[0].xy[1]=(float)q.y0;
+            v[1].xy[0]=(float)q.x1;v[1].xy[1]=(float)q.y0;
+            v[2].xy[0]=(float)q.x0;v[2].xy[1]=(float)q.y1;
+            for(unsigned j=0;j<3;j++)v[j].iw=1.f;
+        }
+        MsiGpuRect roi;assert(msi_gpu_native_tagged_region(&b,&roi));
+        unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+        for(unsigned j=0;j<N;j++){before[j]=live[j]=reference[j]=(uint16_t)j;under[j]=ref_under[j]=3;full[j]=65536u;}
+        for(unsigned k=0;k<b.count;k++){
+            MsiGpuRect q=b.draws[k].bounds;
+            for(unsigned y=q.y0;y<q.y1;y++)for(unsigned x=q.x0;x<q.x1;x++){
+                unsigned j=y*640u+x;full[j]=j&1u?before[j]:0x5555u;
+            }
+        }
+        for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++)
+            packed[(y-roi.y0)*rw+x-roi.x0]=full[y*640u+x];
+        assert(msi_gpu_bypass_tagged_batch_commit(&a,640,400,&b,reference,ref_under,before,full));
+        assert(msi_gpu_packed_batch_commit(&z,&b,live,under,before,packed,(size_t)rw*rh,roi));
+        assert(a.written==z.written&&a.changed==z.changed);
+        for(unsigned j=0;j<N;j++){assert(live[j]==reference[j]&&under[j]==ref_under[j]);live[j]=before[j];under[j]=3;}
+        /* Guard ring and an interior hole in the two-rectangle fixture. */
+        size_t bad=trial?0u:(size_t)(30u-roi.y0)*rw+200u-roi.x0;
+        assert(packed[bad]==65536u);packed[bad]=42u;
+        assert(!msi_gpu_packed_batch_commit(&z,&b,live,under,before,packed,(size_t)rw*rh,roi));
+        for(unsigned j=0;j<N;j++)assert(live[j]==before[j]&&under[j]==3);
+    }
+    puts("MSI_GPU_PACKED_UNION_PASS cases=8 exact=2048000 holes=8");
+}
 int main(void){
+    test_packed_union();
     test_pilot_oracle();
     MsiGpuDrawBatch b={0};b.count=1;b.draws[0].flags=73;
     b.draws[0].bounds=(MsiGpuRect){0,0,3,3};

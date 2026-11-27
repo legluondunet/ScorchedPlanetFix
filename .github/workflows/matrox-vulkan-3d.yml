@@ -76,6 +76,7 @@ jobs:
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_snapshot_test.c -o /tmp/matrox-spv/snapshot-test
           /tmp/matrox-spv/snapshot-test | tee /tmp/matrox-spv/snapshot.log
           grep -F 'MSI_GPU_PILOT_STORAGE_PASS faults=4 reuse=12 copy=512000 guards=1' /tmp/matrox-spv/snapshot.log
+          grep -F 'MSI_GPU_EXACT_COMPARE_PASS comparisons=34320' /tmp/matrox-spv/snapshot.log
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_compare_test.c -o /tmp/matrox-spv/compare-test
           /tmp/matrox-spv/compare-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_publish_test.c -o /tmp/matrox-spv/publish-test

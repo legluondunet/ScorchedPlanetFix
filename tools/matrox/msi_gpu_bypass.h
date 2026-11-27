@@ -219,19 +219,39 @@ static inline int msi_gpu_packed_batch_commit(MsiGpuBypass *r,
         if((d->flags&~127u)||(d->flags&64u)!=key||(d->flags&9u)!=9u||
            q.x0>=q.x1||q.y0>=q.y1||q.x1>640u||q.y1>400u)return 0;
     }
-    for(size_t j=0;j<640u*400u;j++)if(live[j]!=before[j])return 0;
+    if(!msi_gpu_snapshot_equal((const uint8_t*)live,(const uint8_t*)before,640u*400u*2u))return 0;
+    /* Sort rectangles once, then merge active X spans per scanline.
+     * The union is identical to per-pixel rectangle membership; gaps
+     * (including the conservative guard ring) still require no-write. */
+    MsiGpuRect sorted[32];
+    for(unsigned k=0;k<b->count;k++){
+        MsiGpuRect q=b->draws[k].bounds;unsigned j=k;
+        while(j&&sorted[j-1u].x0>q.x0){sorted[j]=sorted[j-1u];j--;}
+        sorted[j]=q;
+    }
     unsigned written=0,changed=0;
-    for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
-        uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];
-        if(tag==65536u)continue;
-        if(tag>65535u)return 0;
-        unsigned in=0;
-        for(unsigned k=0;k<b->count&&!in;k++){
-            MsiGpuRect q=b->draws[k].bounds;
-            in=x>=q.x0&&x<q.x1&&y>=q.y0&&y<q.y1;
+    for(unsigned y=roi.y0;y<roi.y1;y++){
+        unsigned starts[32],ends[32],spans=0;
+        for(unsigned k=0;k<b->count;k++){
+            MsiGpuRect q=sorted[k];
+            if(y<q.y0||y>=q.y1)continue;
+            if(spans&&q.x0<=ends[spans-1u]){
+                if(q.x1>ends[spans-1u])ends[spans-1u]=q.x1;
+            }else{starts[spans]=q.x0;ends[spans]=q.x1;spans++;}
         }
-        if(!in)return 0;
-        written++;changed+=tag!=before[(size_t)y*640u+x];
+        const uint32_t *row=gpu+(size_t)(y-roi.y0)*rw;
+        const uint16_t *old=before+(size_t)y*640u;
+        unsigned x=roi.x0;
+        for(unsigned k=0;k<spans;k++){
+            for(;x<starts[k];x++)if(row[x-roi.x0]!=65536u)return 0;
+            for(;x<ends[k];x++){
+                uint32_t tag=row[x-roi.x0];
+                if(tag==65536u)continue;
+                if(tag>65535u)return 0;
+                written++;changed+=tag!=old[x];
+            }
+        }
+        for(;x<roi.x1;x++)if(row[x-roi.x0]!=65536u)return 0;
     }
     if(!written)return 0;
     for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
