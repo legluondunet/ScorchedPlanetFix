@@ -86,6 +86,7 @@ jobs:
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_bypass_test.c -o /tmp/matrox-spv/bypass-test
           /tmp/matrox-spv/bypass-test | tee /tmp/matrox-spv/bypass-test.log
           grep -q 'MSI_GPU_PILOT_ORACLE_PASS color=1 edge=1 outside=1 invalid=1' /tmp/matrox-spv/bypass-test.log
+          grep -F 'MSI_GPU_PACKED_UNION_PASS cases=8 exact=2048000 holes=8' /tmp/matrox-spv/bypass-test.log
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_defer_audit_test.c -o /tmp/matrox-spv/defer-audit-test
           /tmp/matrox-spv/defer-audit-test
           cc -std=c11 -O2 -Wall -Wextra tools/matrox/msi_gpu_defer_admit_test.c -o /tmp/matrox-spv/defer-admit-test
