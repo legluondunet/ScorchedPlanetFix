@@ -280,6 +280,34 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         self.assertEqual(b["by_draw_count"]["8-15"]["dispatch_ms_per_draw"], 0.15625)
         self.assertIsNone(b["by_draw_count"]["24-32"]["gpu_dispatch_ms"])
         self.assertEqual(b["fence_share_pct"], 60.0)
+        self.assertEqual(self.parse(qualified)["gpu_diagnostics"]["batch_path"]["status"], "unavailable")
+        path_cost = "GPU_BATCH_PATH frame=120 draws=8 tested=1 errors=0 qpc_hz=10000000 prepare_ticks=3000 publish_ticks=2000\n"
+        measured = qualified.replace(batch_cost, batch_cost + path_cost)
+        r = self.parse(measured)["gpu_diagnostics"]["batch_path"]
+        self.assertEqual(r["status"], "validated", r)
+        self.assertEqual((r["prepare_ms"], r["private_publish_ms"], r["measured_path_ms"], r["faster_waves"]), (0.3, 0.2, 1.75, 1))
+        for changed, expected in (
+            (qualified, "unavailable"),
+            (measured.replace("tested=1 errors=0", "tested=1 errors=1"), "failed"),
+            (measured.replace("publish_ticks=2000", "publish_ticks=4294967295"), "failed"),
+            (measured.replace("GPU_BATCH_PATH frame=120", "GPU_BATCH_PATH frame=121"), "failed"),
+            (measured.replace("prepare_ticks=3000 ", ""), "failed"),
+            (measured.replace(path_cost, path_cost + path_cost), "failed"),
+            (measured.replace(path_cost, path_cost.replace("tested=1 errors=0 qpc_hz=10000000 prepare_ticks=3000 publish_ticks=2000",
+                                                           "tested=0 errors=0 qpc_hz=0 prepare_ticks=0 publish_ticks=0")), "incomplete"),
+        ):
+            self.assertEqual(self.parse(changed)["gpu_diagnostics"]["batch_path"]["status"], expected)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch-path", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(measured, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-batch-path", "--json", str(path)]), 0)
         for changed, expected in (
             (full, "unavailable"),
             (qualified.replace("cpu_loop_ticks=40000", "cpu_loop_ticks=39999"), "failed"),

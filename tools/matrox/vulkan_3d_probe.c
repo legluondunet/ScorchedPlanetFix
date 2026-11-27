@@ -773,8 +773,10 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     /* Compare packed private publication to the existing full path.
      * Same-color writes and provenance must match exactly. */
     MsiGpuBypass full_commit,packed_commit;
-    for(size_t j=0;j<n;j++){live[j]=reference[j]=before[j];under[j]=ref_under[j]=3;}
-    NEED(msi_gpu_bypass_tagged_batch_commit(&full_commit,640,400,ordered,reference,ref_under,before,out));
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
+    NEED(msi_gpu_bypass_tagged_batch_commit(&full_commit,640,400,ordered,live,under,before,out));
+    for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
     NEED(msi_gpu_packed_batch_commit(&packed_commit,ordered,live,under,before,batch_packed+1,batch_count,batch_actual));
     NEED(full_commit.written==packed_commit.written&&full_commit.changed==packed_commit.changed);
     for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);

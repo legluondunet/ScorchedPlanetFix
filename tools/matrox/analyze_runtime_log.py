@@ -151,6 +151,8 @@ class GpuAudit:
         self.pilot_costs = []
         self.batch_costs = []
         self.batch_cost_errors = []
+        self.batch_paths = []
+        self.batch_path_errors = []
         self.storage = {}
         self.storage_errors = []
         self.loop_errors = []
@@ -191,6 +193,12 @@ class GpuAudit:
                 self.batch_cost_errors.append("incomplete GPU_BATCH_COST")
             else:
                 self.batch_costs.append(f)
+        elif line.startswith("GPU_BATCH_PATH "):
+            f = fields(line)
+            if not all(k in f for k in ("frame", "draws", "tested", "errors", "qpc_hz", "prepare_ticks", "publish_ticks")):
+                self.batch_path_errors.append("incomplete GPU_BATCH_PATH")
+            else:
+                self.batch_paths.append(f)
         elif line.startswith("GPU_BYPASS_COST "):
             f = fields(line)
             if not all(k in f for k in ("frame", "qpc_hz", "capture_alloc_ticks", "snapshot_ticks", "scratch_alloc_ticks",
@@ -564,6 +572,53 @@ class GpuAudit:
                                   for lo, hi in ((8, 15), (16, 23), (24, 32))},
                 "errors": errors}
 
+    def batch_path_report(self):
+        errors = list(self.batch_path_errors)
+        from collections import defaultdict, deque
+        def identity(r):
+            return (r["frame"], r["draws"], r["qpc_hz"])
+        by_id = defaultdict(deque)
+        for r in self.batch_costs:
+            by_id[identity(r)].append(r)
+        rows = []
+        for r in self.batch_paths:
+            hz, prep, pub = (r[k] for k in ("qpc_hz", "prepare_ticks", "publish_ticks"))
+            if not (8 <= r["draws"] <= 32 and r["tested"] in (0, 1) and r["errors"] == 0 and
+                    ((hz == 0 and prep == pub == 0) or
+                     (r["tested"] == 1 and 100000 <= hz <= 1000000000 and
+                      0 <= prep < UINT32_MAX and 0 <= pub < UINT32_MAX))):
+                errors.append(f"invalid packed batch path at {r['frame']}")
+                continue
+            candidates = by_id[identity(r)]
+            if not candidates:
+                if hz:
+                    errors.append(f"unmatched packed batch path at {r['frame']}")
+                continue
+            b = candidates.popleft()
+            if hz:
+                rows.append((r, b))
+        complete = bool(self.batch_costs) and len(rows) == len(self.batch_costs) == len(self.batch_paths)
+        status = ("failed" if errors else "unavailable" if not self.batch_paths else
+                  "validated" if complete and self.batch_cost_report()["status"] == "validated" else "incomplete")
+        def aggregate(rows):
+            cpu = sum(b["cpu_loop_ticks"] * 1000 / b["qpc_hz"] for r, b in rows)
+            dispatch = sum(b["dispatch_ticks"] * 1000 / b["qpc_hz"] for r, b in rows)
+            prepare = sum(r["prepare_ticks"] * 1000 / r["qpc_hz"] for r, b in rows)
+            publish = sum(r["publish_ticks"] * 1000 / r["qpc_hz"] for r, b in rows)
+            total = dispatch + prepare + publish
+            return {"waves": len(rows), "draws": sum(r["draws"] for r, b in rows),
+                    "cpu_loop_ms": round(cpu, 3) if rows else None,
+                    "dispatch_ms": round(dispatch, 3) if rows else None,
+                    "prepare_ms": round(prepare, 3) if rows else None,
+                    "private_publish_ms": round(publish, 3) if rows else None,
+                    "measured_path_ms": round(total, 3) if rows else None,
+                    "cpu_over_measured_path": round(cpu / total, 3) if cpu and total else None,
+                    "faster_waves": sum(b["cpu_loop_ticks"] > b["dispatch_ticks"] + r["prepare_ticks"] + r["publish_ticks"] for r, b in rows)}
+        return {"status": status, **aggregate(rows),
+                "by_draw_count": {f"{lo}-{hi}": aggregate([(r,b) for r,b in rows if lo <= r["draws"] <= hi])
+                                  for lo,hi in ((8,15),(16,23),(24,32))},
+                "errors": errors}
+
     def storage_report(self):
         errors = list(self.storage_errors)
         f = self.storage
@@ -604,7 +659,8 @@ class GpuAudit:
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
                   "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report(),
                   "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report(),
-                  "pilot_storage": self.storage_report(), "batch_cost": self.batch_cost_report()}
+                  "pilot_storage": self.storage_report(), "batch_cost": self.batch_cost_report(),
+                  "batch_path": self.batch_path_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -842,9 +898,13 @@ def main(argv=None) -> int:
                         help="Require all cost gates, complete snapshot split and one retired pilot pool")
     parser.add_argument("--assert-gpu-batch", action="store_true",
                         help="Require all storage gates and complete matched packed-batch timings")
+    parser.add_argument("--assert-gpu-batch-path", action="store_true",
+                        help="Require all batch gates and matched private publication/preparation timings")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
+    if args.assert_gpu_batch_path:
+        args.assert_gpu_batch = True
     reports = [parse_log(p) for p in args.logs]
     if args.json:
         print(json.dumps(reports, ensure_ascii=False, indent=2))
@@ -888,6 +948,8 @@ def main(argv=None) -> int:
                                        r["gpu_diagnostics"]["pilot_cost"]["snapshot_split"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_batch and any(r["gpu_diagnostics"]["batch_cost"]["status"] != "validated" for r in reports):
+        return 1
+    if args.assert_gpu_batch_path and any(r["gpu_diagnostics"]["batch_path"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1
