@@ -102,7 +102,7 @@ static inline int msi_gpu_bypass_tagged_roi_commit(MsiGpuBypass *r,
     if((d->flags&~127u)||(d->flags&9u)!=9u)return 0;
     unsigned rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
     if(count!=(size_t)rw*rh)return 0;
-    for(size_t j=0;j<640u*400u;j++)if(live[j]!=before[j])return 0;
+    if(!msi_gpu_snapshot_equal((const uint8_t*)live,(const uint8_t*)before,640u*400u*2u))return 0;
     unsigned written=0,changed=0;
     for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
         uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];

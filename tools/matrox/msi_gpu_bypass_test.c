@@ -75,7 +75,39 @@ static void test_packed_union(void){
     }
     puts("MSI_GPU_PACKED_UNION_PASS cases=8 exact=2048000 holes=8");
 }
+static void test_single_roi_exact_baseline(void){
+    enum {N=640*400};
+    static uint16_t before[N],live[N];
+    static uint8_t under[N];
+    MsiGpuDrawBatch b={0};b.count=1;b.draws[0].flags=73;
+    b.draws[0].bounds=(MsiGpuRect){10,10,20,20};
+    b.vertices[0].xy[0]=10.f;b.vertices[0].xy[1]=10.f;
+    b.vertices[1].xy[0]=20.f;b.vertices[1].xy[1]=10.f;
+    b.vertices[2].xy[0]=10.f;b.vertices[2].xy[1]=20.f;
+    for(unsigned i=0;i<3;i++)b.vertices[i].iw=1.f;
+    MsiGpuRect roi;assert(msi_gpu_native_tagged_region(&b,&roi));
+    assert(roi.x0==9&&roi.y0==9&&roi.x1==21&&roi.y1==21);
+    uint32_t tags[144];
+    for(unsigned i=0;i<144;i++)tags[i]=65536u;
+    tags[2u*12u+2u]=0x1234;tags[3u*12u+3u]=0xffff;
+    for(unsigned i=0;i<N;i++){live[i]=before[i]=0x1234;under[i]=3;}
+    const unsigned stale[]={0,1,640u*11u+11u,N-2,N-1};
+    MsiGpuBypass r;
+    for(unsigned i=0;i<sizeof(stale)/sizeof(stale[0]);i++){
+        live[stale[i]]^=0x8000;
+        assert(!msi_gpu_bypass_tagged_roi_commit(&r,&b,live,under,before,tags,144,roi));
+        for(unsigned j=0;j<N;j++){
+            assert(live[j]==(uint16_t)(before[j]^(j==stale[i]?0x8000u:0u)));
+            assert(under[j]==3);
+        }
+        live[stale[i]]=before[stale[i]];
+    }
+    assert(msi_gpu_bypass_tagged_roi_commit(&r,&b,live,under,before,tags,144,roi));
+    assert(r.written==2&&r.changed==1&&under[11u*640u+11u]==2&&under[12u*640u+12u]==2);
+    puts("MSI_GPU_SINGLE_ROI_BASELINE_PASS stale=5");
+}
 int main(void){
+    test_single_roi_exact_baseline();
     test_packed_union();
     test_pilot_oracle();
     MsiGpuDrawBatch b={0};b.count=1;b.draws[0].flags=73;

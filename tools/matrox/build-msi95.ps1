@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "787bc6c3b7f03f01355ae267c1cda46430c5175a8ec43662f881ee32f43d3b00"
+$expectedSourceHash = "c98ab5a7d91130691835d4e5581901dae356b2a99879aa15146a7999020539d7"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -46,7 +46,7 @@ if ((Get-FileHash (Join-Path $sourceRoot "shaders/opaque_world.frag") -Algorithm
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_shadow_sampler.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "27b4c493b33f3283466ada32e516f1f5ee5fc808c763fb5666f6cbecc76e4dd9") { throw "Shadow source checksum mismatch: msi_gpu_shadow_sampler.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_publish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "b0046243701d3a62e661bf785ad619efed429f20457fe340de903ee3ff176fd0") { throw "Shadow source checksum mismatch: msi_gpu_publish.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_coverage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "ebb7194bd204cb643229e1fe3006c49374e26329f008f6e80481e5febd30f46f") { throw "Shadow source checksum mismatch: msi_gpu_coverage.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "cc76059807dc029a913b2825ddcafacee1c3bdae1586abf33f3139b9866932ba") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_bypass.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "724b331224630dcec5850a6584994957c4267b9566c9d0212d6ce4517f288e04") { throw "Shadow source checksum mismatch: msi_gpu_bypass.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_cpu_replay.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "53d9c46a1623731bdadaa3245a1a4cf62668920d5620d069bb4be2a2278e96fe") { throw "CPU replay header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_defer_audit.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "840990a8b0cfda4cd1515725aac9f67dcd0b590db607ac1597c35a957acaf43f") { throw "GPU defer audit header checksum mismatch" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_deferred_finish.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "80bf93ee14ac5836d03b523fc3514f37ff3f0dfcb7251087bb1dfcf947e54559") { throw "GPU deferred finish header checksum mismatch" }

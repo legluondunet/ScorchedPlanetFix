@@ -2207,6 +2207,22 @@ static int gpu_bypass_try(void){
             hz=g_cap_frequency;dispatch_ticks=(DWORD)(q1.QuadPart-q0.QuadPart);
             publish_ticks=(DWORD)(q3.QuadPart-q2.QuadPart);
         }
+        /* Observational geometry features for offline CPU/GPU selection.
+         * The unclipped determinant is only an area proxy: cap it to the
+         * native bounding rectangle. Never use it to change admission yet. */
+        const MsiGpuVertex *v=g_gpu_capture_batch.vertices;
+        MsiGpuRect q=g_gpu_capture_batch.draws[0].bounds;
+        unsigned box_pixels=(q.x1-q.x0)*(q.y1-q.y0);
+        float area=0.5f*((v[1].xy[0]-v[0].xy[0])*(v[2].xy[1]-v[0].xy[1])-
+                         (v[1].xy[1]-v[0].xy[1])*(v[2].xy[0]-v[0].xy[0]));
+        if(area<0.f)area=-area;
+        unsigned area_proxy=area>=0.f?(area>=(float)box_pixels?box_pixels:(unsigned)area):0u;
+        n=0;putstr(msg,&n,"GPU_BYPASS_GEOMETRY frame=");putunsigned(msg,&n,g_frames);
+        putstr(msg,&n," box_pixels=");putunsigned(msg,&n,box_pixels);
+        putstr(msg,&n," roi_pixels=");putunsigned(msg,&n,region_pixels);
+        putstr(msg,&n," area_proxy=");putunsigned(msg,&n,area_proxy);
+        putstr(msg,&n," flags=");putunsigned(msg,&n,g_gpu_capture_batch.draws[0].flags);
+        msg[n]=0;logtext(msg);
         n=0;putstr(msg,&n,"GPU_BYPASS_METRICS frame=");putunsigned(msg,&n,g_frames);
         putstr(msg,&n," mode=");putunsigned(msg,&n,texture_mode);
         putstr(msg,&n," decoded_bytes=");putunsigned(msg,&n,decoded_bytes);
