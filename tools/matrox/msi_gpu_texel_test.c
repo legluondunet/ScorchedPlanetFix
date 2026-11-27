@@ -42,5 +42,33 @@ int main(void){
     s=(MsiGpuTexture){3,1,4,0,0,0,0,0,0};
     CHECK(msi_gpu_decode_world(&s,packed,2,lut,32,out,3));
     CHECK(out[0]==0xf800&&out[1]==0&&out[2]==0x001f);
+    /* Compare every output against the unchanged scalar expression.
+     * All indices recur across each 128x128 texture, including special
+     * black entries 1/241, blue key, index masks and full RGB565 masks. */
+    static uint8_t large[128u*128u];
+    static uint32_t expanded[128u*128u];
+    for(unsigned i=0;i<sizeof(large);i++)large[i]=(uint8_t)(i*73u+(i>>8));
+    for(unsigned i=0;i<256u;i++)set(lut,i,(i*257u)^0x5a5au);
+    set(lut,0,0);set(lut,1,0);set(lut,241,0);set(lut,5,0xff);
+    const unsigned keys[]={0u,5u,0xffu,0x5a5au,0xffffu};
+    const unsigned masks[]={0u,0xffu,0xffffu,0x00f0u};
+    for(unsigned bits=0;bits<16u;bits++)for(unsigned k=0;k<5u;k++)for(unsigned m=0;m<4u;m++){
+        s=(MsiGpuTexture){128,128,8,bits&1u,keys[k],masks[m],(bits>>1)&1u,(bits>>2)&1u,(bits>>3)&1u};
+        CHECK(msi_gpu_decode_world(&s,large,sizeof(large),lut,sizeof(lut),expanded,sizeof(large)));
+        for(unsigned i=0;i<sizeof(large);i++){
+            unsigned index=large[i];
+            CHECK(expanded[i]==msi_gpu_world_texel(msi_gpu_le16(lut+2u*index),index,&s));
+        }
+    }
+    /* Threshold and invalid inputs: no writes on insufficient capacity. */
+    s=(MsiGpuTexture){256,1,8,1,0,0xffff,1,0,0};
+    expanded[256]=0x12345678;
+    CHECK(msi_gpu_decode_world(&s,large,256,lut,512,expanded,256));
+    for(unsigned i=0;i<256u;i++)CHECK(expanded[i]==msi_gpu_world_texel(msi_gpu_le16(lut+2u*large[i]),large[i],&s));
+    CHECK(expanded[256]==0x12345678);
+    expanded[0]=0x12345678;
+    CHECK(!msi_gpu_decode_world(&s,large,255,lut,512,expanded,256)&&expanded[0]==0x12345678);
+    CHECK(!msi_gpu_decode_world(&s,large,256,lut,511,expanded,256)&&expanded[0]==0x12345678);
+    CHECK(!msi_gpu_decode_world(&s,large,256,lut,512,expanded,255)&&expanded[0]==0x12345678);
     puts("MSI_GPU_TEXTURE_DECODE_PASS");return 0;
 }

@@ -42,6 +42,17 @@ static int msi_gpu_decode_world(const MsiGpuTexture *s,const uint8_t *src,size_t
     size_t palette_bytes=s->planes==4u?32u:s->planes==8u?512u:0u;
     if(bytes>1024u*1024u||src_size<bytes||out_count<count||
        (palette_bytes&&(!lut||lut_size<palette_bytes)))return 0;
+    /* The complete decode state is immutable during this synchronous call.
+     * A tagged palette entry depends only on the index, palette and state,
+     * not its texel position. Compute the exact old scalar expression once
+     * per palette entry instead of for every texel. Keep the small/direct
+     * cases on the original path and do not cache guest pointers. */
+    if(s->planes==8u&&count>=256u){
+        uint32_t tagged[256];
+        for(unsigned i=0;i<256u;i++)tagged[i]=msi_gpu_world_texel(msi_gpu_le16(lut+2u*i),i,s);
+        for(size_t i=0;i<count;i++)out[i]=tagged[src[i]];
+        return 1;
+    }
     for(size_t i=0;i<count;i++){
         unsigned index=0,color;
         if(s->planes==16u)color=msi_gpu_le16(src+2u*i);

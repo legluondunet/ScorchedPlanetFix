@@ -15,7 +15,7 @@ $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algor
 if ($waveHeaderHash -cne "521478141d660739d7f29fba2d8e8c5bb52201d42ef3a2bc56f89d113164f1d9") { throw "GPU wave header checksum mismatch: $waveHeaderHash" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_draw_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "afb6f8a1cadd8e7dee1e73fc93b0f34880e46da1742be9bc2d0c6984aab9513f") { throw "GPU header checksum mismatch: msi_gpu_draw_batch.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_snapshot.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "300028ebbc25f278eb063b65c82901904b869c595da477a2a89f7930fdb639cf") { throw "GPU header checksum mismatch: msi_gpu_snapshot.h" }
-if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_texel.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "e51a6794beeb7a8cfa361ffdeba2e4ab1d08a2e2af72f42f16f832f5c81f2264") { throw "GPU header checksum mismatch: msi_gpu_texel.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_texel.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "fec527faed9f85fa60dd8777374b6ef1823654b97d22d306d51575ca6b42c8ee") { throw "GPU header checksum mismatch: msi_gpu_texel.h" }
 
 foreach ($lib in @("kernel32", "user32", "gdi32")) {
     $def = (Resolve-Path (Join-Path $sourceRoot "$lib.def")).Path
