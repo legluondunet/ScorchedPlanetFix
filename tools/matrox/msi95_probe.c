@@ -487,8 +487,8 @@ typedef struct {
     MsiGpuDrawBatch batch;
     BYTE *before,*after,*written;
     /* Timed original CPU loops only for this owned reference wave. */
-    DWORD loop_ticks;
-    unsigned loop_draws,loop_untimed;
+    DWORD loop_ticks,prepare_ticks;
+    unsigned loop_draws,loop_untimed,prepare_draws,prepare_untimed;
 } MsiGpuCaptureSlot;
 static MsiGpuCaptureSlot g_gpu_capture_slots[2];
 static MsiGpuCaptureSlot *g_gpu_capture_current=&g_gpu_capture_slots[0];
@@ -1070,6 +1070,7 @@ static DWORD gpu_cost_elapsed(MSI_INT64 begin){
 }
 static void gpu_capture_clear_loop(MsiGpuCaptureSlot *slot){
     slot->loop_ticks=slot->loop_draws=slot->loop_untimed=0;
+    slot->prepare_ticks=slot->prepare_draws=slot->prepare_untimed=0;
 }
 static void gpu_pilot_free(void *p){if(p)VirtualFree(p,0,MEM_RELEASE);}
 static void gpu_pilot_storage_destroy(void){
@@ -1195,7 +1196,7 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     if(g_gpu_capture_batch.count&&(g_gpu_capture_bypass||
        !msi_gpu_snapshot_equal(g_gpu_capture_after,(const BYTE*)g_color,GPU_CAPTURE_NATIVE_BYTES)))
         gpu_capture_barrier();
-    MSI_INT64 snapshot_begin=g_gpu_capture_bypass?gpu_cost_now():0;
+    MSI_INT64 snapshot_begin=gpu_cost_now();
     MsiGpuVertex vertices[3];
     const T_msiVertex *in[3]={a,b,c};
     for(unsigned i=0;i<3;i++){
@@ -1216,6 +1217,9 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
     if(rc!=MSI_GPU_DRAW_ACCEPT){
         gpu_capture_barrier();
         if(rc==MSI_GPU_DRAW_INVALID)return;
+        /* A retry belongs to a new wave; do not charge the old wave's
+         * unsuccessful push or barrier to its accepted draw. */
+        snapshot_begin=gpu_cost_now();
         rc=msi_gpu_draw_batch_push(&g_gpu_capture_batch,vertices,rect,flags,&state,texture,tw*th,lut,512u);
         if(rc!=MSI_GPU_DRAW_ACCEPT)return;
     }
@@ -1235,6 +1239,12 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
            g_gpu_pilot_prepare_ticks>g_gpu_pilot_snapshot_ticks||
            g_gpu_pilot_copy_ticks!=g_gpu_pilot_snapshot_ticks-g_gpu_pilot_prepare_ticks)
             g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;
+    }else{
+        DWORD ticks=gpu_cost_elapsed(snapshot_begin);
+        MsiGpuCaptureSlot *slot=g_gpu_capture_current;
+        slot->prepare_draws++;
+        if(ticks==UINT32_MAX||ticks>=UINT32_MAX-slot->prepare_ticks)slot->prepare_untimed++;
+        else slot->prepare_ticks+=ticks;
     }
 }
 static int gpu_capture_publish_wave(void);
@@ -1977,6 +1987,31 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
                 int roi_rc=roi?matrox_vk_shadow_tagged_packed(&best->batch,roi,region_pixels,&region,&fence_ticks):-1;
                 DWORD batch_ticks=gpu_cost_elapsed(batch_begin);
                 if(!roi_rc)diff=msi_gpu_packed_native_diff(&best->batch,tagged,roi,region_pixels,region);
+                /* Dry-run the actual packed publication on private storage,
+                 * not g_color. Existing independent retirement follows. */
+                unsigned tested=check.homogeneous,commit_ok=0,commit_errors=0;
+                DWORD commit_ticks=UINT32_MAX;
+                for(unsigned k=0;k<best->batch.count;k++)tested&=(best->batch.draws[k].flags&9u)==9u;
+                if(!roi_rc&&!diff&&tested){
+                    BYTE *under=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
+                    if(under){
+                        gpu_capture_copy((BYTE*)inverted,best->before);
+                        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++)under[j]=3u;
+                        MsiGpuBypass result;
+                        MSI_INT64 commit_begin=gpu_cost_now();
+                        commit_ok=msi_gpu_packed_batch_commit(&result,&best->batch,inverted,under,
+                            (const WORD*)best->before,roi,region_pixels,region);
+                        commit_ticks=gpu_cost_elapsed(commit_begin);
+                        unsigned key=(best->batch.draws[0].flags&64u)?2u:1u;
+                        commit_errors+=!commit_ok||result.written!=check.written;
+                        for(unsigned j=0;j<GPU_CAPTURE_NATIVE_BYTES/2u;j++){
+                            unsigned write=tagged[j]!=65536u;
+                            commit_errors+=inverted[j]!=(write?(WORD)tagged[j]:((const WORD*)best->before)[j])||
+                                under[j]!=(write?key:3u);
+                        }
+                        VirtualFree(under,0,MEM_RELEASE);
+                    }else commit_errors++;
+                }
                 if(roi)VirtualFree(roi,0,MEM_RELEASE);
                 if(roi_rc){
                     lognum("GPU_TAGGED_ROI ERROR code=",(unsigned)roi_rc,NULL,0);
@@ -2005,6 +2040,17 @@ static int gpu_capture_shadow_compare(const MsiGpuCaptureSlot *best,unsigned exp
                     putstr(msg,&n," dispatch_ticks=");putunsigned(msg,&n,valid?batch_ticks:0);
                     putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,valid?fence_ticks:0);
                     msg[n]=0;logtext(msg);
+                    unsigned path_valid=valid&&tested&&commit_ok&&!commit_errors&&
+                        best->prepare_draws==best->batch.count&&!best->prepare_untimed&&commit_ticks!=UINT32_MAX;
+                    n=0;putstr(msg,&n,"GPU_BATCH_PATH frame=");putunsigned(msg,&n,g_frames);
+                    putstr(msg,&n," draws=");putunsigned(msg,&n,best->batch.count);
+                    putstr(msg,&n," tested=");putunsigned(msg,&n,tested);
+                    putstr(msg,&n," errors=");putunsigned(msg,&n,commit_errors);
+                    putstr(msg,&n," qpc_hz=");putunsigned(msg,&n,path_valid?g_cap_frequency:0);
+                    putstr(msg,&n," prepare_ticks=");putunsigned(msg,&n,path_valid?best->prepare_ticks:0);
+                    putstr(msg,&n," publish_ticks=");putunsigned(msg,&n,path_valid?commit_ticks:0);
+                    msg[n]=0;logtext(msg);
+                    if(commit_errors)pass=0;
                 }
             }
             if(pass){
@@ -4680,7 +4726,7 @@ static void rasterize_triangle_body(const T_msiVertex*a,const T_msiVertex*b,cons
     if(timing_slot){
         DWORD ticks=gpu_cost_elapsed(loop_begin);
         timing_slot->loop_draws++;
-        if(ticks==UINT32_MAX||ticks>UINT32_MAX-timing_slot->loop_ticks)
+        if(ticks==UINT32_MAX||ticks>=UINT32_MAX-timing_slot->loop_ticks)
             timing_slot->loop_untimed++;
         else timing_slot->loop_ticks+=ticks;
     }

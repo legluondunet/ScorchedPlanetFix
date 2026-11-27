@@ -200,4 +200,46 @@ static inline int msi_gpu_bypass_tagged_batch_commit(MsiGpuBypass *r,unsigned w,
     }
     r->written=written;r->changed=changed;return 1;
 }
+/* Private qualification of packed homogeneous batches. Check the entire
+ * native baseline and every packed tag, including holes between bounds.
+ * Never mutate until all validation succeeds. Not a guest scheduling API. */
+static inline int msi_gpu_packed_batch_commit(MsiGpuBypass *r,
+    const MsiGpuDrawBatch *b,uint16_t *live,uint8_t *underlay,
+    const uint16_t *before,const uint32_t *gpu,size_t count,MsiGpuRect roi){
+    *r=(MsiGpuBypass){0};
+    MsiGpuRect expected;
+    if(!b||!b->count||b->count>32u||!live||!before||!gpu||live==before||
+       (const void*)live==(const void*)gpu||(const void*)before==(const void*)gpu||
+       !msi_gpu_native_tagged_region(b,&expected)||roi.x0!=expected.x0||roi.y0!=expected.y0||
+       roi.x1!=expected.x1||roi.y1!=expected.y1)return 0;
+    unsigned key=b->draws[0].flags&64u,rw=roi.x1-roi.x0,rh=roi.y1-roi.y0;
+    if(count!=(size_t)rw*rh)return 0;
+    for(unsigned k=0;k<b->count;k++){
+        const MsiGpuDraw *d=&b->draws[k];MsiGpuRect q=d->bounds;
+        if((d->flags&~127u)||(d->flags&64u)!=key||(d->flags&9u)!=9u||
+           q.x0>=q.x1||q.y0>=q.y1||q.x1>640u||q.y1>400u)return 0;
+    }
+    for(size_t j=0;j<640u*400u;j++)if(live[j]!=before[j])return 0;
+    unsigned written=0,changed=0;
+    for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
+        uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];
+        if(tag==65536u)continue;
+        if(tag>65535u)return 0;
+        unsigned in=0;
+        for(unsigned k=0;k<b->count&&!in;k++){
+            MsiGpuRect q=b->draws[k].bounds;
+            in=x>=q.x0&&x<q.x1&&y>=q.y0&&y<q.y1;
+        }
+        if(!in)return 0;
+        written++;changed+=tag!=before[(size_t)y*640u+x];
+    }
+    if(!written)return 0;
+    for(unsigned y=roi.y0;y<roi.y1;y++)for(unsigned x=roi.x0;x<roi.x1;x++){
+        uint32_t tag=gpu[(size_t)(y-roi.y0)*rw+x-roi.x0];
+        if(tag==65536u)continue;
+        size_t j=(size_t)y*640u+x;
+        live[j]=(uint16_t)tag;if(underlay)underlay[j]=key?2u:1u;
+    }
+    r->written=written;r->changed=changed;return 1;
+}
 #endif

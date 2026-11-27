@@ -770,6 +770,25 @@ static void test_tagged_batch_commit(const MsiGpuDrawBatch *batch){
     uint32_t old=batch_packed[1];batch_packed[1]=65537u;
     NEED(msi_gpu_packed_native_diff(ordered,out,batch_packed+1,batch_count,batch_actual)==1u);
     batch_packed[1]=old;
+    /* Compare packed private publication to the existing full path.
+     * Same-color writes and provenance must match exactly. */
+    MsiGpuBypass full_commit,packed_commit;
+    for(size_t j=0;j<n;j++){live[j]=reference[j]=before[j];under[j]=ref_under[j]=3;}
+    NEED(msi_gpu_bypass_tagged_batch_commit(&full_commit,640,400,ordered,reference,ref_under,before,out));
+    NEED(msi_gpu_packed_batch_commit(&packed_commit,ordered,live,under,before,batch_packed+1,batch_count,batch_actual));
+    NEED(full_commit.written==packed_commit.written&&full_commit.changed==packed_commit.changed);
+    for(size_t j=0;j<n;j++)NEED(live[j]==reference[j]&&under[j]==ref_under[j]);
+    /* Reset and force late validation failure: nothing may be written. */
+    for(size_t j=0;j<n;j++){live[j]=before[j];under[j]=3;}
+    old=batch_packed[batch_count];batch_packed[batch_count]=65537u;
+    NEED(!msi_gpu_packed_batch_commit(&packed_commit,ordered,live,under,before,batch_packed+1,batch_count,batch_actual));
+    batch_packed[batch_count]=old;
+    NEED(!msi_gpu_packed_batch_commit(&packed_commit,ordered,live,under,before,batch_packed+1,batch_count-1,batch_actual));
+    live[n-1]^=1u;
+    NEED(!msi_gpu_packed_batch_commit(&packed_commit,ordered,live,under,before,batch_packed+1,batch_count,batch_actual));
+    live[n-1]^=1u;
+    for(size_t j=0;j<n;j++)NEED(live[j]==before[j]&&under[j]==3);
+    puts("VULKAN_3D_PACKED_BATCH_COMMIT_PASS exact=256000 faults=3");
     free(batch_packed);
     puts("VULKAN_3D_PACKED_BATCH_PASS draws=4 exact=256000 fault=1 reuse=1 guards=1");
     /* Boundary touching the viewport and disjoint clipped regions. */
