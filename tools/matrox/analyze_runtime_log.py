@@ -149,6 +149,8 @@ class GpuAudit:
         self.oracle_errors = []
         self.cpu_loops = []
         self.pilot_costs = []
+        self.storage = {}
+        self.storage_errors = []
         self.loop_errors = []
         self.cost_errors = []
         self.roi_errors = []
@@ -186,6 +188,12 @@ class GpuAudit:
                 self.cost_errors.append("incomplete GPU_BYPASS_COST")
             else:
                 self.pilot_costs.append(f)
+        elif line.startswith("GPU_PILOT_STORAGE "):
+            f = fields(line)
+            if set(f) not in ({"allocations", "reuses"}, {"releases", "live"}) or self.storage.keys() & f.keys():
+                self.storage_errors.append("invalid or duplicate GPU_PILOT_STORAGE record")
+            else:
+                self.storage.update(f)
         elif line.startswith("GPU_BYPASS_METRICS "):
             f = fields(line)
             if any(k not in f for k in ("frame", "mode", "decoded_bytes", "upload_bytes", "qpc_hz", "dispatch_ticks", "publish_ticks")):
@@ -434,6 +442,9 @@ class GpuAudit:
         if len(metrics) != len(self.metrics) or len(oracle) != len(self.oracle):
             errors.append("duplicate pilot timing frames")
         timed = []
+        split_errors = []
+        split_seen = False
+        split_timed = []
         for r in self.pilot_costs:
             frame, hz = r["frame"], r["qpc_hz"]
             ticks = [r[k] for k in phase_keys]
@@ -441,6 +452,14 @@ class GpuAudit:
                     (100000 <= hz <= 1000000000 and all(0 <= t < 4294967295 for t in ticks))):
                 errors.append(f"invalid pilot cost timing at {frame}")
                 continue
+            split_present = "prepare_ticks" in r or "baseline_copy_ticks" in r
+            if split_present:
+                split_seen = True
+                prepare, copy = r.get("prepare_ticks"), r.get("baseline_copy_ticks")
+                if not (prepare is not None and copy is not None and
+                        0 <= prepare <= r["snapshot_ticks"] and copy == r["snapshot_ticks"] - prepare):
+                    split_errors.append(f"invalid snapshot split at {frame}")
+                    split_present = False
             m, o = metrics.get(frame), oracle.get(frame)
             if not m or not o:
                 errors.append(f"unmatched pilot cost timing at {frame}")
@@ -451,6 +470,8 @@ class GpuAudit:
                 errors.append(f"mismatched pilot cost frequency at {frame}")
                 continue
             timed.append((r, m, o))
+            if split_present:
+                split_timed.append(r)
         matched = sorted(observed) == sorted(expected)
         status = ("failed" if errors else "unavailable" if not self.pilot_costs else
                   "incomplete" if not matched or len(timed) != len(expected) else "validated")
@@ -468,11 +489,32 @@ class GpuAudit:
                     "measured_gpu_path_ms": round(gpu, 3) if rows else None,
                     "cpu_replay_ms": round(replay, 3) if rows else None,
                     "replay_over_measured_gpu_path": round(replay / gpu, 3) if replay > 0 and gpu > 0 else None}
-        return {"status": status, **aggregate(timed), "matched_frames": matched,
+        split = {"status": "failed" if split_errors else "unavailable" if not split_seen else
+                 "validated" if status == "validated" and len(split_timed) == len(expected) else "incomplete",
+                 "samples": len(split_timed),
+                 "prepare_ms": round(sum(r["prepare_ticks"] * 1000 / r["qpc_hz"] for r in split_timed), 3) if split_timed else None,
+                 "baseline_copy_ms": round(sum(r["baseline_copy_ticks"] * 1000 / r["qpc_hz"] for r in split_timed), 3) if split_timed else None,
+                 "errors": split_errors}
+        return {"status": status, **aggregate(timed), "matched_frames": matched, "snapshot_split": split,
                 "missing_samples": len(expected) - len(timed),
                 "by_texture_mode": {str(mode): aggregate([t for t in timed if t[1]["mode"] == mode])
                                     for mode in (0, 1, 2)},
                 "errors": errors}
+
+    def storage_report(self):
+        errors = list(self.storage_errors)
+        f = self.storage
+        required = ("allocations", "reuses", "releases", "live")
+        summary = self.summaries["GPU_BYPASS"]
+        present = all(k in f for k in required)
+        if present:
+            if f["allocations"] != 1 or f["releases"] != f["allocations"] or f["live"] != 0:
+                errors.append("invalid pilot pool lifetime")
+            if "sampled_frames" in summary and f["allocations"] + f["reuses"] != summary["sampled_frames"]:
+                errors.append("pilot pool acquisition count disagrees with sampled frames")
+        status = ("failed" if errors else "unavailable" if not f else
+                  "incomplete" if not present or "sampled_frames" not in summary else "validated")
+        return {"status": status, **f, "errors": errors}
 
     def report(self, clean):
         errors = list(self.errors)
@@ -498,7 +540,8 @@ class GpuAudit:
         result = {"status": "unavailable", "requested": self.requested, "active": self.active,
                   "limits": self.limits, "summaries": self.summaries, "totals": totals,
                   "errors": errors, "missing": missing, "roi": self.roi_report(), "metrics": self.metrics_report(), "oracle": self.oracle_report(), "paired_timing": self.paired_timing_report(),
-                  "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report()}
+                  "cpu_loop_timing": self.loop_timing_report(), "pilot_cost": self.pilot_cost_report(),
+                  "pilot_storage": self.storage_report()}
         if self.requested != "vulkan" and not self.limits and not any(self.records.values()):
             return result
         if self.init_count != 1:
@@ -732,6 +775,8 @@ def main(argv=None) -> int:
                         help="Require all pilot/timing gates and a valid submission-fence interval for every publication")
     parser.add_argument("--assert-gpu-cost", action="store_true",
                         help="Require all fence gates and complete CPU-loop/capture-overhead timing")
+    parser.add_argument("--assert-gpu-storage", action="store_true",
+                        help="Require all cost gates, complete snapshot split and one retired pilot pool")
     parser.add_argument("--assert-gpu-diagnostics", action="store_true",
                         help="Require complete current GPU diagnostic evidence (not ownership proof)")
     args = parser.parse_args(argv)
@@ -765,14 +810,17 @@ def main(argv=None) -> int:
     if args.assert_gpu_oracle and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle")) for r in reports):
         return 1
-    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost) and any(r["gpu_diagnostics"]["status"] != "validated" or
+    if (args.assert_gpu_timing or args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage) and any(r["gpu_diagnostics"]["status"] != "validated" or
                                       any(r["gpu_diagnostics"][k]["status"] != "validated" for k in ("roi", "metrics", "oracle", "paired_timing")) or
                                       r["gpu_diagnostics"]["paired_timing"].get("untimed_samples") != 0 for r in reports):
         return 1
-    if (args.assert_gpu_fence or args.assert_gpu_cost) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
+    if (args.assert_gpu_fence or args.assert_gpu_cost or args.assert_gpu_storage) and any(r["gpu_diagnostics"]["metrics"]["fence"]["status"] != "validated" for r in reports):
         return 1
-    if args.assert_gpu_cost and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
+    if (args.assert_gpu_cost or args.assert_gpu_storage) and any(any(r["gpu_diagnostics"][k]["status"] != "validated"
                                        for k in ("cpu_loop_timing", "pilot_cost")) for r in reports):
+        return 1
+    if args.assert_gpu_storage and any(r["gpu_diagnostics"]["pilot_storage"]["status"] != "validated" or
+                                       r["gpu_diagnostics"]["pilot_cost"]["snapshot_split"]["status"] != "validated" for r in reports):
         return 1
     if args.assert_gpu_diagnostics and any(r["gpu_diagnostics"]["status"] != "validated" for r in reports):
         return 1

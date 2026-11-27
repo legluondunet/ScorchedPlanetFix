@@ -501,7 +501,7 @@ static unsigned g_gpu_capture_sample;
 static MsiGpuShadowSampler g_gpu_shadow_auto;
 static struct {unsigned waves,copied,changed,preserved,rejected;} g_gpu_publish;
 static unsigned g_gpu_capture_bypass;
-static DWORD g_gpu_pilot_alloc_ticks,g_gpu_pilot_snapshot_ticks;
+static DWORD g_gpu_pilot_alloc_ticks,g_gpu_pilot_snapshot_ticks,g_gpu_pilot_prepare_ticks,g_gpu_pilot_copy_ticks;
 static struct {unsigned frames,last_frame,attempted,passed,failed,empty,written,changed,disabled;} g_gpu_bypass;
 _Static_assert(sizeof(MsiGpuVertex)==32,"capture vertex ABI");
 _Static_assert(sizeof(MsiGpuDraw)==24,"capture draw ABI");
@@ -1062,9 +1062,11 @@ static MSI_INT64 gpu_cost_now(void){
     MSI_LARGE_INTEGER q;
     return g_cap_frequency&&QueryPerformanceCounter(&q)&&q.QuadPart>0?q.QuadPart:0;
 }
-static DWORD gpu_cost_elapsed(MSI_INT64 begin){
-    MSI_INT64 end=begin?gpu_cost_now():0;
+static DWORD gpu_cost_interval(MSI_INT64 begin,MSI_INT64 end){
     return begin&&end>=begin&&end-begin<4294967295LL?(DWORD)(end-begin):UINT32_MAX;
+}
+static DWORD gpu_cost_elapsed(MSI_INT64 begin){
+    return gpu_cost_interval(begin,begin?gpu_cost_now():0);
 }
 static void gpu_capture_clear_loop(MsiGpuCaptureSlot *slot){
     slot->loop_ticks=slot->loop_draws=slot->loop_untimed=0;
@@ -1092,7 +1094,7 @@ static void gpu_capture_release(void){
         msi_gpu_draw_batch_reset(&slot->batch);
         gpu_capture_clear_loop(slot);
     }
-    g_gpu_pilot_alloc_ticks=g_gpu_pilot_snapshot_ticks=UINT32_MAX;
+    g_gpu_pilot_alloc_ticks=g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;
     g_gpu_capture_current=&g_gpu_capture_slots[0];g_gpu_capture_best=&g_gpu_capture_slots[1];
     g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=g_gpu_capture_sample=g_gpu_capture_bypass=0;
     if(g_gpu_bypass.disabled||g_gpu_shadow_auto.disabled||g_gpu_bypass.attempted>=12u||g_gpu_bypass.frames>=36u)
@@ -1152,7 +1154,10 @@ static void gpu_capture_copy(BYTE *out,const BYTE *src){
 static void gpu_capture_barrier(void){
     if(!g_gpu_capture_active)return;
     g_gpu_capture_draw=0;
-    if(g_gpu_capture_bypass){msi_gpu_draw_batch_reset(&g_gpu_capture_batch);g_gpu_pilot_snapshot_ticks=UINT32_MAX;return;}
+    if(g_gpu_capture_bypass){
+        msi_gpu_draw_batch_reset(&g_gpu_capture_batch);
+        g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;return;
+    }
     if(g_gpu_capture_batch.count>=8u){
         const WORD *before=(const WORD*)g_gpu_capture_before,*after=(const WORD*)g_gpu_capture_after;
         unsigned changed=0;
@@ -1214,12 +1219,23 @@ static void gpu_capture_candidate(const T_msiVertex *a,const T_msiVertex *b,cons
         rc=msi_gpu_draw_batch_push(&g_gpu_capture_batch,vertices,rect,flags,&state,texture,tw*th,lut,512u);
         if(rc!=MSI_GPU_DRAW_ACCEPT)return;
     }
+    MSI_INT64 copy_begin=g_gpu_capture_bypass?gpu_cost_now():0;
     if(g_gpu_capture_batch.count==1u){
         gpu_capture_copy(g_gpu_capture_before,(const BYTE*)g_color);
         if(!g_gpu_capture_bypass)zero(g_gpu_capture_current->written,GPU_CAPTURE_NATIVE_BYTES/2u);
     }
     g_gpu_capture_draw=1;
-    if(g_gpu_capture_bypass)g_gpu_pilot_snapshot_ticks=gpu_cost_elapsed(snapshot_begin);
+    if(g_gpu_capture_bypass){
+        MSI_INT64 snapshot_end=gpu_cost_now();
+        g_gpu_pilot_snapshot_ticks=gpu_cost_interval(snapshot_begin,snapshot_end);
+        g_gpu_pilot_prepare_ticks=gpu_cost_interval(snapshot_begin,copy_begin);
+        g_gpu_pilot_copy_ticks=gpu_cost_interval(copy_begin,snapshot_end);
+        if(g_gpu_pilot_prepare_ticks==UINT32_MAX||g_gpu_pilot_copy_ticks==UINT32_MAX||
+           g_gpu_pilot_snapshot_ticks==UINT32_MAX||
+           g_gpu_pilot_prepare_ticks>g_gpu_pilot_snapshot_ticks||
+           g_gpu_pilot_copy_ticks!=g_gpu_pilot_snapshot_ticks-g_gpu_pilot_prepare_ticks)
+            g_gpu_pilot_snapshot_ticks=g_gpu_pilot_prepare_ticks=g_gpu_pilot_copy_ticks=UINT32_MAX;
+    }
 }
 static int gpu_capture_publish_wave(void);
 static void gpu_capture_draw_complete(void){
@@ -2078,6 +2094,7 @@ static int gpu_bypass_try(void){
        g_manual_capture_active||g_zplane_draw_context)return 0;
     const WORD *before=(const WORD*)g_gpu_capture_before;
     const DWORD capture_alloc_ticks=g_gpu_pilot_alloc_ticks,snapshot_ticks=g_gpu_pilot_snapshot_ticks;
+    const DWORD prepare_ticks=g_gpu_pilot_prepare_ticks,copy_ticks=g_gpu_pilot_copy_ticks;
     MSI_INT64 scratch_begin=gpu_cost_now();
     MsiGpuRect region={0};
     unsigned region_pixels=0;
@@ -2153,6 +2170,7 @@ static int gpu_bypass_try(void){
     DWORD release_ticks=gpu_cost_elapsed(release_begin);
     if(ok){
         unsigned valid=g_cap_frequency&&capture_alloc_ticks!=UINT32_MAX&&snapshot_ticks!=UINT32_MAX&&
+            prepare_ticks!=UINT32_MAX&&copy_ticks!=UINT32_MAX&&
             scratch_ticks!=UINT32_MAX&&scratch_free_ticks!=UINT32_MAX&&release_ticks!=UINT32_MAX;
         char msg[300];DWORD n=0;
         putstr(msg,&n,"GPU_BYPASS_COST frame=");putunsigned(msg,&n,g_frames);
@@ -2162,6 +2180,8 @@ static int gpu_bypass_try(void){
         putstr(msg,&n," scratch_alloc_ticks=");putunsigned(msg,&n,valid?scratch_ticks:0);
         putstr(msg,&n," scratch_free_ticks=");putunsigned(msg,&n,valid?scratch_free_ticks:0);
         putstr(msg,&n," capture_free_ticks=");putunsigned(msg,&n,valid?release_ticks:0);
+        putstr(msg,&n," prepare_ticks=");putunsigned(msg,&n,valid?prepare_ticks:0);
+        putstr(msg,&n," baseline_copy_ticks=");putunsigned(msg,&n,valid?copy_ticks:0);
         msg[n]=0;logtext(msg);
     }
     return ok;

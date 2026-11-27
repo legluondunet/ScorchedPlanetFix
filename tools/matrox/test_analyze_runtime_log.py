@@ -259,6 +259,31 @@ SHUTDOWN_COMPLETE elapsed_ms= 2
         self.assertEqual(r["pilot_cost"]["status"], "validated")
         self.assertEqual((r["pilot_cost"]["measured_capture_overhead_ms"], r["pilot_cost"]["measured_gpu_path_ms"], r["pilot_cost"]["replay_over_measured_gpu_path"]), (0.6, 3.6, 1.25))
         self.assertEqual(r["pilot_cost"]["by_texture_mode"]["1"]["measured_gpu_path_ms"], 3.6)
+        self.assertEqual(r["pilot_cost"]["snapshot_split"]["status"], "unavailable")
+        self.assertEqual(r["pilot_storage"]["status"], "unavailable")
+        sampled = r["summaries"]["GPU_BYPASS"]["sampled_frames"]
+        split_cost = cost.rstrip() + " prepare_ticks=2000 baseline_copy_ticks=1000\n"
+        storage = f"GPU_PILOT_STORAGE allocations=1 reuses={sampled-1}\nGPU_PILOT_STORAGE releases=1 live=0\n"
+        full = body.replace(cost, split_cost) + storage
+        r = self.parse(full)["gpu_diagnostics"]
+        self.assertEqual(r["pilot_cost"]["snapshot_split"]["status"], "validated")
+        self.assertEqual((r["pilot_cost"]["snapshot_split"]["prepare_ms"], r["pilot_cost"]["snapshot_split"]["baseline_copy_ms"]), (0.2, 0.1))
+        self.assertEqual(r["pilot_storage"]["status"], "validated")
+        for changed in (body, full.replace("baseline_copy_ticks=1000", "baseline_copy_ticks=1001"),
+                        full.replace(" prepare_ticks=2000", ""), full.replace("live=0", "live=1"),
+                        full.replace("releases=1", "releases=0"), full.replace(f"reuses={sampled-1}", f"reuses={sampled}"),
+                        full + storage):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory, "ScorchedPlanetFix.log")
+                path.write_text(changed, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 1)
+                    self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-cost", "--json", str(path)]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "ScorchedPlanetFix.log")
+            path.write_text(full, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(analyzer.main(["--assert-clean", "--assert-gpu-storage", "--json", str(path)]), 0)
         for old, new, key, status in (
             (loop, "", "cpu_loop_timing", "unavailable"),
             (loop, loop.replace("timed_draws=8", "timed_draws=7"), "cpu_loop_timing", "failed"),
