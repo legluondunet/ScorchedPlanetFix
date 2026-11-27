@@ -8,13 +8,14 @@ New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Use the directly reviewable, hash-locked C source committed to the repo.
 $source = (Resolve-Path (Join-Path $sourceRoot "msi95_probe.c")).Path
-$expectedSourceHash = "ae50f51304313bddbf718dcd835d2e62defa3bd61a24ceb424bf108188151449"
+$expectedSourceHash = "f4fdb9771b3cf5554aa7dcfe75508a380aa46727da219beeb75532dee8d44154"
 $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHash -cne $expectedSourceHash) { throw "MSI95 source checksum mismatch: $sourceHash" }
 $waveHeaderHash = (Get-FileHash (Join-Path $sourceRoot "msi_gpu_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($waveHeaderHash -cne "521478141d660739d7f29fba2d8e8c5bb52201d42ef3a2bc56f89d113164f1d9") { throw "GPU wave header checksum mismatch: $waveHeaderHash" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_draw_batch.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "afb6f8a1cadd8e7dee1e73fc93b0f34880e46da1742be9bc2d0c6984aab9513f") { throw "GPU header checksum mismatch: msi_gpu_draw_batch.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_snapshot.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "300028ebbc25f278eb063b65c82901904b869c595da477a2a89f7930fdb639cf") { throw "GPU header checksum mismatch: msi_gpu_snapshot.h" }
+if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_pilot_storage.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "7ada05501f5964d3d6c05aa62e56ce13af0f7183ebacc5268cbaa6748b2cb92b") { throw "GPU header checksum mismatch: msi_gpu_pilot_storage.h" }
 if ((Get-FileHash (Join-Path $sourceRoot "msi_gpu_texel.h") -Algorithm SHA256).Hash.ToLowerInvariant() -cne "fec527faed9f85fa60dd8777374b6ef1823654b97d22d306d51575ca6b42c8ee") { throw "GPU header checksum mismatch: msi_gpu_texel.h" }
 
 foreach ($lib in @("kernel32", "user32", "gdi32")) {

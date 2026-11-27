@@ -16,6 +16,7 @@ int _fltused = 0; /* MSVC x86 floating-point support marker; no CRT */
 #include "msi_gpu_defer_admit.h"
 #include "msi_gpu_deferred_finish.h"
 #include "msi_gpu_bypass.h"
+#include "msi_gpu_pilot_storage.h"
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -477,8 +478,11 @@ static MsiGpuWave g_gpu_profile_wave;
 #define GPU_CAPTURE_DECODED_COUNT (2u*1024u*1024u)
 /* The one-draw recorder accepts at most 1 MiB of indexed8 texels plus
  * a 512-byte palette. It does not need the best-wave or CPU-mask buffers. */
-#define GPU_CAPTURE_PILOT_TEXELS (1024u*1024u)
-#define GPU_CAPTURE_PILOT_RAW_BYTES (GPU_CAPTURE_PILOT_TEXELS+512u)
+#define GPU_CAPTURE_PILOT_TEXELS MSI_GPU_PILOT_DECODED_COUNT
+#define GPU_CAPTURE_PILOT_RAW_BYTES MSI_GPU_PILOT_RAW_BYTES
+_Static_assert(GPU_CAPTURE_NATIVE_BYTES==MSI_GPU_PILOT_NATIVE_BYTES,"native copy size");
+static MsiGpuPilotStorage g_gpu_pilot_storage;
+static unsigned g_gpu_pilot_allocations,g_gpu_pilot_reuses,g_gpu_pilot_releases;
 typedef struct {
     MsiGpuDrawBatch batch;
     BYTE *before,*after,*written;
@@ -1065,15 +1069,24 @@ static DWORD gpu_cost_elapsed(MSI_INT64 begin){
 static void gpu_capture_clear_loop(MsiGpuCaptureSlot *slot){
     slot->loop_ticks=slot->loop_draws=slot->loop_untimed=0;
 }
+static void gpu_pilot_free(void *p){if(p)VirtualFree(p,0,MEM_RELEASE);}
+static void gpu_pilot_storage_destroy(void){
+    if(g_gpu_pilot_storage.before){
+        msi_gpu_pilot_storage_destroy(&g_gpu_pilot_storage,gpu_pilot_free);
+        g_gpu_pilot_releases++;
+    }
+}
 static void gpu_capture_release(void){
     msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_SKIP);
     for(unsigned i=0;i<2u;i++){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
-        if(slot->before)VirtualFree(slot->before,0,MEM_RELEASE);
+        /* The sparse pilot borrows its session-owned storage; auto/F12
+         * slots retain their independent original allocation lifetime. */
+        if(slot->before&&slot->before!=g_gpu_pilot_storage.before)VirtualFree(slot->before,0,MEM_RELEASE);
         if(slot->after)VirtualFree(slot->after,0,MEM_RELEASE);
         if(slot->written)VirtualFree(slot->written,0,MEM_RELEASE);
-        if(slot->batch.snapshots.raw)VirtualFree(slot->batch.snapshots.raw,0,MEM_RELEASE);
-        if(slot->batch.snapshots.decoded)VirtualFree(slot->batch.snapshots.decoded,0,MEM_RELEASE);
+        if(slot->batch.snapshots.raw&&slot->batch.snapshots.raw!=g_gpu_pilot_storage.raw)VirtualFree(slot->batch.snapshots.raw,0,MEM_RELEASE);
+        if(slot->batch.snapshots.decoded&&slot->batch.snapshots.decoded!=g_gpu_pilot_storage.decoded)VirtualFree(slot->batch.snapshots.decoded,0,MEM_RELEASE);
         slot->before=slot->after=slot->written=NULL;
         slot->batch.snapshots.raw=NULL;slot->batch.snapshots.decoded=NULL;
         msi_gpu_draw_batch_reset(&slot->batch);
@@ -1082,6 +1095,8 @@ static void gpu_capture_release(void){
     g_gpu_pilot_alloc_ticks=g_gpu_pilot_snapshot_ticks=UINT32_MAX;
     g_gpu_capture_current=&g_gpu_capture_slots[0];g_gpu_capture_best=&g_gpu_capture_slots[1];
     g_gpu_capture_active=g_gpu_capture_draw=g_gpu_capture_best_changed=g_gpu_capture_waves=g_gpu_capture_sample=g_gpu_capture_bypass=0;
+    if(g_gpu_bypass.disabled||g_gpu_shadow_auto.disabled||g_gpu_bypass.attempted>=12u||g_gpu_bypass.frames>=36u)
+        gpu_pilot_storage_destroy();
 }
 static void gpu_capture_begin(void){
     gpu_capture_release();
@@ -1100,15 +1115,24 @@ static void gpu_capture_begin(void){
     unsigned raw_bytes=bypass?GPU_CAPTURE_PILOT_RAW_BYTES:GPU_CAPTURE_RAW_BYTES;
     unsigned decoded_count=bypass?GPU_CAPTURE_PILOT_TEXELS:GPU_CAPTURE_DECODED_COUNT;
     MSI_INT64 alloc_begin=bypass?gpu_cost_now():0;
+    unsigned pool_result=bypass?msi_gpu_pilot_storage_acquire(&g_gpu_pilot_storage,alloc,gpu_pilot_free):0;
+    if(bypass){
+        if(!pool_result){
+            g_gpu_bypass.disabled=1;g_gpu_bypass.empty++;
+            gpu_capture_release();logtext("GPU_CAPTURE pilot storage allocation failed");return;
+        }
+        if(pool_result==1u)g_gpu_pilot_allocations++;
+        else g_gpu_pilot_reuses++;
+    }
     for(unsigned i=0;i<slots;i++){
         MsiGpuCaptureSlot *slot=&g_gpu_capture_slots[i];
-        slot->before=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
+        slot->before=bypass?g_gpu_pilot_storage.before:(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
         if(!bypass){
             slot->after=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES);
             slot->written=(BYTE*)alloc(GPU_CAPTURE_NATIVE_BYTES/2u);
         }
-        slot->batch.snapshots.raw=(BYTE*)alloc(raw_bytes);
-        slot->batch.snapshots.decoded=(uint32_t*)alloc(decoded_count*4u);
+        slot->batch.snapshots.raw=bypass?g_gpu_pilot_storage.raw:(BYTE*)alloc(raw_bytes);
+        slot->batch.snapshots.decoded=bypass?g_gpu_pilot_storage.decoded:(uint32_t*)alloc(decoded_count*4u);
         if(!slot->before||(!bypass&&(!slot->after||!slot->written))||
            !slot->batch.snapshots.raw||!slot->batch.snapshots.decoded){
             if(sample)msi_gpu_shadow_sampler_finish(&g_gpu_shadow_auto,MSI_SHADOW_ERROR);
@@ -1123,7 +1147,7 @@ static void gpu_capture_begin(void){
     g_gpu_capture_active=1;g_gpu_capture_sample=sample;g_gpu_capture_bypass=bypass;
 }
 static void gpu_capture_copy(BYTE *out,const BYTE *src){
-    for(unsigned i=0;i<GPU_CAPTURE_NATIVE_BYTES;i++)out[i]=src[i];
+    msi_gpu_native_copy(out,src);
 }
 static void gpu_capture_barrier(void){
     if(!g_gpu_capture_active)return;
@@ -1610,6 +1634,7 @@ static void preview_present(void){
 }
 static void clean(void){
     gpu_capture_release();
+    gpu_pilot_storage_destroy();
     vk_stop();
     for(unsigned i=0;i<g_heap_count;i++)if(g_heaps[i])VirtualFree(g_heaps[i],0,MEM_RELEASE);
     if(g_heaps)VirtualFree(g_heaps,0,MEM_RELEASE);
@@ -2058,7 +2083,7 @@ static int gpu_bypass_try(void){
     unsigned region_pixels=0;
     if(msi_gpu_native_tagged_region(&g_gpu_capture_batch,&region))
         region_pixels=(region.x1-region.x0)*(region.y1-region.y0);
-    uint32_t *gpu=region_pixels?(uint32_t*)alloc(region_pixels*4u):0;
+    uint32_t *gpu=region_pixels&&region_pixels<=MSI_GPU_PILOT_PACKED_COUNT?g_gpu_pilot_storage.packed:0;
     DWORD scratch_ticks=gpu_cost_elapsed(scratch_begin);
     MsiGpuBypass result;
     DWORD started=GetTickCount();
@@ -2109,9 +2134,10 @@ static int gpu_bypass_try(void){
         putstr(msg,&n," fence_wait_ticks=");putunsigned(msg,&n,wait_valid?wait_ticks:0);
         msg[n]=0;logtext(msg);
     }
-    MSI_INT64 scratch_free_begin=gpu_cost_now();
-    if(gpu)VirtualFree(gpu,0,MEM_RELEASE);
-    DWORD scratch_free_ticks=gpu_cost_elapsed(scratch_free_begin);
+    /* Packed host output is borrowed; the bridge has completed its
+     * synchronous readback/copy before returning. Release the entire pool
+     * only at pilot retirement/cleanup, measured in capture_free_ticks. */
+    DWORD scratch_free_ticks=0;
     if(ok){
         g_gpu_bypass.passed++;g_gpu_bypass.written+=result.written;
         g_gpu_bypass.changed+=result.changed;
@@ -2988,6 +3014,7 @@ T_msiInfo* __cdecl msiInit(LONG Width,LONG Height,LONG Planes,BOOL ZBuffer,BOOL 
     g_gpu_profile_active=0;g_gpu_profile_enabled=g_vk_requested&&g_log!=NULL;
     zero(&g_gpu_shadow_auto,sizeof(g_gpu_shadow_auto));
     zero(&g_gpu_publish,sizeof(g_gpu_publish));zero(&g_gpu_bypass,sizeof(g_gpu_bypass));
+    g_gpu_pilot_allocations=g_gpu_pilot_reuses=g_gpu_pilot_releases=0;
     if(g_gpu_profile_enabled){
         logtext("GPU_SHADOW_AUTO enabled sample=1/120 max_passes=24 file_output=0 CPU_reference=1 guarded_publish=1");
         logtext("GPU_BYPASS pilot after=24_passes max_triangles=12 sample=1/120 native_only=1 tagged_passes=1");
@@ -3128,6 +3155,10 @@ BOOL __cdecl msiExit(void){
     lognum("MSI_HEAP_TRACKER exit_live=",g_heap_count,"peak_live=",g_heap_peak);
     if(g_vk_requested){lognum("SESSION_VULKAN frames=",g_vk_frames,"skipped=",g_vk_skipped);lognum("SESSION_VULKAN present_ms=",g_vk_ms,"recreates=",g_vk_recreates);}
     clean();
+    if(g_gpu_pilot_allocations||g_gpu_pilot_reuses){
+        lognum("GPU_PILOT_STORAGE allocations=",g_gpu_pilot_allocations,"reuses=",g_gpu_pilot_reuses);
+        lognum("GPU_PILOT_STORAGE releases=",g_gpu_pilot_releases,"live=",g_gpu_pilot_storage.before!=NULL);
+    }
     lognum("SHUTDOWN_COMPLETE elapsed_ms=",GetTickCount()-exit_tick,NULL,0);
     lognum("SESSION_TIMING elapsed_ms=",GetTickCount()-g_boot_tick,"render_ms=",g_raster_ms);
     lognum("SESSION_TIMING gdi_ms=",g_preview_ms,"state_ms=",g_state_ms);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "msi_gpu_snapshot.h"
+#include "msi_gpu_pilot_storage.h"
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"snapshot line %d: %s\n",__LINE__,#x);exit(1);}}while(0)
 static uint8_t raw[128*(512+64)],src[64],lut[512],other[64];
 static uint32_t decoded[128*64];
@@ -14,7 +15,47 @@ static unsigned intern(const MsiGpuTexture *s,const uint8_t *p,int result){
     if(result==MSI_GPU_SNAPSHOT_FULL||result==MSI_GPU_SNAPSHOT_INVALID)CHECK(id==9999);
     return id;
 }
+static unsigned alloc_calls,live_allocs,fail_at;
+static void *pilot_alloc(unsigned n){
+    alloc_calls++;if(alloc_calls==fail_at)return NULL;
+    void *p=malloc(n);if(p)live_allocs++;return p;
+}
+static void pilot_free(void *p){CHECK(p&&live_allocs);live_allocs--;free(p);}
+static void pilot_storage_test(void){
+    MsiGpuPilotStorage s={0};
+    for(unsigned i=1;i<=4;i++){
+        alloc_calls=0;fail_at=i;
+        CHECK(msi_gpu_pilot_storage_acquire(&s,pilot_alloc,pilot_free)==0);
+        CHECK(!live_allocs&&!s.before&&!s.raw&&!s.decoded&&!s.packed);
+    }
+    alloc_calls=0;fail_at=0;
+    CHECK(msi_gpu_pilot_storage_acquire(&s,pilot_alloc,pilot_free)==1&&alloc_calls==4&&live_allocs==4);
+    MsiGpuPilotStorage original=s;
+    s.raw[MSI_GPU_PILOT_RAW_BYTES-1u]=0x87;
+    s.decoded[MSI_GPU_PILOT_DECODED_COUNT-1u]=0x3ffffu;
+    s.packed[MSI_GPU_PILOT_PACKED_COUNT-1u]=65536u;
+    for(unsigned i=0;i<12;i++){
+        CHECK(msi_gpu_pilot_storage_acquire(&s,pilot_alloc,pilot_free)==2);
+        CHECK(s.before==original.before&&s.raw==original.raw&&s.decoded==original.decoded&&s.packed==original.packed&&alloc_calls==4);
+        CHECK(s.raw[MSI_GPU_PILOT_RAW_BYTES-1u]==0x87&&s.decoded[MSI_GPU_PILOT_DECODED_COUNT-1u]==0x3ffffu&&s.packed[MSI_GPU_PILOT_PACKED_COUNT-1u]==65536u);
+    }
+    static uint8_t srcbuf[MSI_GPU_PILOT_NATIVE_BYTES+2u],dstbuf[MSI_GPU_PILOT_NATIVE_BYTES+2u];
+    for(unsigned i=0;i<sizeof(srcbuf);i++)srcbuf[i]=(uint8_t)(i*137u+(i>>10));
+    dstbuf[0]=0xc7;dstbuf[sizeof(dstbuf)-1u]=0xa5;
+    msi_gpu_native_copy(dstbuf+1,srcbuf+1);
+    CHECK(!memcmp(dstbuf+1,srcbuf+1,MSI_GPU_PILOT_NATIVE_BYTES));
+    CHECK(dstbuf[0]==0xc7&&dstbuf[sizeof(dstbuf)-1u]==0xa5);
+    msi_gpu_native_copy(s.before,srcbuf+1);
+    CHECK(!memcmp(s.before,srcbuf+1,MSI_GPU_PILOT_NATIVE_BYTES));
+    msi_gpu_pilot_storage_destroy(&s,pilot_free);
+    msi_gpu_pilot_storage_destroy(&s,pilot_free);
+    CHECK(!live_allocs&&!s.before&&!s.raw&&!s.decoded&&!s.packed);
+    CHECK(msi_gpu_pilot_storage_acquire(&s,pilot_alloc,pilot_free)==1&&live_allocs==4);
+    msi_gpu_pilot_storage_destroy(&s,pilot_free);CHECK(!live_allocs);
+    puts("MSI_GPU_PILOT_STORAGE_PASS faults=4 reuse=12 copy=512000 guards=1");
+}
 int main(void){
+    pilot_storage_test();
     cache.raw=raw;cache.raw_capacity=sizeof(raw);cache.decoded=decoded;cache.decoded_capacity=sizeof(decoded)/sizeof(decoded[0]);
     MsiGpuTexture s={8,8,8,1,0,0xffff,1,0,0};
     memset(src,3,sizeof(src));memcpy(other,src,sizeof(src));palette(3,0xf800);palette(4,0x001f);
